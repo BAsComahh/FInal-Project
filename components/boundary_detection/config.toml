@@ -1,0 +1,25 @@
+# 修改后重新启动程序生效。命令行开关优先于这里的设置。
+# 窗口里的复选框只影响当前运行，不会改写本文件。
+# true = 开启，false = 关闭。
+
+[steps]
+blur = true              # 高斯模糊；灰度转换始终保留
+detection = true         # LSD 检测；关闭后没有候选线段
+lsd_refinement = true    # LSD 内部细化，与最后一步的局部优化不同
+merge = true             # 短线段合并／拟合
+repeat_merge = true      # 重复合并直到没有新的可合并目标
+length_filter = true     # 拟合完成后筛掉短线，控制进入选边的候选数量
+axis_filter = true       # 横／竖方向筛选
+border_selection = true  # 从四周选择四条边
+inward_search = true     # 不闭合时每次替换一侧，继续向内搜索
+closure = true           # 严格检查端点连接与四边形闭合
+completion = true        # 闭合检查后，用延长线补全缺少的角
+refine = true            # 以初始四角为参照，局部细化严格闭合框
+
+[merge_checks]
+source_length = false    # 不限制源线段长度，让短边先参与拟合
+axis = true              # 源线段接近横／竖方向
+angle = true             # 组内线段方向差
+distance = true          # 到拟合直线的距离
+gap = true               # 沿拟合线方向的空隙
+coverage = true          # 原始观测对拟合跨度的覆盖率
