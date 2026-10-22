@@ -53,7 +53,7 @@ def merge_eligible_mask(lines, min_segment_length=20, axis_tolerance=15,
 
 
 def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
-                             distance_tolerance=6, max_gap=30, min_coverage=0.7,
+                             distance_tolerance=6, max_gap=50, min_coverage=0.5,
                              axis_tolerance=15, *, check_source_length=True,
                              check_axis=True, check_angle=True, check_distance=True,
                              check_gap=True, check_coverage=True, diagnostics=None,

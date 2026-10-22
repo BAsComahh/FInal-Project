@@ -9,9 +9,9 @@ import cv2
 
 from .io import export_result, export_stages, load_image, save_image, save_report
 from .merge import merge_collinear_segments
-from .pipeline import STAGES, compute_stages, detect_segments, initial_switches, preprocess_image
+from .pipeline import STAGES, compute_stages, detect_segments, preprocess_image
 from .visualization import draw_lines
-from .config import DEFAULT_CONFIG, PROJECT_ROOT, add_switch_arguments
+from .config import DEFAULT_CONFIG, PROJECT_ROOT, add_switch_arguments, initial_switches
 
 
 def build_parser():
@@ -19,13 +19,12 @@ def build_parser():
     merge_defaults = inspect.signature(merge_collinear_segments).parameters
     parser.add_argument("image", nargs="?", type=Path, default=PROJECT_ROOT / "inputs" / "table.png")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="TOML pipeline switches (default: components/boundary_detection/config.toml)")
-    parser.add_argument("--raw", "--no-filter", action="store_true", help="Output raw LSD segments; skip merging and frame search")
+    parser.add_argument("--raw", "--no-filter", action="store_true", help="Output raw LSD segments; skip merging and side selection")
     parser.add_argument("--interactive", action="store_true", help="Interactive stage viewer with pipeline/merge-condition checkboxes")
     parser.add_argument("--export-stages", action="store_true", help="Export each pipeline stage and effective settings without opening a window")
     parser.add_argument("--stage", choices=[key for key, _ in STAGES], default="merged", help="Initial stage in interactive mode")
     add_switch_arguments(parser)
-    parser.add_argument("--border-search-candidates", type=int, default=0, help="Maximum candidates per side; 0 searches all candidates")
-    parser.add_argument("--border-search-limit", type=int, default=5000, help="Maximum checked states during inward side search")
+    parser.add_argument("--border-region-ratio", type=float, default=None, help="Per-side region as an image fraction, (0, 0.5]; default from config")
     parser.add_argument("--min-line-length", type=int, default=200, help="Long-line length threshold in original image pixels")
     parser.add_argument("--blur-size", type=int, default=5, help="Shared Gaussian kernel, odd; 1 disables blur")
     parser.add_argument("--refine", choices=["none", "std", "adv"], default="std", help="LSD refinement mode")
@@ -36,9 +35,6 @@ def build_parser():
     parser.add_argument("--merge-gap", type=float, default=merge_defaults["max_gap"].default, help="Maximum uncovered gap along a merged line (px)")
     parser.add_argument("--merge-min-coverage", type=float, default=merge_defaults["min_coverage"].default, help="Minimum observed coverage of fitted span (0, 1]")
     parser.add_argument("--connection-distance", type=float, default=20, help="Allowed endpoint/intersection gap in pixels")
-    parser.add_argument("--refine-radius", type=float, default=30, help="Local endpoint/corner search radius (px)")
-    parser.add_argument("--refine-angle", type=float, default=10, help="Maximum direction deviation from the initial side (degrees)")
-    parser.add_argument("--refine-max-candidates", type=int, default=12, help="Maximum nearby alternatives per side")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs" / "boundary_detection")
     parser.add_argument("--show", action="store_true", help="Open the stage viewer (raw mode: original/raw comparison)")
     return parser

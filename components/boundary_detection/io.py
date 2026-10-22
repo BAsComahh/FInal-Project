@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .visualization import draw_border_lines, draw_merge_round
+from .visualization import draw_merge_round
 
 
 def load_image(path):
@@ -38,7 +38,8 @@ def save_report(path, report):
 
 
 def export_result(args, stages, report):
-    save_image(args.output_dir / f"{args.image.stem}_boundary.png", stages["refined"]["image"])
+    final_stage = "closure" if report["final_frame"]["valid"] else "completed"
+    save_image(args.output_dir / f"{args.image.stem}_boundary.png", stages[final_stage]["image"])
     return save_report(args.output_dir / f"{args.image.stem}_stages.json", report)
 
 
@@ -48,7 +49,4 @@ def export_stages(args, stages, report):
     for merge_round in report["merge_diagnostics"].get("rounds", []):
         overlay = draw_merge_round(stages["input"]["image"], np.asarray(report["raw_lines"]).reshape(-1, 4), merge_round)
         save_image(args.output_dir / f"{args.image.stem}_merge_round_{merge_round['round']:02d}.png", overlay)
-    for number, step in enumerate(report["border_search"]["trace"]):
-        overlay = draw_border_lines(stages["input"]["image"], step["selected"])
-        save_image(args.output_dir / f"{args.image.stem}_border_search_{number:03d}.png", overlay)
     return export_result(args, stages, report)

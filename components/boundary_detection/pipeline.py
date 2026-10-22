@@ -5,20 +5,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .border_search import search_border_frame, select_border_lines
-from .frame import check_closed_frame, complete_quadrilateral, refine_closed_frame
+from .border_selection import select_longest_sides
+from .frame import check_closed_frame, complete_quadrilateral
 from .merge import merge_collinear_segments, merge_eligible_mask
 from .lsd import detect_lsd_lines
 from .visualization import draw_border_lines, draw_completion, draw_frame_connections, draw_lines
-from .config import CONSTRAINTS, PIPELINE, initial_switches
 
 
 STAGES = [("input", "0. Original"), ("preprocess", "1. Preprocessing"),
           ("raw", "2. Raw LSD"), ("eligible", "3. Merge eligibility"),
           ("merged", "4. Merge / fit"), ("length", "5. Length filter"),
-          ("axis", "6. Direction filter"), ("borders", "7. Inward side search"),
-          ("closure", "8. Closure check"), ("completed", "9. Line completion"),
-          ("refined", "10. Local refinement")]
+          ("axis", "6. Direction filter"), ("borders", "7. Longest side selection"),
+          ("closure", "8. Closure check"), ("completed", "9. Line completion")]
 
 
 def preprocess_image(image, args, switches):
@@ -88,25 +86,17 @@ def compute_stages(image, args, switches):
     add("axis", draw_lines(image, lines, (30, 210, 30)), len(records),
         f"Horizontal/vertical tolerance: {args.angle_tolerance:g}deg. Source-axis eligibility is a separate switch.", switches["axis_filter"])
     selected = {side: None for side in ["top", "bottom", "left", "right"]}
-    search_info = {"status": "skipped", "stop_reason": "requires side selection and closure checking",
-                   "checked_states": 0, "trace": []}
+    region_ratio = args.border_region_ratio if switches["search_region"] else None
+    selection_info = {"status": "disabled", "stop_reason": "side selection disabled",
+                      "examined_candidates": 0, "candidate_counts": {side: 0 for side in selected}}
     if switches["border_selection"]:
-        if switches["closure"]:
-            found = search_border_frame(
-                records, image.shape, args.angle_tolerance, args.connection_distance,
-                filter_direction=switches["axis_filter"], enabled=switches["inward_search"],
-                max_candidates=args.border_search_candidates, max_states=args.border_search_limit)
-            selected, search_info = found["selected"], found["search"]
-        else:
-            selected = select_border_lines(lines, image.shape, args.angle_tolerance, filter_direction=switches["axis_filter"])
-        for record in selected.values():
-            if record is not None:
-                index = int(np.argmin(np.linalg.norm(lines - record["line"], axis=1)))
-                record.update(records[index])
+        found = select_longest_sides(records, image.shape, args.angle_tolerance,
+                                      filter_direction=switches["axis_filter"], region_ratio=region_ratio)
+        selected, selection_info = found["selected"], found["selection"]
     borders = draw_border_lines(image, selected) if switches["border_selection"] else draw_lines(image, lines, (30, 210, 30))
     add("borders", borders, sum(r is not None for r in selected.values()),
-        f"{search_info['status']}: {search_info['stop_reason']}; checked {search_info['checked_states']} states."
-        if switches["border_selection"] else "Side selection is OFF; closure and local refinement are skipped.", switches["border_selection"])
+        f"{selection_info['status']}: {selection_info['stop_reason']}; examined {selection_info['examined_candidates']} candidates."
+        if switches["border_selection"] else "Side selection is OFF; no selected sides.", switches["border_selection"])
     frame = {"valid": False, "reason": "closure disabled or side selection disabled", "polygon": None,
              "junctions": [], "connected_junctions": 0}
     if switches["closure"] and switches["border_selection"]:
@@ -120,23 +110,6 @@ def compute_stages(image, args, switches):
     add("completed", completion_overlay, completion["inferred_junctions"],
         f"{completion['status']}: {completion['reason']}. Green: observed; orange rings / *: inferred.",
         switches["completion"] and completion["available"])
-    refinement = {"status": "skipped", "reason": "disabled" if not switches["refine"]
-                  else "requires an enabled, valid initial closed frame"}
-    final_selected, final_frame = selected, frame
-    if switches["refine"] and frame["valid"]:
-        refinement = refine_closed_frame(
-            selected, frame, records, args.refine_radius, args.refine_angle,
-            args.refine_max_candidates, args.connection_distance,
-            axis_tolerance=args.angle_tolerance, check_axis=switches["axis_filter"])
-        final_selected, final_frame = refinement["selected"], refinement["frame"]
-    _, final_overlay = draw_frame_connections(image, final_selected, final_frame)
-    if not final_frame["valid"]:
-        final_overlay = completion_overlay
-    refinement_note = f"{refinement['status']}: {refinement['reason']}"
-    if refinement.get("initial_mean_endpoint_gap_px") is not None:
-        refinement_note += (f"; mean junction gap {refinement['initial_mean_endpoint_gap_px']:.2f}"
-                            f" -> {refinement['final_mean_endpoint_gap_px']:.2f}px.")
-    add("refined", final_overlay, int(final_frame["valid"]), refinement_note, switches["refine"] and frame["valid"])
     report = {
         "image": str(args.image.resolve()) if args.image is not None else None,
         "switches": dict(switches),
@@ -148,12 +121,10 @@ def compute_stages(image, args, switches):
         "raw_lines": raw.tolist(), "merge_eligible_indices": np.flatnonzero(eligible).tolist(),
         "merged_groups": groups, "merge_diagnostics": diagnostics,
         "after_length": length_records, "after_direction": records,
-        "initial_sides": selected, "initial_frame": frame,
-        "border_search": search_info,
-        "final_sides": final_selected, "final_frame": final_frame,
-        "refinement": {k: v for k, v in refinement.items() if k not in {"selected", "frame"}},
+        "side_selection": selection_info,
+        "final_sides": selected, "final_frame": frame,
         "frame_completion": completion,
-        "output_polygon": final_frame["polygon"] if final_frame["valid"] else completion["polygon"],
-        "output_is_estimated": not final_frame["valid"] and completion["available"] and completion["estimated"],
+        "output_polygon": frame["polygon"] if frame["valid"] else completion["polygon"],
+        "output_is_estimated": not frame["valid"] and completion["available"] and completion["estimated"],
     }
     return stages, report

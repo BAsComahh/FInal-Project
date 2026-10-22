@@ -3,9 +3,10 @@
 import cv2
 import numpy as np
 
-from .pipeline import CONSTRAINTS, PIPELINE, STAGES, compute_stages, initial_switches
+from .pipeline import STAGES, compute_stages
+from .config import CONSTRAINTS, PIPELINE, initial_switches
 from .io import export_stages
-from .visualization import draw_border_lines, draw_lines, draw_merge_round
+from .visualization import draw_lines, draw_merge_round
 
 
 class StepViewer:
@@ -18,7 +19,6 @@ class StepViewer:
         self.stages, self.report = result if result is not None else compute_stages(image, args, self.switches)
         self.stage = args.stage
         self.merge_round = self.report["merge_diagnostics"].get("pass_count", 0)
-        self.search_step = max(0, len(self.report["border_search"]["trace"]) - 1)
         self.figure = plt.figure(figsize=(18, 10))
         self.figure.suptitle(f"LSD stages - {args.image.name}", fontsize=14)
         self.axes = self.figure.add_axes([0.23, 0.31, 0.58, 0.62])
@@ -45,10 +45,6 @@ class StepViewer:
                                    0, max(1, self.merge_round), valinit=self.merge_round, valstep=1)
         self.round_slider.set_active(self.merge_round > 0)
         self.round_slider.on_changed(self.on_merge_round)
-        self.search_slider = Slider(self.figure.add_axes([0.88, 0.315, 0.105, 0.02]), "Search step",
-                                    0, max(1, self.search_step), valinit=self.search_step, valstep=1)
-        self.search_slider.set_active(self.search_step > 0)
-        self.search_slider.on_changed(self.on_search_step)
         self.sliders = {}
         controls = [("merge_gap", "Merge gap (px)", 0, 250, 1),
                     ("merge_distance", "Line distance (px)", 1, 60, 1),
@@ -84,16 +80,6 @@ class StepViewer:
             elif self.merge_round == 0:
                 overlay = draw_lines(self.image, np.asarray(self.report["raw_lines"]).reshape(-1, 4), (130, 130, 130), 1)
                 count, note = 0, "Before merging: raw segments only."
-        if self.stage == "borders" and self.report["border_search"]["trace"]:
-            trace = self.report["border_search"]["trace"]
-            step = trace[self.search_step]
-            overlay = draw_border_lines(self.image, step["selected"])
-            count = sum(r is not None for r in step["selected"].values())
-            suffix = f" | step {self.search_step}/{len(trace) - 1}"
-            moved = step["changed_side"] or "none (outermost)"
-            note = (f"Moved: {moved}; ranks {step['ranks']}; connected {step['connected_junctions']}/4; "
-                    f"closed: {step['valid']}. Search: {self.report['border_search']['status']}; "
-                    f"total trials: {self.report['border_search']['checked_states']}.")
         self.artist.set_data(cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB))
         state = "ON" if stage["enabled"] else "OFF / skipped"
         self.axes.set_title(f"{dict(STAGES)[self.stage]} | count {count} | {state}{suffix}", fontsize=12)
@@ -114,13 +100,6 @@ class StepViewer:
             self.round_slider.set_val(self.merge_round)
             self.round_slider.set_active(self.merge_round > 0)
             self.round_slider.eventson = True
-            self.search_step = max(0, len(self.report["border_search"]["trace"]) - 1)
-            self.search_slider.eventson = False
-            self.search_slider.valmax = max(1, self.search_step)
-            self.search_slider.ax.set_xlim(0, self.search_slider.valmax)
-            self.search_slider.set_val(self.search_step)
-            self.search_slider.set_active(self.search_step > 0)
-            self.search_slider.eventson = True
             self.refresh_preview()
         except (ValueError, cv2.error) as error:
             self.status.set_text(str(error))
@@ -141,11 +120,6 @@ class StepViewer:
     def on_merge_round(self, value):
         self.merge_round = int(value)
         self.report["preview_merge_round"] = self.merge_round
-        self.refresh_preview()
-
-    def on_search_step(self, value):
-        self.search_step = int(value)
-        self.report["preview_search_step"] = self.search_step
         self.refresh_preview()
 
     def on_parameter(self, key, value):
