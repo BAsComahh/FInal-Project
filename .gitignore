@@ -3,3 +3,4 @@ __pycache__/
 .idea
 outputs/
 docs/
+/vendor/real_esrgan/
