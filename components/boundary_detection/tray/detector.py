@@ -68,7 +68,7 @@ def _work_lengths(size, config):
     return lengths
 
 
-def _line_pool(view, config, lengths):
+def _line_pool(view, config, lengths, *, merge=True):
     raw = detect_lsd_lines(view["image"], blur_size=3)
     length = np.linalg.norm(raw[:, 2:] - raw[:, :2], axis=1)
     midpoint = np.rint((raw[:, :2] + raw[:, 2:]) / 2).astype(int)
@@ -76,6 +76,10 @@ def _line_pool(view, config, lengths):
     raw = raw[inside & (length >= lengths["min_line_length"])]
     length = np.linalg.norm(raw[:, 2:] - raw[:, :2], axis=1)
     raw = raw[np.argsort(-length, kind="stable")[:config.max_lines * 2]].astype(float)
+    return raw, _merged_pool(raw, config, lengths) if merge else raw[:config.max_lines]
+
+
+def _merged_pool(raw, config, lengths):
     pool = raw.copy()
     if config.merge and len(raw):
         groups = merge_collinear_segments(raw, min_segment_length=lengths["min_line_length"],
@@ -86,7 +90,7 @@ def _line_pool(view, config, lengths):
             pool = np.vstack((pool, [group["line"] for group in groups]))
     length = np.linalg.norm(pool[:, 2:] - pool[:, :2], axis=1)
     # Preserve rotated local edges; do not reuse table-border axis/region filters.
-    return raw, pool[np.argsort(-length, kind="stable")[:config.max_lines]]
+    return pool[np.argsort(-length, kind="stable")[:config.max_lines]]
 
 
 def _corners(lines, config, shape, lengths):
@@ -199,6 +203,18 @@ def _corner_proposals(corners, size, nudge):
                     yield center, theta, {"corner_index": index}
 
 
+def _local_proposals(corners, view, lengths):
+    points = transform_points(corners, view["image_to_work"])
+    center = points.mean(axis=0)
+    direction = points[1] - points[0]
+    angle = np.arctan2(direction[1], direction[0])
+    for dx in (-2, 0, 2):
+        for dy in (-2, 0, 2):
+            for degrees in (-2, 0, 2):
+                yield (center + np.array([dx, dy]) * lengths["corner_nudge"],
+                       angle + np.radians(degrees), {"initialization": "previous_accepted_corners"})
+
+
 def _edge_proposals(lines, size, mask_center):
     for index, line in enumerate(lines[:12]):
         u = (line[2:] - line[:2]) / np.linalg.norm(line[2:] - line[:2])
@@ -244,7 +260,7 @@ def _rank(proposals, method, scorer, config):
     # Coarse-to-fine local search avoids leaving the mask fallback at the
     # relatively sparse initial translation/angle grid resolution.
     serial = max((entry[1] for entry in heap), default=0) + 1
-    if method != "corner":
+    if method in ("edge", "mask"):
         for round_index in range(config.refine_rounds):
             seeds = [entry[2] for entry in sorted(heap, reverse=True)[:3]]
             translation = (np.array([scorer.thresholds["search_width"], scorer.thresholds["search_depth"]])
@@ -282,7 +298,7 @@ def _rank(proposals, method, scorer, config):
     return count, unique
 
 
-def fit_tray(image, mask, size, *, image_to_plane=None, config=None):
+def fit_tray(image, mask, size, *, image_to_plane=None, config=None, initial_corners=None):
     """Fit one rectangular tray; size is in pixels or calibrated plane units.
 
     Results are geometry proposals requiring visual validation, not measured
@@ -302,21 +318,30 @@ def fit_tray(image, mask, size, *, image_to_plane=None, config=None):
         raise ValueError("Cannot fit a tray to an empty mask")
     if size.shape != (2,) or not np.isfinite(size).all() or (size <= 0).any():
         raise ValueError("size must be a positive finite width/depth pair")
+    if initial_corners is not None:
+        initial_corners = np.asarray(initial_corners, dtype=float)
+        if initial_corners.shape != (4, 2) or not np.isfinite(initial_corners).all():
+            raise ValueError("initial_corners must be four finite cyclic image points")
     margin = percent_to_length(config.roi_margin_pct, 1, name="roi_margin_pct")
     view = make_work_view(image, mask, size, image_to_plane, config.max_work_size, margin)
     lengths = _work_lengths(view["size"], config)
-    raw, lines = _line_pool(view, config, lengths)
-    corners = _corners(lines, config, view["mask"].shape, lengths)
+    local = initial_corners is not None and config.mode == "auto"
+    raw, lines = _line_pool(view, config, lengths, merge=not local)
+    corners = [] if local else _corners(lines, config, view["mask"].shape, lengths)
     scorer = _Scorer(view, raw, image.shape, config, lengths)
     stages, chosen = [], None
-    for method in ("corner", "edge", "mask"):
+    for method in (("local", "corner", "edge", "mask") if local else ("corner", "edge", "mask")):
         if config.mode != "auto" and config.mode != method:
             continue
-        proposals = (_corner_proposals(corners, view["size"], lengths["corner_nudge"]) if method == "corner" else
+        if method == "corner" and local:
+            lines = _merged_pool(raw, config, lengths)
+            corners = _corners(lines, config, view["mask"].shape, lengths)
+        proposals = (_local_proposals(initial_corners, view, lengths) if method == "local" else
+                     _corner_proposals(corners, view["size"], lengths["corner_nudge"]) if method == "corner" else
                      _edge_proposals(lines, view["size"], scorer.center) if method == "edge" else
                      _mask_proposals(scorer, config))
         count, top = _rank(proposals, method, scorer, config)
-        threshold = (config.min_corner_edge_support if method == "corner" else
+        threshold = (config.min_corner_edge_support if method in ("corner", "local") else
                      config.min_single_edge_support if method == "edge" else 0)
         accepted_item = next((item for item in top if item["mask_coverage"] >= config.min_mask_coverage
                               and item["edge_support"] >= threshold), None)

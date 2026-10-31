@@ -3,11 +3,13 @@
 import cv2
 import numpy as np
 from PIL import Image
+from time import perf_counter
 
 
 class VideoPredictor:
-    def __init__(self, model_id="facebook/sam3", device=None):
+    def __init__(self, model_id="facebook/sam3", device=None, *, profile=False):
         self.model_id, self.device = model_id, device
+        self.profile = profile
         self.model = self.processor = self.session = None
         self.load_progress = None
         self.index = 0
@@ -99,13 +101,30 @@ class VideoPredictor:
     def _infer(self, frame):
         import torch
 
+        def sync():
+            if self.profile and torch.device(self.device).type == "cuda":
+                torch.cuda.synchronize(self.device)
+
+        sync()
+        started = perf_counter()
         inputs = self._frame_inputs(frame)
+        prepared = perf_counter()
         with torch.inference_mode():
             outputs = self.model(inference_session=self.session, frame_idx=self.index, frame=inputs.pixel_values[0])
+            sync()
+            inferred = perf_counter()
             masks = self.processor.post_process_masks([outputs.pred_masks], original_sizes=inputs.original_sizes)[0]
         height, width = frame.shape[:2]
         masks = masks.detach().cpu().numpy().astype(bool).reshape(-1, height, width)
-        return {"object_ids": list(outputs.object_ids), "masks": masks, "frame_idx": self.index}
+        logits = outputs.object_score_logits
+        scores = None if logits is None else logits.detach().float().cpu().reshape(-1).tolist()
+        finished = perf_counter()
+        return {"object_ids": list(outputs.object_ids), "masks": masks, "frame_idx": self.index,
+                "object_score_logits": scores,
+                "inference_call_count": 1,
+                "timings_seconds": {"preprocess": prepared - started, "model_call": inferred - prepared,
+                                    "mask_postprocess_transfer": finished - inferred},
+                "timing_gpu_synchronized": self.profile and torch.device(self.device).type == "cuda"}
 
     def click(self, frame, point, *, object_id=1, positive=True, source_frame=None):
         self._session()
@@ -162,6 +181,7 @@ class VideoPredictor:
         for obj in changed_ids:
             batches.setdefault(len(groups[obj]), []).append(obj)
         prediction = None
+        timings, inference_calls = {}, 0
         for objects in batches.values():
             self.processor.add_inputs_to_inference_session(
                 inference_session=self.session, frame_idx=self.index, obj_ids=objects,
@@ -170,4 +190,9 @@ class VideoPredictor:
                 original_size=frame.shape[:2], clear_old_inputs=True,
             )
             prediction = self._infer(frame)
+            for name, value in prediction["timings_seconds"].items():
+                timings[name] = timings.get(name, 0) + value
+            inference_calls += prediction["inference_call_count"]
+        if prediction is not None:
+            prediction.update(timings_seconds=timings, inference_call_count=inference_calls)
         return prediction if prediction is not None else self._infer(frame)

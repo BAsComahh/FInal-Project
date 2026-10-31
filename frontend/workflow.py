@@ -42,7 +42,8 @@ def _read_tray_calibration(path):
 
 class RegistrationWorkflow:
     def __init__(self, video, *, model_id="facebook/sam3", device=None, start=0, seconds=10,
-                 inference_fps=2, stride=None, output_dir=None, units=None, calibration=None, board_size_in=None):
+                 inference_fps=2, stride=None, output_dir=None, units=None, calibration=None, board_size_in=None,
+                 profile=False, tray_search="full"):
         if seconds <= 0 or not np.isfinite(seconds):
             raise ValueError("seconds must be positive")
         if inference_fps <= 0 or not np.isfinite(inference_fps):
@@ -67,7 +68,7 @@ class RegistrationWorkflow:
         if units is None or Path(units).resolve() == DEFAULT_UNITS:
             self.roster = self.roster.with_list("A", self.roster.payload, source=str(DEFAULT_UNITS))
         self.selected_type = next(iter(self.roster.types)) if self.roster else None
-        self.worker = TaskWorker(model_id, device)
+        self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search)
         self.worker.submit("load", generation=0)
         self.source = None
         try:
@@ -484,6 +485,7 @@ class RegistrationWorkflow:
                     self.model_failed = True
                     self.note = f"SAM3 error: {error}. R resets the session."
                 elif prediction is not None:
+                    prediction["accepted_at"] = perf_counter()
                     self.prediction = prediction
                     if self.pending_trays:
                         self.prediction = {**prediction, "trays": {}, "tray_errors": {}}
@@ -502,8 +504,10 @@ class RegistrationWorkflow:
                         self.last_submitted_frame = request["metadata"]["frame_index"]
                         self.next_inference_time = now + 1 / self.inference_fps
                     self._prediction_changed()
-                    operation = "Tray fit" if request["kind"] == "trays" else "SAM3"
-                    self.note = f"{operation} updated in {prediction['inference_seconds']:.2f}s. Latest result held between updates."
+                    times = prediction.get("timings_seconds", {})
+                    self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
+                                 f"SAM operation {times.get('worker_operation', 0):.2f}s | "
+                                 f"tray {times.get('tray_fit', 0):.2f}s. Latest result held between updates.")
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
                     self.note = "Point undone. No objects remain; click to register again."

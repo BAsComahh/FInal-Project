@@ -26,6 +26,9 @@ def main():
     parser.add_argument("--preview-width", type=int, default=960, help="Preview width; prompts and masks use full rectified-frame coordinates")
     parser.add_argument("--device", help="Torch device; automatically choose the GPU with the most memory")
     parser.add_argument("--model", default="facebook/sam3")
+    parser.add_argument("--profile", action="store_true", help="Synchronize GPU phase timing; may add profiling overhead")
+    parser.add_argument("--tray-search", choices=("full", "local"), default="full",
+                        help="Experimental local tray update with full-search fallback; full is the baseline")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "outputs/sam3_registration")
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
@@ -35,7 +38,8 @@ def main():
         viewer = VideoWindow(args.video, units=args.units, calibration=args.calibration, board_size_in=args.board_size_in,
                                    model_id=args.model, device=args.device, start=args.start,
                                    seconds=args.seconds, stride=args.stride, inference_fps=args.inference_fps,
-                                   preview_width=args.preview_width, output_dir=args.output_dir)
+                                   preview_width=args.preview_width, output_dir=args.output_dir,
+                                   profile=args.profile, tray_search=args.tray_search)
         viewer.show()
         return 0
     except (OSError, ValueError, RuntimeError) as error:

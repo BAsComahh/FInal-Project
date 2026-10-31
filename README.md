@@ -66,8 +66,11 @@ outputs/                     Generated experiment results
 | `image_io` | 支持中文路径及通道保留的读写 / Image conversion and saving |
 | `query_rules` | 从 scene.json 查询距离、LOS 或普通移动／Double / Query a metric scene |
 | `read_unit_list` | Mantic Companion PDF 军表转注册类型 JSON / Convert army-list PDFs to type catalogs |
+| `track_units` | 独立 CPU LK 连续运动实验与状态记录 / Initialized CPU geometry tracking experiment |
 
 算法接口直接从组件导入，例如 `from components.boundary_detection.table import detect_table`；CLI 只处理参数、展示与导出。LSD 配置位于 [config.toml](components/boundary_detection/config.toml)，源线段长度过滤默认关闭，合并后长度过滤默认开启。几何长度配置使用百分比（`5` = 5%）：桌边以图像短边为基准，托盘局部容差以托盘短边为基准；实际尺寸仍用 mm／in。完整用法见各组件 README。
+
+首轮追踪优化保留默认基准；前端 `--tray-search local` 可尝试当前观测上的局部托盘更新，失败后完整搜索，`--profile` 导出分段计时。独立 [LK 实验](components/unit_tracking/README.md) 尚未接入正式 UI；遮挡失败后保留不确定状态，不自动恢复身份。
 
 ### 环境
 

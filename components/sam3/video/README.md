@@ -1,5 +1,9 @@
 # SAM3 视频模型
 
+`VideoPredictor(profile=True)` 可同步 GPU 分段计时，返回 `timings_seconds` 中的预处理、模型调用和 mask 后处理／回传时间；正常模式不额外同步，此时 `model_call` 可能只包含异步提交，不能单独解释为 GPU 推理时延。对象存在原始 `object_score_logits` 按 `object_ids` 返回；不是身份正确概率。工作线程另外记录完整 SAM 操作、托盘和总耗时，不再把托盘耗时全部标作 SAM。
+
+前端 `--profile` 把各任务及错误记录到新的 `outputs/tracking_comparison/sam_.../`，目录在终端显示；不保存提示点、图像或中间 reference。原 session、FP32 和 CPU state 策略保持当前基准配置。本轮没有测得有效 GPU 推理时间。
+
 本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `frontend/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
 
 完整视频示范从 [frontend](../../../frontend/README.md) 启动：

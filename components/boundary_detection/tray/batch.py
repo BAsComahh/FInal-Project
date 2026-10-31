@@ -5,7 +5,7 @@ import cv2
 from .detector import fit_tray
 
 
-def fit_registered_trays(frame, prediction, context):
+def fit_registered_trays(frame, prediction, context, *, previous=None):
     """Return observed proposals keyed by SAM object ID, plus per-unit errors.
 
     context has image_to_plane and sizes (object_id -> width/depth in mm).
@@ -17,7 +17,8 @@ def fit_registered_trays(frame, prediction, context):
         if size is None or not mask.any():
             continue
         try:
-            result = fit_tray(frame, mask, size, image_to_plane=context["image_to_plane"])
+            initial = (previous or {}).get(object_id, {}).get("corners_image")
+            result = fit_tray(frame, mask, size, image_to_plane=context["image_to_plane"], initial_corners=initial)
             if result["success"]:
                 trays[object_id] = result["best"]
             else:

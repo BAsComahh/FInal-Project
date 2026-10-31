@@ -60,6 +60,8 @@ JSON 必须包含 `image_to_board` 和 `board_size`。相机、裁剪和图片�
 5. **mask**：仍不足时，在 mask 质心和包围框中心附近搜索位置和角度。单边与 mask 分支再做局部逐级细化。
 6. 每级按分数排序；通过该级覆盖／边缘门槛后停止回退。`--mode corner|edge|mask` 可强制检查某一级，`--mode auto` 为默认策略。
 
+视频实验可用 `python -m frontend ... --tray-search local`：以上次成功四角在当前工作视图初始化，先尝试沿两轴 ±2×`corner_nudge_pct` 的平移及 ±2° 旋转，共 27 个候选；仍按当前 mask 覆盖和当前原始 LSD 边缘评分，通过直角分支门槛才接受。成功时跳过短线合并和全量角点组合；失败才执行完整流程。`--tray-search full` 是默认对照。标定、尺寸、对象集合发生变化或重置后不沿用旧初值；没有成功候选的对象下一次也重新完整搜索。这是当前观测上的局部更新，不是缓存旧矩形冒充新测量。
+
 矩形宽深固定。旋转角对矩形只定义到 180°，正方形还存在 90° 对称；它不代表已识别单位正面方向。
 
 ## 评分与输出
@@ -87,6 +89,8 @@ result = fit_tray(image_bgr, full_resolution_mask, size, config=TrayConfig(edge_
 # fit_tray 的 size 接口仍接收几何坐标单位；未标定时是换算后的像素长度。
 # 标定模式：size 与 image_to_plane 的目标单位必须相同。
 # result = fit_tray(image_bgr, mask, (100, 80), image_to_plane=calibration["image_to_board"])
+# 可选局部初值，必须是同一原图坐标系、宽度沿第 0→1 条边的循环四角：
+# result = fit_tray(image_bgr, mask, size, initial_corners=previous_best["corners_image"])
 print(result["best"]["corners_image"])
 ```
 
