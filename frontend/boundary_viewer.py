@@ -3,10 +3,10 @@
 import cv2
 import numpy as np
 
-from .pipeline import STAGES, compute_stages
-from .config import CONSTRAINTS, PIPELINE, initial_switches
-from .io import export_stages
-from .visualization import draw_lines, draw_merge_round
+from components.boundary_detection.pipeline import STAGES, compute_stages
+from components.boundary_detection.config import CONSTRAINTS, PIPELINE, initial_switches
+from components.boundary_detection.io import export_stages
+from components.boundary_detection.visualization import draw_lines, draw_merge_round
 
 
 class StepViewer:
@@ -46,12 +46,12 @@ class StepViewer:
         self.round_slider.set_active(self.merge_round > 0)
         self.round_slider.on_changed(self.on_merge_round)
         self.sliders = {}
-        controls = [("merge_gap", "Merge gap (px)", 0, 250, 1),
-                    ("merge_distance", "Line distance (px)", 1, 60, 1),
-                    ("merge_min_length", "Source length (px)", 1, 100, 1),
+        controls = [("merge_gap_pct", "Merge gap (%)", 0, 50, 0.1),
+                    ("merge_distance_pct", "Line distance (%)", 0.01, 12, 0.01),
+                    ("merge_min_length_pct", "Source length (%)", 0.01, 20, 0.1),
                     ("merge_angle", "Group angle (deg)", 0, 44, 0.5),
                     ("merge_min_coverage", "Coverage", 0.01, 1, 0.01),
-                    ("min_line_length", "Final length (px)", 1, 600, 1)]
+                    ("min_line_length_pct", "Final length (%)", 0.1, 120, 0.1)]
         for i, (key, label, minimum, maximum, step) in enumerate(controls):
             value = getattr(args, key)
             slider = Slider(self.figure.add_axes([0.38, 0.225 - i * 0.032, 0.38, 0.018]),
@@ -84,10 +84,11 @@ class StepViewer:
         state = "ON" if stage["enabled"] else "OFF / skipped"
         self.axes.set_title(f"{dict(STAGES)[self.stage]} | count {count} | {state}{suffix}", fontsize=12)
         self.note.set_text(note)
-        source = f">= {self.args.merge_min_length:g}px" if self.switches["merge_source_length"] else "length OFF"
+        source = f">= {self.args.merge_min_length_pct:g}%" if self.switches["merge_source_length"] else "length OFF"
         self.status.set_text(f"LSD merge: source {source}; "
-                             f"angle {self.args.merge_angle:g}deg; distance {self.args.merge_distance:g}px; "
-                             f"gap {self.args.merge_gap:g}px; coverage {self.args.merge_min_coverage:g}")
+                             f"angle {self.args.merge_angle:g}deg; distance {self.args.merge_distance_pct:g}%; "
+                             f"gap {self.args.merge_gap_pct:g}%; coverage {self.args.merge_min_coverage:g}. "
+                             f"Length base: image short side = {self.report['length_normalization']['reference_px']:g}px")
         self.figure.canvas.draw_idle()
 
     def recompute(self):
@@ -123,7 +124,7 @@ class StepViewer:
         self.refresh_preview()
 
     def on_parameter(self, key, value):
-        setattr(self.args, key, int(value) if key == "min_line_length" else float(value))
+        setattr(self.args, key, float(value))
         self.recompute()
 
     def save(self, _=None):

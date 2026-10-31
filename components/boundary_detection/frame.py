@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 
+from .geometry import line_intersection
+
 ADJACENT = [("TL", "top", "left"), ("TR", "top", "right"),
             ("BR", "bottom", "right"), ("BL", "bottom", "left")]
 
@@ -12,10 +14,7 @@ def check_closed_frame(selected, connection_distance=20):
         raise ValueError("connection-distance must be finite and positive")
     missing = [side for side, record in selected.items() if record is None]
     junctions = []
-    for name, side_a, side_b in [
-        ("TL", "top", "left"), ("TR", "top", "right"),
-        ("BR", "bottom", "right"), ("BL", "bottom", "left"),
-    ]:
+    for name, side_a, side_b in ADJACENT:
         record = {"name": name, "sides": [side_a, side_b], "connected": False,
                   "point": None}
         junctions.append(record)
@@ -28,12 +27,10 @@ def check_closed_frame(selected, connection_distance=20):
         ia, ib = np.unravel_index(np.argmin(differences), differences.shape)
         record["endpoint_gap_px"] = float(differences[ia, ib])
         record["endpoint_indices"] = {side_a: int(ia), side_b: int(ib)}
-        directions = np.column_stack([a[1] - a[0], -(b[1] - b[0])])
-        if abs(np.linalg.det(directions)) < 1e-8:
+        point = line_intersection(a, b)
+        if point is None:
             record["reason"] = "parallel or degenerate sides"
             continue
-        t, _ = np.linalg.solve(directions, b[0] - a[0])
-        point = a[0] + t * (a[1] - a[0])
         endpoint_distances = [float(np.linalg.norm(point - a[ia])), float(np.linalg.norm(point - b[ib]))]
         record["intersection_endpoint_distances_px"] = endpoint_distances
         # Infinite lines always intersect unless parallel; require the observed
@@ -90,14 +87,10 @@ def complete_quadrilateral(selected, strict_frame, enabled=True):
     for name, side_a, side_b in ADJACENT:
         a = np.asarray(selected[side_a]["line"], dtype=float).reshape(2, 2)
         b = np.asarray(selected[side_b]["line"], dtype=float).reshape(2, 2)
-        da, db = a[1] - a[0], b[1] - b[0]
-        lengths = np.linalg.norm(da) * np.linalg.norm(db)
-        matrix = np.column_stack([da, -db])
-        if lengths < 1e-12 or abs(np.linalg.det(matrix)) / lengths < 1e-8:
+        point = line_intersection(a, b, relative=True)
+        if point is None:
             result["reason"] = f"{name}: adjacent lines are parallel or degenerate"
             return result
-        t, _ = np.linalg.solve(matrix, b[0] - a[0])
-        point = a[0] + t * da
         if not np.all(np.isfinite(point)):
             result["reason"] = f"{name}: non-finite line intersection"
             return result

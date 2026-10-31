@@ -5,14 +5,14 @@ from pathlib import Path
 import sys
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from components.sam3 import Sam3PointSegmenter
 from components.sam3.point_segmenter import check_point_dependencies
-from components.sam3.point_viewer import PointSegmentationViewer
+from frontend.image.point_viewer import PointSegmentationViewer
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 __all__ = ["Sam3PointSegmenter", "main"]
 
 

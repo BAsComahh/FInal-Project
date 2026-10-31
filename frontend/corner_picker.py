@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from .geometry import CORNER_NAMES, compute_homography
-from .image import _load_image
+from components.homography.geometry import CORNER_NAMES, compute_homography
+from components.image_io import load_image as _load_image
 
 
 class CornerPicker:

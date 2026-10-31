@@ -8,7 +8,7 @@ import sys
 from .segmenter import _load_image, _pick_device
 
 
-def check_point_dependencies(tool="components.sam3.sam3_click_segmenter"):
+def check_point_dependencies(tool="tools.sam3_click_segmenter"):
     """Fail before opening a viewer if its interpreter lacks SAM3 support."""
     try:
         import torch

@@ -7,7 +7,7 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components.homography.corner_picker import CornerPicker
+from frontend.corner_picker import CornerPicker
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

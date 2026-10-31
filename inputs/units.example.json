@@ -1,0 +1,8 @@
+{
+  "unit_types": [
+    {"type_id": "A", "name": "Infantry", "dimension": {"width_mm": 100, "depth_mm": 80}, "attributes": {"speed_in": 5, "height": 2, "side": "Blue", "unit_kind": "ordinary", "special_rules": []}},
+    {"type_id": "B", "name": "Cavalry", "dimension": {"width_mm": 100, "depth_mm": 50}, "attributes": {"speed_in": 8, "height": 3, "side": "Blue", "unit_kind": "ordinary", "special_rules": []}},
+    {"type_id": "C", "name": "Archer", "dimension": {"width_mm": 120, "depth_mm": 60}, "attributes": {"speed_in": 5, "height": 2, "side": "Red", "unit_kind": "ordinary", "special_rules": []}},
+    {"type_id": "D", "name": "Custom unit", "dimension": {"width_mm": 50, "depth_mm": 50}, "attributes": {"speed_in": null, "height": null, "side": "Red", "unit_kind": "ordinary", "special_rules": []}}
+  ]
+}

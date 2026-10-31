@@ -9,13 +9,14 @@ import cv2
 import numpy as np
 
 if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from components.sam3 import Sam3Segmenter
 from components.sam3.visualization import draw_segmentation
+from components.image_io import save_image as _save_png
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 __all__ = ["Sam3Segmenter", "segment_image", "main"]
 
 
@@ -24,14 +25,6 @@ def segment_image(image, prompt="miniature", *, threshold=0.5, segmenter=None):
     if segmenter is None:
         segmenter = Sam3Segmenter()
     return segmenter.segment(image, prompt, threshold=threshold)
-
-
-def _save_png(path, image):
-    success, encoded = cv2.imencode(".png", image)
-    if not success:
-        raise ValueError(f"Cannot encode output: {path}")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    encoded.tofile(path)
 
 
 def main():

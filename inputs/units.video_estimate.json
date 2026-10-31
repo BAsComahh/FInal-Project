@@ -1,0 +1,51 @@
+{
+  "measurement_note": "Approximate test sizes only. Derived from an assumed 72 x 48 inch table; not verified dimensions.",
+  "measurement_report": "outputs/unit_dimension_estimate/measurements.json",
+  "unit_types": [
+    {
+      "type_id": "A",
+      "name": "Small horizontal green tray, left of centre",
+      "dimension": {
+        "width_mm": 155,
+        "depth_mm": 50
+      },
+      "attributes": {
+        "speed_in": null,
+        "height": null,
+        "side": null,
+        "unit_kind": null,
+        "special_rules": []
+      }
+    },
+    {
+      "type_id": "B",
+      "name": "Wide tray immediately above the central blue terrain",
+      "dimension": {
+        "width_mm": 205,
+        "depth_mm": 80
+      },
+      "attributes": {
+        "speed_in": null,
+        "height": null,
+        "side": null,
+        "unit_kind": null,
+        "special_rules": []
+      }
+    },
+    {
+      "type_id": "C",
+      "name": "Long vertical tray in the lower-right area",
+      "dimension": {
+        "width_mm": 205,
+        "depth_mm": 80
+      },
+      "attributes": {
+        "speed_in": null,
+        "height": null,
+        "side": null,
+        "unit_kind": null,
+        "special_rules": []
+      }
+    }
+  ]
+}

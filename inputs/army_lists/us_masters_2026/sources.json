@@ -1,0 +1,57 @@
+{
+  "retrieved_on": "2026-10-31",
+  "event": "2026 US Masters",
+  "primary_context_url": "https://honest4s.com/posts/first-masters-experience/",
+  "additional_ryan_source": "https://www.countercharge.net/counter-chargeccx/868",
+  "match_context": "Sam Moore describes his Northern Alliance versus Ryan Lampien Elves game as a streamed Control scenario and links both submitted lists.",
+  "round_label_difference": "Player recap calls it Game 4; the local video overlay says Game 3. Players and scenario agree; retain this numbering discrepancy.",
+  "files": [
+    {
+      "filename": "Sam_Moore_Northern_Alliance.pdf",
+      "url": "https://honest4s.com/lists/Sam_Moore_-_Northern_Alliance_-_Northeast.pdf",
+      "bytes": 14852,
+      "sha256": "a2d88743659fd126db840d5d07028a40e563df06a6f774fbe59dd9be5c58be48",
+      "player": "Sam Moore",
+      "army": "Northern Alliance",
+      "pages": 1,
+      "total_units": 13,
+      "total_points": 2300
+    },
+    {
+      "filename": "Ryan_Lampien_Elves.pdf",
+      "url": "https://honest4s.com/lists/Ryan_Lampien_-_Elves_-_West.pdf",
+      "bytes": 19893,
+      "sha256": "569aacb5c901d1424412a59cf842dafa2da82d3cdc6a2751f5d422703555cdc1",
+      "player": "Ryan Lampien",
+      "army": "Elves",
+      "pages": 2,
+      "total_units": 15,
+      "total_points": 2300
+    }
+  ],
+  "available_fields": [
+    "unit name",
+    "formation",
+    "unit category",
+    "Speed",
+    "Melee",
+    "Shooting",
+    "Defence",
+    "Unit Strength",
+    "Attacks",
+    "Nerve",
+    "Height",
+    "Points",
+    "special rules",
+    "traits",
+    "weapons",
+    "spells",
+    "artefacts"
+  ],
+  "limitations": [
+    "No tray dimensions in millimetres are printed in these PDFs.",
+    "Printed unit entries may include different formations, equipment and artefacts under one name.",
+    "A bracketed number in a unit heading is not by itself a count of selected units.",
+    "The existing ABC test catalog is not replaced or matched automatically to these lists."
+  ]
+}

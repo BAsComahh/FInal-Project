@@ -1,11 +1,10 @@
 """SAM3 image inference through the locally installed Transformers API."""
 
-from pathlib import Path
-
 import cv2
 import numpy as np
 from PIL import Image
 
+from components.image_io import load_image as _load_image
 
 def _pick_device():
     import torch
@@ -15,24 +14,6 @@ def _pick_device():
     index = max(range(torch.cuda.device_count()),
                 key=lambda i: torch.cuda.get_device_properties(i).total_memory)
     return f"cuda:{index}"
-
-
-def _load_image(image):
-    if isinstance(image, (str, Path)):
-        path = Path(image)
-        if not path.is_file():
-            raise FileNotFoundError(f"Image not found: {path}")
-        data = np.fromfile(path, dtype=np.uint8)
-        image = cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
-    if (not isinstance(image, np.ndarray) or image.dtype != np.uint8
-            or image.size == 0 or image.ndim not in (2, 3)
-            or (image.ndim == 3 and image.shape[2] not in (3, 4))):
-        raise ValueError("image must be a decodable path or a non-empty uint8 BGR, BGRA or grayscale array")
-    if image.ndim == 2:
-        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-    elif image.shape[2] == 4:
-        image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-    return image
 
 
 class Sam3Segmenter:

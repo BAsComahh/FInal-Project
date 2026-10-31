@@ -8,11 +8,11 @@
 
 ```powershell
 conda activate sam3-demo
-python -m components.sam3.sam3_segmenter inputs/test.png
-python -m components.sam3.sam3_segmenter inputs/test.png --prompt miniature --threshold 0.3
+python -m tools.sam3_segmenter inputs/test.png
+python -m tools.sam3_segmenter inputs/test.png --prompt miniature --threshold 0.3
 ```
 
-也支持 `python components/sam3/sam3_segmenter.py inputs/test.png`。只读取本机已缓存的 `facebook/sam3` 权重；可用 `--model` 指定本地模型目录。自动选择显存最大的 GPU，本机为 RX 7900 XT；可用 `--device cpu` 或 `--device cuda:1` 指定设备。沿用本机已验证的 FP32 精度。
+也支持 `python tools/sam3_segmenter.py inputs/test.png`。只读取本机已缓存的 `facebook/sam3` 权重；可用 `--model` 指定本地模型目录。自动选择显存最大的 GPU，本机为 RX 7900 XT；可用 `--device cpu` 或 `--device cuda:1` 指定设备。沿用本机已验证的 FP32 精度。
 
 默认输出到 `outputs/sam3/<图片名>_<本次运行标识>/`，可用 `--output-dir` 修改上层目录：
 
@@ -25,7 +25,7 @@ python -m components.sam3.sam3_segmenter inputs/test.png --prompt miniature --th
 ## Python 接口
 
 ```python
-from components.sam3.sam3_segmenter import segment_image
+from tools.sam3_segmenter import segment_image
 
 result = segment_image("inputs/test.png")
 masks = result["masks"]    # bool, (N, H, W)，原图坐标
@@ -57,14 +57,14 @@ components/sam3/
   point_viewer.py    多目标选择、窗口预览和批量导出
   registration_viewer.py   自动检测候选的人工增删审核
   polygon.py         手动多边形区域转 mask，不调用 SAM
-components/sam3/sam3_segmenter.py   图片输入接口与文件输出
-components/sam3/sam3_click_segmenter.py   点击目标分割工具
+tools/sam3_segmenter.py   图片输入接口与文件输出
+tools/sam3_click_segmenter.py   点击目标分割工具
 ```
 
 ## 点击多个目标分割
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m components.sam3.sam3_click_segmenter inputs/test.png
+conda run --no-capture-output -n sam3-demo python -m tools.sam3_click_segmenter inputs/test.png
 ```
 
 显式指定环境，避免不同命令执行会话之间 `conda activate` 不持续生效。工具会在打开窗口前检查依赖；无需给 base 环境安装 SAM3。
@@ -105,7 +105,7 @@ refined = segmenter.segment([[999, 506], [0, 0]], labels=[1, 0])
 ## 自动检测后审核注册
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m tools.sam3_registration inputs/test.png
+conda run --no-capture-output -n sam3-demo python -m tools.sam3_image_registration inputs/test.png
 ```
 
 流程：`miniature` 文字检测 → 自动打开审核窗口 → 人工补充和移除 → S 保存最终列表。可用 `--prompt`、`--threshold`、`--device`、`--model`、`--output-dir` 调整输入和输出。
@@ -125,3 +125,18 @@ conda run --no-capture-output -n sam3-demo python -m tools.sam3_registration inp
 默认保存到 `outputs/sam3_registration/targets_<本次保存标识>/`，包含全部目标的 overlay、切图预览、总清单，以及每个目标各自的 mask 和透明 PNG。允许保存空列表。每个目标的 `origin` 记录 `automatic`、`manual` 或 `manual_polygon`；`score_type` 区分文字检测分数与点分割预测 IoU，避免混用。手动多边形保留按点击顺序排列的原图像素 `vertices`，`score` 和 `score_type` 均为 `null`，不虚构模型分数。
 
 自动检测结束后释放其模型，再按需加载点提示模型；手动补充时复用当前图像特征。此处“注册”仅指确认保留分割目标，尚不包含兵种命名、属性填写或 DINO 特征提取。两个原有独立工具继续保留。
+
+
+## 视频点击注册与 reference 素材
+
+正式工具 `tools/sam3_registration.py` 已切换为视频点击注册。原视频 demo 的实现移入 [video/](video/README.md)，demo 目录已移除。
+
+```powershell
+conda run --no-capture-output -n sam3-demo python -m tools.sam3_registration inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30 --inference-fps 2
+```
+
+左键／右键添加正负点，`N` 新增对象，数字键切换对象，空格首次完成注册并保存后播放，之后播放／暂停；`R` 重置，`S` 确认完成并保存。视频原速播放，单个后台线程低频运行模型，期间沿用最近的 mask。
+
+标注期间只在内存中保留草稿，完成注册时一次性保存匹配的完整帧、叠加图、各对象的全图二值 mask、裁剪图、透明背景切图及 `instances.json`。素材接口为 `components.registration.extract_references(frame, prediction, source=...)`，工作流也提供 `RegistrationWorkflow.extract_references()`。详情和数据格式见 [registration](../registration/README.md)，模型会话见 [video/README.md](video/README.md)。
+
+可用 `--units inputs/units.example.json` 导入类型表，或在视频界面的 `Load types` 中加载。只需提供 A／B 等 type；选择 mask 后指定类型并按 `Assign type`（`B`），同类单位会依次生成 A1、A2，不同类型分别编号。属性保留在导出元数据中；导入表后，未指定类型的 mask 会阻止保存。模型在程序启动时立即后台加载，窗口显示加载状态。草稿中被撤回的编号可以复用；最终确认后锁定点和类型标注，重复保存不生成副本。

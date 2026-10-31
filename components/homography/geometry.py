@@ -7,6 +7,30 @@ import numpy as np
 CORNER_NAMES = ("TL", "TR", "BR", "BL")
 
 
+def order_corners(points):
+    """Label four unordered points by image orientation, without quadrant gates."""
+    points = np.asarray(points, dtype=np.float64)
+    if points.shape != (4, 2) or not np.isfinite(points).all():
+        raise ValueError("Select four finite corner points")
+    contour = points.astype(np.float32)
+    if not np.isfinite(contour).all():
+        raise ValueError("Corner coordinates exceed the supported range")
+    indices = cv2.convexHull(contour, returnPoints=False).ravel()
+    if len(indices) != 4 or abs(cv2.contourArea(contour[indices])) <= 1e-6:
+        raise ValueError("Four distinct corners must form a convex quadrilateral")
+    # Keep original precision when ordering the float32 convex-hull indices.
+    hull = points[indices]
+    if cv2.contourArea(hull.astype(np.float32), oriented=True) < 0:
+        hull = hull[::-1]
+    target = np.array([[0, 0], [1, 0], [1, 1], [0, 1]])
+    normalized = (hull - hull.min(axis=0)) / np.ptp(hull, axis=0)
+    shift = min(range(4), key=lambda i: (
+        float(np.square(np.roll(normalized, -i, axis=0) - target).sum()),
+        hull[i, 1], hull[i, 0]))
+    ordered = _corners_array(np.roll(hull, -shift, axis=0))
+    return {name: point.tolist() for name, point in zip(CORNER_NAMES, ordered)}
+
+
 def _corners_array(corners):
     if isinstance(corners, dict):
         if not all(name in corners for name in CORNER_NAMES):

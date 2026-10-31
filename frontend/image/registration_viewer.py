@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from .point_viewer import PointSegmentationViewer, batch_overlay, cutout_gallery, save_selections
-from .polygon import polygon_selection
+from components.registration.polygon import polygon_selection
 
 
 def detection_selections(detection):

@@ -1,6 +1,14 @@
 # 修改后重新启动程序生效。命令行开关优先于这里的设置。
 # 窗口里的复选框只影响当前运行，不会改写本文件。
 # true = 开启，false = 关闭。
+# 几何长度均用短边百分比：5 表示 5%，不是 0.05，也不是 5 像素。
+
+[geometry]
+min_line_length_pct = 39.0625        # 最终候选最短线；短边 512 时等于原 200 px
+merge_min_length_pct = 3.90625       # 源线段长度；短边 512 时等于原 20 px
+merge_distance_pct = 1.171875        # 到拟合线的偏离；短边 512 时等于原 6 px
+merge_gap_pct = 9.765625             # 沿拟合线方向的间隙；短边 512 时等于原 50 px
+connection_distance_pct = 3.90625    # 端点／交点连接容差；短边 512 时等于原 20 px
 
 [steps]
 blur = true              # 高斯模糊；灰度转换始终保留
@@ -24,4 +32,4 @@ gap = true               # 沿拟合线方向的空隙
 coverage = true          # 原始观测对拟合跨度的覆盖率
 
 [border_selection]
-region_ratio = 0.3       # 四侧各靠边的 1/3
+region_pct = 30.0        # 四侧各靠边 30%；上／下按图高，左／右按图宽

@@ -1,0 +1,38 @@
+# SAM3 视频模型
+
+本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `frontend/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
+
+完整视频示范从 [frontend](../../../frontend/README.md) 启动：
+
+```powershell
+conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --units inputs/units.example.json --seconds 30
+```
+
+先确认原图桌角，再 Homography 拉正，在拉正帧中注册并传播。权重启动即加载；首帧特征等变换确定后准备。界面和导出规则见前端及 registration 文档。
+
+```python
+from components.sam3.video import VideoPredictor
+from components.video_io import VideoSource
+from components.registration import extract_references
+
+source = VideoSource("inputs/example.mp4")
+try:
+    frame = source.read_at(0)
+    predictor = VideoPredictor()
+    predictor.load()
+    predictor.prepare_initial_frame(frame, source_frame=source.frame_index)
+    prediction = predictor.click(frame, [100, 200], object_id=1, source_frame=source.frame_index)
+    references = extract_references(frame, prediction, source=source.metadata())
+finally:
+    source.close()
+```
+
+这个直接组件示例以原视频坐标工作；前端会先变换输入帧，并标记拉正坐标空间。每份 reference 必须使用与 prediction 配套的同帧图像。
+
+模型只读取本地缓存，默认使用显存最大的 GPU、FP32，会话状态和视频存于 CPU。`load()` 重复调用不重新加载权重。`prepare_initial_frame` 使用真实首帧的 `add_new_frame`、`get_image_features` 和 `cache.cache_vision_features`，不添加虚拟对象；GPU 同步完成才报告准备就绪。缓存键按已核对的 Transformers `5.18.0` 后端源码对接。这是项目集成，首个真实点仍需提示解码和记忆编码，提速幅度尚未测量。
+
+首次播放前的点编辑使用 `clear_old_inputs=True` 替换首帧提示；删除对象时用 `reset_tracking_data()` 保留图像缓存，再按点数分组提交剩余对象，避免补齐提示影响多 mask 选择。播放后锁定点及 type 编辑，暂停不回滚时间状态；后续矫正由未来算法负责。
+
+加载进度通过官方源码中的 `logging.set_tqdm_hook` 观察已加载项数，百分比不是下载字节或启动总耗时。钩子退出时恢复，无总量的准备阶段由界面显示滚动条，就绪／失败后隐藏。
+
+依据：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)、[HF 后端源码](https://github.com/huggingface/transformers/blob/main/src/transformers/models/sam3_tracker_video/modeling_sam3_tracker_video.py)、[官方加载进度示例](https://github.com/huggingface/transformers/blob/main/src/transformers/cli/serving/model_manager.py)。Meta 与 HF 的会话 API 分别核对，不假定二者相同。

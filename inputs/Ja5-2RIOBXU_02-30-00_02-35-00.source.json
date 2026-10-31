@@ -1,0 +1,17 @@
+{
+  "source_url": "https://www.youtube.com/watch?v=Ja5-2RIOBXU",
+  "source_title": "2026 US Masters Live Stream Day 2",
+  "source_start": "02:30:00",
+  "source_end": "02:35:00",
+  "source_start_seconds": 9000,
+  "source_end_seconds": 9300,
+  "clip_duration_seconds": 300.0,
+  "video": {
+    "codec_name": "h264",
+    "codec_type": "video",
+    "width": 1920,
+    "height": 1080,
+    "r_frame_rate": "60/1"
+  },
+  "size_bytes": 48095585
+}

@@ -1,0 +1,48 @@
+{
+  "ruleset": "kow4-mini",
+  "board_size_mm": [1828.8, 1219.2],
+  "warnings": ["Synthetic illustration only; not an observed match."],
+  "units": [
+    {
+      "unit_id": "A1",
+      "corners_mm": [[300, 700], [400, 700], [400, 780], [300, 780]],
+      "front_edge": 0,
+      "height": 2,
+      "speed_in": 5,
+      "side": "Blue",
+      "unit_kind": "ordinary",
+      "special_rules": [],
+      "state": {"engaged": false, "wavering": false}
+    },
+    {
+      "unit_id": "A2",
+      "corners_mm": [[500, 700], [600, 700], [600, 780], [500, 780]],
+      "front_edge": 0,
+      "height": 2,
+      "speed_in": 5,
+      "side": "Blue",
+      "unit_kind": "ordinary",
+      "special_rules": [],
+      "state": {"engaged": false, "wavering": false}
+    },
+    {
+      "unit_id": "B1",
+      "corners_mm": [[300, 300], [400, 300], [400, 380], [300, 380]],
+      "front_edge": 2,
+      "height": 2,
+      "speed_in": 5,
+      "side": "Red",
+      "unit_kind": "ordinary",
+      "special_rules": [],
+      "state": {"engaged": false, "wavering": false}
+    }
+  ],
+  "terrain": [
+    {
+      "terrain_id": "T1",
+      "kind": "blocking",
+      "height": 2,
+      "polygon_mm": [[220, 500], [380, 500], [380, 550], [220, 550]]
+    }
+  ]
+}

@@ -9,10 +9,10 @@
 在项目根目录运行：
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m tools.real_esrgan inputs/test.png
+conda run --no-capture-output -n sam3-demo python -m tools.super_resolution inputs/test.png
 ```
 
-也支持 `python tools/real_esrgan.py inputs/test.png`。不调用 SAM、DINO 或 Homography。
+也支持 `python tools/super_resolution.py inputs/test.png`。不调用 SAM、DINO 或 Homography。
 
 参数：
 
@@ -46,7 +46,7 @@ original_xy = enhanced_xy / scale
 components/real_esrgan/
   __init__.py
   upscaler.py              图像输入、官方后端调用、结果返回
-tools/real_esrgan.py        命令行和永久文件输出
+tools/super_resolution.py        命令行和永久文件输出
 vendor/real_esrgan/         本机运行时；已加入 .gitignore
   realesrgan-ncnn-vulkan.exe
   vcomp140.dll

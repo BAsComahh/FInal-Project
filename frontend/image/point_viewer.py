@@ -9,12 +9,7 @@ from tempfile import mkdtemp
 import cv2
 import numpy as np
 
-
-def _save_png(path, image):
-    success, encoded = cv2.imencode(".png", image)
-    if not success:
-        raise ValueError(f"Cannot encode image: {path}")
-    encoded.tofile(path)
+from components.image_io import save_image as _save_png
 
 
 def selection_overlay(image, result):

@@ -11,6 +11,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from components.real_esrgan import DEFAULT_RUNTIME, upscale_image
+from components.image_io import save_image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -30,12 +31,8 @@ def main():
             stream.reconfigure(encoding="utf-8", errors="replace")
     try:
         result = upscale_image(args.image, runtime_dir=args.runtime_dir, gpu_id=args.gpu, tile_size=args.tile)
-        args.output_dir.mkdir(parents=True, exist_ok=True)
         image_path = args.output_dir / f"{args.image.stem}_x4.png"
-        success, encoded = cv2.imencode(".png", result["image"])
-        if not success:
-            raise ValueError(f"Cannot encode output image: {image_path}")
-        encoded.tofile(image_path)
+        save_image(image_path, result["image"])
         log_path = args.output_dir / f"{args.image.stem}_x4.log"
         log_path.write_text(result["log"], encoding="utf-8")
         metadata = {key: value for key, value in result.items() if key not in ("image", "log")}

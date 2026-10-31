@@ -17,6 +17,7 @@ if __package__ in (None, ""):
 
 from components.homography import compute_homography, transform_points, warp_table
 from components.homography.geometry import CORNER_NAMES
+from components.image_io import save_image
 
 
 __all__ = ["compute_homography", "transform_points", "warp_table", "main"]
@@ -38,11 +39,7 @@ def main():
         corners = np.asarray(args.corners).reshape(4, 2)
         result = warp_table(args.image, corners, args.size, board_size=args.board_size)
         image_path = args.output_dir / f"{args.image.stem}_rectified.png"
-        success, encoded = cv2.imencode(".png", result["image"])
-        if not success:
-            raise ValueError(f"Cannot encode output image: {image_path}")
-        args.output_dir.mkdir(parents=True, exist_ok=True)
-        encoded.tofile(image_path)
+        save_image(image_path, result["image"])
         metadata = {key: value.tolist() if isinstance(value, np.ndarray) else value
                     for key, value in result.items() if key != "image"}
         metadata.update(image=str(args.image.resolve()), corner_order=list(CORNER_NAMES))

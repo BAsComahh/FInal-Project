@@ -1,0 +1,22 @@
+# Python >= 3.12; versions verified in sam3-demo (Python 3.13.16).
+# Install with: python -m pip install -r requirements.txt
+
+# Image processing and desktop previews.
+numpy==2.5.2
+opencv-python==5.0.0.93
+matplotlib==3.11.2
+Pillow==12.3.0
+
+# Text-based Mantic Companion army-list PDFs.
+pypdf==6.21.4
+
+# SAM3 and the frozen DINOv2 feature backbone are provided by Transformers.
+# On AMD Windows, install the matching ROCm torch/torchvision builds first.
+# These public-version pins also accept the existing +rocm10.0.0 builds.
+torch==2.13.0
+torchvision==0.28.0
+transformers==5.18.0
+
+# SAM3/DINOv2 weights are cached separately; they are not installed by pip.
+# Real-ESRGAN uses the official Vulkan runtime in vendor/real_esrgan/.
+# See components/real_esrgan/README.md for its setup (no Python package needed).
