@@ -4,3 +4,5 @@ __pycache__/
 outputs/
 docs/
 /vendor/real_esrgan/
+/vendor/cutie/
+/待人工确认.md

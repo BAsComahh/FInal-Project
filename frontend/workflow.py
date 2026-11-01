@@ -13,7 +13,7 @@ import numpy as np
 from components.homography import warp_table
 from components.video_io import VideoSource
 from components.registration import UnitRoster, extract_references, save_registration, read_unit_list_pdf
-from components.registration.rule_state import RuleState
+from components.game_data import GameData
 from .task_worker import TaskWorker
 
 
@@ -43,7 +43,7 @@ def _read_tray_calibration(path):
 class RegistrationWorkflow:
     def __init__(self, video, *, model_id="facebook/sam3", device=None, start=0, seconds=10,
                  inference_fps=2, stride=None, output_dir=None, units=None, calibration=None, board_size_in=None,
-                 profile=False, tray_search="full"):
+                 profile=False, tray_search="full", tracker="sam3", tracker_model=None, tracker_cache=None):
         if seconds <= 0 or not np.isfinite(seconds):
             raise ValueError("seconds must be positive")
         if inference_fps <= 0 or not np.isfinite(inference_fps):
@@ -52,38 +52,34 @@ class RegistrationWorkflow:
             raise ValueError("stride must be positive")
         if calibration is not None and board_size_in is not None:
             raise ValueError("Use either --calibration or --board-size-in, not both.")
-        self.source_to_plane = None
-        self.board_size_mm = None
+        self.data = GameData()
         if calibration is not None:
-            self.source_to_plane, self.board_size_mm = _read_tray_calibration(calibration)
+            self.data.board.source_to_plane, self.data.board.board_size_mm = _read_tray_calibration(calibration)
         else:
             size = np.asarray(board_size_in if board_size_in is not None else DEFAULT_BOARD_SIZE_IN, dtype=float)
             if size.shape != (2,) or not np.isfinite(size).all() or np.any(size <= 0):
                 raise ValueError("Board width and depth must be positive inch dimensions.")
-            self.board_size_mm = tuple(size * 25.4)
-        self.rule_state = RuleState()
-        self.image_to_plane = self.source_to_plane
-        self.homography = None
-        self.roster = UnitRoster.load(units if units is not None else DEFAULT_UNITS)
+            self.data.board.board_size_mm = tuple(size * 25.4)
+        self.data.board.image_to_plane = self.data.board.source_to_plane
+        self.data.units = UnitRoster.load(units if units is not None else DEFAULT_UNITS)
         if units is None or Path(units).resolve() == DEFAULT_UNITS:
-            self.roster = self.roster.with_list("A", self.roster.payload, source=str(DEFAULT_UNITS))
-        self.selected_type = next(iter(self.roster.types)) if self.roster else None
-        self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search)
+            self.data.units = self.data.units.with_list("A", self.data.units.payload, source=str(DEFAULT_UNITS))
+        self.selected_type = next(iter(self.data.units.types)) if self.data.units else None
+        self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search,
+                                 tracker=tracker, tracker_model=tracker_model, tracker_cache=tracker_cache)
         self.worker.submit("load", generation=0)
         self.source = None
         try:
             self.source = VideoSource(video)
-            self.frame = self.source.read_at(start)
+            self.data.current.frame = self.source.read_at(start)
         except Exception:
             if self.source is not None:
                 self.source.close()
             self.worker.close()
             raise
-        self.initial_frame = self.frame
-        self.source_size = self.frame.shape[1::-1]
+        self.initial_frame = self.data.current.frame
+        self.data.board.source_size = self.data.current.frame.shape[1::-1]
         self.stage = Stage.TABLE
-        self.table_boundary = None
-        self.view_revision = 0
         self.start = start
         self.end_index = min(self.source.frame_count - 1, int((start + seconds) * self.source.fps) - 1)
         self.inference_fps = self.source.fps / stride if stride is not None else inference_fps
@@ -92,7 +88,6 @@ class RegistrationWorkflow:
         self.load_progress = None
         self.pending_trays = False
         self.interaction_mode = "segment"
-        self.prediction = self.prediction_frame = self.prediction_metadata = None
         self.active_id = 1
         self.clicks = []
         self.pending_clicks = deque()
@@ -105,7 +100,8 @@ class RegistrationWorkflow:
         self.needs_prepare = True
         self.startup_ready = False
         self.model_failed = self.closed = self.playing = False
-        self.reference_folder = None
+        self.display_snapshot = None
+        self.pending_play = False
         self.next_inference_time = 0.0
         self.last_submitted_frame = -1
         self.dirty = True
@@ -115,55 +111,55 @@ class RegistrationWorkflow:
 
     @property
     def registration_locked(self):
-        return self.reference_folder is not None
+        return self.data.reference_folder is not None
 
     def known_ids(self):
         ids = {click["object_id"] for click in self.clicks}
-        if self.prediction is not None:
-            ids.update(self.prediction["object_ids"])
+        if self.data.current.prediction is not None:
+            ids.update(self.data.current.prediction["object_ids"])
         return sorted(ids)
 
     def confirm_table(self, corners, boundary, *, board_size_in=None):
         if self.stage is not Stage.TABLE:
             return
-        size_mm = np.asarray(self.board_size_mm, dtype=float)
+        size_mm = np.asarray(self.data.board.board_size_mm, dtype=float)
         if board_size_in is not None:
             size_mm = np.asarray(board_size_in, dtype=float) * 25.4
         if size_mm.shape != (2,) or not np.isfinite(size_mm).all() or np.any(size_mm <= 0):
             raise ValueError("Board length and width must be positive inch dimensions.")
         result = warp_table(self.initial_frame, corners, board_size=size_mm)
-        if self.source_to_plane is not None:
-            scale = np.diag([*(size_mm / self.board_size_mm), 1.0])
-            self.source_to_plane = scale @ self.source_to_plane
+        if self.data.board.source_to_plane is not None:
+            scale = np.diag([*(size_mm / self.data.board.board_size_mm), 1.0])
+            self.data.board.source_to_plane = scale @ self.data.board.source_to_plane
         else:
-            self.source_to_plane = result["image_to_board"]
-        self.board_size_mm = tuple(size_mm)
-        self.homography = {key: value for key, value in result.items() if key != "image"}
-        self.frame = result["image"]
-        self.table_boundary = deepcopy(boundary)
+            self.data.board.source_to_plane = result["image_to_board"]
+        self.data.board.board_size_mm = tuple(size_mm)
+        self.data.board.homography = {key: value for key, value in result.items() if key != "image"}
+        self.data.current.frame = result["image"]
+        self.data.board.table_boundary = deepcopy(boundary)
         self.stage = Stage.REGISTER
-        if self.source_to_plane is not None:
-            self.image_to_plane = self.source_to_plane @ self.homography["inverse_matrix"]
+        if self.data.board.source_to_plane is not None:
+            self.data.board.image_to_plane = self.data.board.source_to_plane @ self.data.board.homography["inverse_matrix"]
         self._configure_trays()
         self._prediction_changed()
         self.note = "Table focused. Preparing SAM3 features for the rectified first frame."
 
     def _warp_frame(self, frame):
-        if self.homography is None:
+        if self.data.board.homography is None:
             return frame
-        return cv2.warpPerspective(frame, self.homography["matrix"], self.homography["output_size"])
+        return cv2.warpPerspective(frame, self.data.board.homography["matrix"], self.data.board.homography["output_size"])
 
     def _frame_metadata(self):
         metadata = self.source.metadata()
-        if self.homography is not None:
+        if self.data.board.homography is not None:
             metadata.update(
-                coordinate_space="rectified_table_pixels", image_size=list(self.frame.shape[1::-1]),
-                source_image_size=list(self.source_size),
+                coordinate_space="rectified_table_pixels", image_size=list(self.data.current.frame.shape[1::-1]),
+                source_image_size=list(self.data.board.source_size),
                 homography={key: value.tolist() if isinstance(value, np.ndarray) else value
-                            for key, value in self.homography.items()},
+                            for key, value in self.data.board.homography.items()},
             )
-            if self.image_to_plane is not None:
-                metadata.update(image_to_plane=self.image_to_plane.tolist(), board_size_mm=list(self.board_size_mm))
+            if self.data.board.image_to_plane is not None:
+                metadata.update(image_to_plane=self.data.board.image_to_plane.tolist(), board_size_mm=list(self.data.board.board_size_mm))
         return metadata
 
     def can_edit_points(self):
@@ -186,9 +182,9 @@ class RegistrationWorkflow:
         if not self.can_edit_points():
             return
         roster = UnitRoster.load(path)
-        if self.roster is not None:
-            roster.retain_bindings(self.roster)
-        self.roster = roster
+        if self.data.units is not None:
+            roster.retain_bindings(self.data.units)
+        self.data.units = roster
         self.selected_type = next(iter(roster.types))
         self._configure_trays()
         self._prediction_changed()
@@ -213,11 +209,11 @@ class RegistrationWorkflow:
             payload = UnitRoster.load(path).payload
         else:
             raise ValueError("Choose an army-list PDF or a type-catalog JSON.")
-        roster = self.roster.with_list(list_id, payload, source=str(path))
-        cleared = set(self.roster.bindings) - set(roster.bindings)
+        roster = self.data.units.with_list(list_id, payload, source=str(path))
+        cleared = set(self.data.units.bindings) - set(roster.bindings)
         for object_id in cleared:
-            self.rule_state.fronts.pop(object_id, None)
-        self.roster = roster
+            self.data.rules.fronts.pop(object_id, None)
+        self.data.units = roster
         self.selected_type = next(key for key, row in roster.types.items() if row.get("list_id") == list_id)
         self._configure_trays()
         self._prediction_changed()
@@ -230,10 +226,10 @@ class RegistrationWorkflow:
     def load_calibration(self, path):
         if not self.can_edit_points():
             return
-        self.source_to_plane, self.board_size_mm = _read_tray_calibration(path)
-        self.rule_state.fronts.clear()
-        self.image_to_plane = (self.source_to_plane @ self.homography["inverse_matrix"]
-                               if self.homography is not None else self.source_to_plane)
+        self.data.board.source_to_plane, self.data.board.board_size_mm = _read_tray_calibration(path)
+        self.data.rules.fronts.clear()
+        self.data.board.image_to_plane = (self.data.board.source_to_plane @ self.data.board.homography["inverse_matrix"]
+                               if self.data.board.homography is not None else self.data.board.source_to_plane)
         self._configure_trays()
         self._prediction_changed()
         self.note = "Tray calibration loaded. Trays will be refitted; facing marks were cleared."
@@ -242,14 +238,14 @@ class RegistrationWorkflow:
         if not self.can_edit_points():
             return
         self.pause()
-        if self.roster is None or self.selected_type is None:
+        if self.data.units is None or self.selected_type is None:
             raise ValueError("Load a type catalog and select a type first")
         if self.active_id not in self.known_ids():
             raise ValueError("Click a target before binding its unit")
-        previous = self.roster.bindings.get(self.active_id)
-        unit_id = self.roster.bind(self.active_id, self.selected_type)
+        previous = self.data.units.bindings.get(self.active_id)
+        unit_id = self.data.units.bind(self.active_id, self.selected_type)
         if unit_id != previous:
-            self.rule_state.fronts.pop(self.active_id, None)
+            self.data.rules.fronts.pop(self.active_id, None)
             self._configure_trays()
         self._prediction_changed()
         self.note = f"Mask {self.active_id} -> {unit_id}. Click another type to rebind; N adds another mask."
@@ -258,9 +254,9 @@ class RegistrationWorkflow:
         if not self.can_edit_points():
             return
         self.pause()
-        if self.roster is not None:
-            self.roster.unbind(self.active_id)
-            self.rule_state.fronts.pop(self.active_id, None)
+        if self.data.units is not None:
+            self.data.units.unbind(self.active_id)
+            self.data.rules.fronts.pop(self.active_id, None)
             self._configure_trays()
             self._prediction_changed()
         self.note = f"Mask {self.active_id} is unlabelled. Click a type to bind it."
@@ -268,9 +264,9 @@ class RegistrationWorkflow:
     def select_mask(self, object_id):
         self.pause()
         self.active_id = object_id
-        if self.roster and object_id in self.roster.bindings:
-            unit_id = self.roster.bindings[object_id]
-            self.selected_type = self.roster.units[unit_id]["type_id"]
+        if self.data.units and object_id in self.data.units.bindings:
+            unit_id = self.data.units.bindings[object_id]
+            self.selected_type = self.data.units.units[unit_id]["type_id"]
         self.note = (f"Registered mask {object_id}. Registration is complete; R starts again."
                      if self.registration_locked else
                      f"Selected mask {object_id}. Click a type to bind; Tab switches point editing / labelling.")
@@ -312,48 +308,70 @@ class RegistrationWorkflow:
 
     def _configure_trays(self):
         sizes = {}
-        if self.roster:
-            for object_id, unit_id in self.roster.bindings.items():
-                type_id = self.roster.units[unit_id]["type_id"]
-                dimension = self.roster.types[type_id].get("dimension", {})
+        if self.data.units:
+            for object_id, unit_id in self.data.units.bindings.items():
+                type_id = self.data.units.units[unit_id]["type_id"]
+                dimension = self.data.units.types[type_id].get("dimension", {})
                 if "width_mm" in dimension and "depth_mm" in dimension:
                     sizes[object_id] = (dimension["width_mm"], dimension["depth_mm"])
-        self.worker.tray_context = ({"image_to_plane": self.image_to_plane, "sizes": sizes}
-                                    if self.image_to_plane is not None else None)
+        self.worker.tray_context = ({"image_to_plane": self.data.board.image_to_plane, "sizes": sizes}
+                                    if self.data.board.image_to_plane is not None else None)
         request = self.worker.request if self.worker.busy else None
         # A queued result may still carry tray sizes from the replaced list.
-        self.pending_trays = self.prediction is not None or (
+        self.pending_trays = self.data.current.prediction is not None or (
             request is not None and request["kind"] in ("click", "replace", "propagate", "trays"))
-        if self.prediction is not None:
-            self.prediction = {**self.prediction, "trays": {}, "tray_errors": {}}
+        if self.data.current.prediction is not None:
+            self.data.current.prediction = {**self.data.current.prediction, "trays": {}, "tray_errors": {}}
 
     def _prediction_changed(self):
-        self.view_revision += 1
+        self.data.current.view_revision += 1
         self.dirty = True
 
     def tray_status(self):
-        if self.image_to_plane is None:
+        if self.data.board.image_to_plane is None:
             return "NO CALIB"
         if not self.worker.tray_context["sizes"]:
             return "NO SIZES"
-        if self.prediction is None:
+        if self.data.current.prediction is None:
             return "WAIT MASK"
-        trays = self.prediction.get("trays", {})
+        trays = self.data.current.prediction.get("trays", {})
         if trays:
             return f"ON ({len(trays)})"
-        if self.prediction.get("tray_errors"):
+        if self.data.current.prediction.get("tray_errors"):
             return "CHECK FIT"
         if self.pending_trays or self.worker.busy:
             return "FITTING"
         return "NO FIT"
 
     def pause(self):
-        self.playing = False
+        if self.stage is Stage.PLAYBACK:
+            if self.display_snapshot is None:
+                self.display_snapshot = self.data.snapshot()
+        else:
+            self.playing = False
         self.dirty = True
 
+    @property
+    def presentation(self):
+        return self.display_snapshot if self.display_snapshot is not None else self.data
+
+    def resume_live(self):
+        self.display_snapshot = None
+        self.dirty = True
+
+    def refresh_analysis_inputs(self):
+        if self.display_snapshot is not None:
+            self.display_snapshot.units = deepcopy(self.data.units)
+            self.display_snapshot.rules.terrain = deepcopy(self.data.rules.terrain)
+        if self.registration_locked:
+            self.data.record_history()
+
     def toggle_play(self, overlay=None):
-        if self.playing:
-            self.pause()
+        if self.stage is Stage.PLAYBACK:
+            if self.display_snapshot is None:
+                self.pause()
+            else:
+                self.resume_live()
         elif self.source.frame_index >= self.end_index:
             self.note = "End of video interval. R restarts."
         else:
@@ -364,12 +382,21 @@ class RegistrationWorkflow:
                     self.note = str(error)
                     self.dirty = True
                     return
-            self.play_start = perf_counter()
-            self.play_start_frame = self.source.frame_index
-            self.playing = True
             self.stage = Stage.PLAYBACK
+            if not self.worker.tracker_initialized:
+                self.pending_play = True
+                self.note = f"Initializing {self.worker.tracker_name} from registered masks before starting the video."
+                self._schedule(perf_counter())
+            else:
+                self._start_stream()
             self._prediction_changed()
         self.dirty = True
+
+    def _start_stream(self):
+        self.play_start = perf_counter()
+        self.play_start_frame = self.source.frame_index
+        self.playing = True
+        self.pending_play = False
 
     def new_object(self):
         if not self.can_edit_points():
@@ -385,7 +412,7 @@ class RegistrationWorkflow:
             return
         if not self.can_edit_points():
             return
-        height, width = self.frame.shape[:2]
+        height, width = self.data.current.frame.shape[:2]
         if not (0 <= x < width and 0 <= y < height):
             return
         self.pause()
@@ -398,7 +425,7 @@ class RegistrationWorkflow:
                  "click_id": self.next_click_id}
         self.next_click_id += 1
         self.clicks.append(click)
-        self.pending_clicks.append((self.frame.copy(), self._frame_metadata(), click))
+        self.pending_clicks.append((self.data.current.frame.copy(), self._frame_metadata(), click))
         self.model_failed = False
         self.note = "Click queued. SAM3 runs in the background; playback remains available."
         self._schedule(perf_counter())
@@ -413,12 +440,12 @@ class RegistrationWorkflow:
             return
         removed = self.clicks.pop()
         self.active_id = removed["object_id"]
-        if self.roster and not any(click["object_id"] == self.active_id for click in self.clicks):
-            unit_id = self.roster.bindings.get(self.active_id)
+        if self.data.units and not any(click["object_id"] == self.active_id for click in self.clicks):
+            unit_id = self.data.units.bindings.get(self.active_id)
             if unit_id is not None:
-                self.selected_type = self.roster.units[unit_id]["type_id"]
-            self.roster.unbind(self.active_id)
-            self.rule_state.fronts.pop(self.active_id, None)
+                self.selected_type = self.data.units.units[unit_id]["type_id"]
+            self.data.units.unbind(self.active_id)
+            self.data.rules.fronts.pop(self.active_id, None)
             self._configure_trays()
         queued = any(prompt["click_id"] == removed["click_id"] for _, _, prompt in self.pending_clicks)
         if queued and not self.updating_points:
@@ -430,10 +457,10 @@ class RegistrationWorkflow:
         # discard its stale UI result using the generation counter.
         self.generation += 1
         self.pending_clicks.clear()
-        self.pending_update = {"frame": self.frame.copy(), "metadata": self._frame_metadata(),
+        self.pending_update = {"frame": self.data.current.frame.copy(), "metadata": self._frame_metadata(),
                                 "clicks": [dict(click) for click in self.clicks]}
         self.updating_points = True
-        self.prediction = self.prediction_frame = self.prediction_metadata = None
+        self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
         self.model_failed = False
         self._prediction_changed()
         self._schedule(perf_counter())
@@ -448,29 +475,32 @@ class RegistrationWorkflow:
         elif self.needs_load:
             self.needs_load = False
             self.worker.submit("load", generation=self.generation)
-        elif self.needs_prepare and self.homography is not None and not self.model_failed:
+        elif self.needs_prepare and self.data.board.homography is not None and not self.model_failed:
             self.needs_prepare = False
-            self.worker.submit("prepare", frame=self.frame, metadata=self._frame_metadata(), generation=self.generation)
+            self.worker.submit("prepare", frame=self.data.current.frame, metadata=self._frame_metadata(), generation=self.generation)
         elif self.pending_update is not None:
             request, self.pending_update = self.pending_update, None
             self.worker.submit("replace", **request, generation=self.generation)
         elif self.pending_clicks:
             frame, metadata, prompt = self.pending_clicks.popleft()
             self.worker.submit("click", frame=frame, metadata=metadata, prompt=prompt, generation=self.generation)
-        elif self.pending_trays and self.prediction is not None:
+        elif self.pending_trays and self.data.current.prediction is not None:
             self.pending_trays = False
-            self.worker.submit("trays", frame=self.prediction_frame, metadata=self.prediction_metadata,
-                               prediction=self.prediction, generation=self.generation)
-        elif (self.playing and self.prediction is not None and not self.model_failed and not self.updating_points
+            self.worker.submit("trays", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
+                               prediction=self.data.current.prediction, generation=self.generation)
+        elif self.pending_play and not self.worker.tracker_initialized and not self.model_failed:
+            self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
+                               prediction=self.data.current.prediction, generation=self.generation)
+        elif (self.playing and self.data.current.prediction is not None and not self.model_failed and not self.updating_points
               and now >= self.next_inference_time and self.source.frame_index > self.last_submitted_frame):
-            self.worker.submit("propagate", frame=self.frame, metadata=self._frame_metadata(), generation=self.generation)
+            self.worker.submit("propagate", frame=self.data.current.frame, metadata=self._frame_metadata(), generation=self.generation)
             self.last_submitted_frame = self.source.frame_index
             self.next_inference_time = now + 1 / self.inference_fps
 
     def advance(self):
         if self.closed:
             return
-        progress = getattr(self.worker.predictor, "load_progress", None)
+        progress = self.worker.load_progress
         if progress != self.load_progress or progress is not None:
             self.load_progress = progress
             self.dirty = True
@@ -483,15 +513,14 @@ class RegistrationWorkflow:
                     self.updating_points = False
                 if error is not None:
                     self.model_failed = True
-                    self.note = f"SAM3 error: {error}. R resets the session."
+                    self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
                     prediction["accepted_at"] = perf_counter()
-                    self.prediction = prediction
                     if self.pending_trays:
-                        self.prediction = {**prediction, "trays": {}, "tray_errors": {}}
-                    self.prediction_frame = request["frame"]
-                    self.prediction_metadata = request["metadata"]
-                    self.rule_state.observe(self.prediction, self.prediction_metadata["frame_index"])
+                        prediction = {**prediction, "trays": {}, "tray_errors": {}}
+                    self.data.accept_observation(prediction, request["frame"], request["metadata"])
+                    if self.registration_locked and request["kind"] == "propagate":
+                        self.data.record_history()
                     if request["kind"] == "click":
                         request["prompt"]["session_frame"] = prediction["frame_idx"]
                         self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
@@ -503,16 +532,18 @@ class RegistrationWorkflow:
                                 click["session_frame"] = by_id[click["click_id"]]["session_frame"]
                         self.last_submitted_frame = request["metadata"]["frame_index"]
                         self.next_inference_time = now + 1 / self.inference_fps
+                    elif request["kind"] == "start_tracker":
+                        self._start_stream()
                     self._prediction_changed()
                     times = prediction.get("timings_seconds", {})
                     self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
-                                 f"SAM operation {times.get('worker_operation', 0):.2f}s | "
+                                 f"{prediction.get('tracking_backend', 'model')} operation {times.get('worker_operation', 0):.2f}s | "
                                  f"tray {times.get('tray_fit', 0):.2f}s. Latest result held between updates.")
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
                     self.note = "Point undone. No objects remain; click to register again."
                 elif request["kind"] == "load":
-                    self.note = ("Weights loaded. Preparing rectified first-frame features." if self.homography is not None else
+                    self.note = ("Weights loaded. Preparing rectified first-frame features." if self.data.board.homography is not None else
                                  "Weights loaded. Confirm the table corners to focus the battlefield.")
                 elif request["kind"] == "prepare":
                     self.startup_ready = True
@@ -522,13 +553,13 @@ class RegistrationWorkflow:
             target = min(self.end_index, self.play_start_frame + int((now - self.play_start) * self.source.fps))
             if target > self.source.frame_index:
                 try:
-                    self.frame = self._warp_frame(self.source.read_frame(target))
+                    self.data.current.frame = self._warp_frame(self.source.read_frame(target))
                     self.dirty = True
                 except (OSError, ValueError, cv2.error) as error:
-                    self.pause()
+                    self.playing = False
                     self.note = str(error)
             if target >= self.end_index:
-                self.pause()
+                self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
         self._schedule(now)
 
@@ -536,63 +567,69 @@ class RegistrationWorkflow:
         """Return masks and cutouts from the latest completed inference snapshot."""
         if self.updating_points:
             raise ValueError("Wait for the point update to finish before saving")
-        if self.prediction is None:
+        if self.data.current.prediction is None:
             raise ValueError("No completed SAM3 result to extract")
         if self.pending_clicks or (self.worker.busy and self.worker.request["kind"] == "click"):
             raise ValueError("Wait for the queued click prompts to finish before extracting")
-        return extract_references(self.prediction_frame, self.prediction, source=self.prediction_metadata,
-                                  roster=self.roster)
+        return extract_references(self.data.current.prediction_frame, self.data.current.prediction, source=self.data.current.prediction_metadata,
+                                  roster=self.data.units)
 
     def finish_registration(self, overlay):
         """Commit final references once; drafts remain editable after save errors."""
         if self.stage is Stage.TABLE:
             raise ValueError("Confirm the table boundary before completing registration")
-        if self.reference_folder is not None:
-            self.note = f"Registration already saved: {self.reference_folder}"
+        if self.data.reference_folder is not None:
+            self.note = f"Registration already saved: {self.data.reference_folder}"
             self.dirty = True
-            return self.reference_folder
+            return self.data.reference_folder
         if self.worker.busy or self.pending_clicks or self.pending_trays or self.updating_points or self.needs_reset or self.needs_load or self.needs_prepare:
             raise ValueError("Wait for the point prompts to finish before completing registration")
         if self.model_failed:
             raise ValueError("Resolve the SAM3 error before completing registration; R resets")
         references = self.extract_references()
         self.pause()
-        metadata = {**self.prediction_metadata, "object_ids": self.prediction["object_ids"],
+        metadata = {**self.data.current.prediction_metadata, "object_ids": self.data.current.prediction["object_ids"],
                     "clicks": self.clicks, "inference_fps_limit": self.inference_fps,
                     "display_video_frame": self.source.frame_index, "model": self.worker.predictor.model_id,
-                    "session_frame": self.prediction["frame_idx"], "registration_complete": True,
-                    "table_boundary": self.table_boundary, "rule_inputs": self.rule_state.snapshot()}
-        if self.image_to_plane is not None and self.roster is not None:
-            metadata["rule_scene"] = self.rule_state.scene(self.roster, self.prediction, self.image_to_plane,
-                                                          self.board_size_mm, self.prediction_metadata)
-        folder = save_registration(self.prediction_frame, overlay, references, metadata,
-                                   self.output_dir, roster=self.roster)
-        self.reference_folder = folder
+                    "tracking_backend": self.worker.tracker_name,
+                    "tracker_model": self.worker.tracker.model_id if self.worker.tracker is not None else self.worker.predictor.model_id,
+                    "session_frame": self.data.current.prediction["frame_idx"], "registration_complete": True,
+                    "table_boundary": self.data.board.table_boundary, "rule_inputs": self.data.rules.snapshot()}
+        if self.data.board.image_to_plane is not None and self.data.units is not None:
+            metadata["rule_scene"] = self.data.rules.scene(self.data.units, self.data.current.prediction, self.data.board.image_to_plane,
+                                                          self.data.board.board_size_mm, self.data.current.prediction_metadata)
+        folder = save_registration(self.data.current.prediction_frame, overlay, references, metadata,
+                                   self.output_dir, roster=self.data.units)
+        self.data.reference_folder = folder
+        self.data.record_history()
         print(f"Saved: {folder.resolve()}", flush=True)
         self.note = f"Registration complete; final references saved. Space plays. {folder}"
         self.dirty = True
         return folder
 
     def reset(self):
-        self.pause()
+        self.playing = False
+        self.display_snapshot = None
+        self.pending_play = False
         self.stage = Stage.REGISTER
-        self.reference_folder = None
-        self.rule_state.fronts.clear()
+        self.data.reference_folder = None
+        self.data.history.clear()
+        self.data.rules.fronts.clear()
         self.interaction_mode = "segment"
         self.generation += 1
         self.needs_reset = True
-        self.needs_load = self.worker.predictor.model is None
+        self.needs_load = not self.worker.models_loaded
         self.needs_prepare = True
         self.startup_ready = False
         self.pending_clicks.clear()
         self.pending_update = None
         self.updating_points = False
-        self.frame = self._warp_frame(self.source.read_at(self.start))
-        self.prediction = self.prediction_frame = self.prediction_metadata = None
+        self.data.current.frame = self._warp_frame(self.source.read_at(self.start))
+        self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
         self.active_id = 1
-        if self.roster:
-            self.roster.reset_bindings()
-            self.selected_type = next(iter(self.roster.types))
+        if self.data.units:
+            self.data.units.reset_bindings()
+            self.selected_type = next(iter(self.data.units.types))
         self._configure_trays()
         self.clicks.clear()
         self.last_submitted_frame = -1
@@ -606,6 +643,7 @@ class RegistrationWorkflow:
         if self.closed:
             return
         self.closed = True
-        self.pause()
+        self.playing = False
+        self.display_snapshot = None
         self.source.close()
         self.worker.close()

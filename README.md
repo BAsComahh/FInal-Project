@@ -16,6 +16,8 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 操作说明见 [frontend](frontend/README.md)，单位表和导出格式见 [registration](components/registration/README.md)，设计、官方依据与实验结论见 [项目思路.md](项目思路.md)。
 
+本局公共数据集中在 [GameData](components/game_data.py)：桌面标定、单位资料、最新观测和矩形／状态历史由同一个实例维护。历史只存在内存中；冻结分析画面时，后台继续更新实时数据。
+
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。
 
 ### 目录
@@ -30,10 +32,12 @@ frontend/
   layers.py                  Cached mask and tray layers
   image/                     Standalone image registration windows
 components/
+  game_data.py               Shared match data and rectangle/state history
   registration/              Unit catalog, bindings and reference export
   boundary_detection/        Shared LSD, table/tray fitting and Canny
   homography/                Rectification and coordinate transforms
   sam3/                      Image/video model interfaces
+  tracking/                  Optional Cutie / EdgeTAM video propagation
   dinov2/                    Frozen feature extraction
   image_io/                  Image reading and saving
   video_io/                  Video decoding and timestamps
@@ -66,11 +70,11 @@ outputs/                     Generated experiment results
 | `image_io` | 支持中文路径及通道保留的读写 / Image conversion and saving |
 | `query_rules` | 从 scene.json 查询距离、LOS 或普通移动／Double / Query a metric scene |
 | `read_unit_list` | Mantic Companion PDF 军表转注册类型 JSON / Convert army-list PDFs to type catalogs |
-| `track_units` | 独立 CPU LK 连续运动实验与状态记录 / Initialized CPU geometry tracking experiment |
+| `setup_tracking` | 准备 Cutie／EdgeTAM 的固定源码、权重及独立依赖 / Prepare optional tracker assets |
 
 算法接口直接从组件导入，例如 `from components.boundary_detection.table import detect_table`；CLI 只处理参数、展示与导出。LSD 配置位于 [config.toml](components/boundary_detection/config.toml)，源线段长度过滤默认关闭，合并后长度过滤默认开启。几何长度配置使用百分比（`5` = 5%）：桌边以图像短边为基准，托盘局部容差以托盘短边为基准；实际尺寸仍用 mm／in。完整用法见各组件 README。
 
-首轮追踪优化保留默认基准；前端 `--tray-search local` 可尝试当前观测上的局部托盘更新，失败后完整搜索，`--profile` 导出分段计时。独立 [LK 实验](components/unit_tracking/README.md) 尚未接入正式 UI；遮挡失败后保留不确定状态，不自动恢复身份。
+前端 `--tracker cutie`／`--tracker edgetam` 使用 SAM3 首帧注册结果初始化候选视频后端，默认 `sam3` 保留对照，详见 [视频追踪](components/tracking/README.md)。`--tray-search local` 尝试当前观测上的局部托盘更新，失败后完整搜索；`--profile` 导出计时。查询／Space 只冻结显示，后台继续处理；Clear query／Return live 回到最新画面。LK 已移除。
 
 ### 环境
 
@@ -92,11 +96,15 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 Weights load at startup; rectified first-frame features are prepared after corner and dimension confirmation. Registration drafts stay in memory. S or first playback commits final references once and locks editing; pausing retains the playback layout. R starts a new registration.
 
+Use `--tracker cutie` or `--tracker edgetam` to initialize a candidate from the registered SAM3 masks; `sam3` remains the default. Prepare optional assets with `python -m tools.setup_tracking --backend all`. Queries and Space hold an analysis snapshot while the video source and tracking continue; Clear query / Return live returns to the latest state. LK has been removed. See [tracker setup and limits](components/tracking/README.md).
+
 Use `Import list A` / `Import list B` in the registration sidebar to select each army's PDF or single-army JSON directly. Two independent columns show Type 1, Type 2, etc., with click/drag binding. Instances of types A1/B1 become A1.1/B1.1; no catalog parameter is required. The [ABC test data](inputs/units.video_estimate.json) initially occupies List A: Type 1 is approximately 155 x 50 mm and Types 2/3 are 205 x 80 mm; List B awaits import. After locking the corners, confirm the `Length (in)` / `Width (in)` fields, prefilled with 72 / 48. These defaults are test assumptions, not verified measurements. External calibration and the standalone `tools.read_unit_list` converter remain available. The initial Homography assumes a fixed camera.
 
 Use `--board-size-in WIDTH DEPTH` to prefill different inch dimensions, or `--calibration PATH` to prefill the dimensions of an existing metric calibration; the two options are mutually exclusive. F marks the initial front edge, E edits unit rule information and manual states, and G annotates terrain. D/L/V/J query distance/LOS/ordinary movement/Double; Q clears the query. Results are based on registered geometry, not full match adjudication. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
 
 The directory tree and independent tool list above describe the current ownership. The window composes a workflow, which schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
+
+Each workflow owns one [GameData](components/game_data.py) instance for board calibration, unit data, current observations and rectangle/state history. History stays in memory and excludes frame images and masks. Holding the analysis view creates a separate observation snapshot while live tracking continues updating the match data.
 
 See [the UI guide](frontend/README.md), [registration data](components/registration/README.md), [SAM video API](components/sam3/video/README.md), [boundary detection](components/boundary_detection/README.md), [Homography](components/homography/README.md) and [DINOv2](components/dinov2/README.md). Design rationale and meaningful experimental findings are maintained in [项目思路.md](项目思路.md).
 

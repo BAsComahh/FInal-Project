@@ -61,7 +61,7 @@ def _boundary_result(polygon, image_shape, *, estimated=False, failure_reason=No
     return result
 
 
-def detect_table(image, *, config=DEFAULT_CONFIG):
+def detect_table(image, *, config=DEFAULT_CONFIG, diagnostics=False):
     """Return final corners/edges, or a request for manual correction.
 
     ``image`` accepts a filesystem path or a uint8 NumPy image in OpenCV BGR,
@@ -93,8 +93,16 @@ def detect_table(image, *, config=DEFAULT_CONFIG):
     args = BoundaryParameters(config=Path(config), image=path)
     switches = initial_switches(args)
     report = compute_boundary(image, args, switches)
-    return _boundary_result(
+    result = _boundary_result(
         report["output_polygon"], image.shape,
         estimated=report["output_is_estimated"],
         failure_reason=report["final_frame"]["reason"],
     )
+    if diagnostics:
+        result["diagnostics"] = {
+            "selected_sides": {name: row["line"] if row else None for name, row in report["final_sides"].items()},
+            "reason": ("Corners are outside their expected image quadrants" if result["invalid_corners"]
+                       else report["final_frame"]["reason"]),
+            "resolved_lengths_px": report["resolved_lengths_px"],
+        }
+    return result

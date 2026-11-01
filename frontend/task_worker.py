@@ -12,6 +12,7 @@ from uuid import uuid4
 import numpy as np
 
 from components.sam3.video import VideoPredictor
+from components.tracking import create_tracker
 
 
 def _point_ids(clicks):
@@ -24,10 +25,14 @@ def _point_ids(clicks):
 class TaskWorker:
     """One in-flight request; playback never waits for its result."""
 
-    def __init__(self, model_id="facebook/sam3", device=None, *, profile=False, tray_search="full"):
+    def __init__(self, model_id="facebook/sam3", device=None, *, profile=False, tray_search="full",
+                 tracker="sam3", tracker_model=None, tracker_cache=None):
         if tray_search not in ("full", "local"):
             raise ValueError("tray_search must be full or local")
         self.predictor = VideoPredictor(model_id, device, profile=profile)
+        self.tracker = create_tracker(tracker, model_id=tracker_model, device=device, cache_dir=tracker_cache)
+        self.tracker_name = tracker
+        self.tracker_initialized = self.tracker is None
         self.tray_search = tray_search
         self.previous_trays = {}
         self.previous_context = None
@@ -35,12 +40,17 @@ class TaskWorker:
         if profile:
             self.timing_dir = Path(__file__).resolve().parents[1] / "outputs/tracking_comparison" / f"sam_{uuid4().hex[:12]}"
             self.timing_dir.mkdir(parents=True)
-            run = {"model": model_id, "requested_device": device, "profile": True, "tray_search": tray_search,
+            run = {"model": model_id, "tracker": tracker,
+                   "tracker_model": self.tracker.model_id if self.tracker is not None else model_id,
+                   "requested_device": device, "profile": True, "tray_search": tray_search,
                    "versions": {name: importlib.metadata.version(name) for name in ("torch", "transformers", "opencv-python")},
                    "model_precision": "float32", "inference_state_device": "cpu"}
             root = Path(__file__).resolve().parents[1]
             run["source_hashes"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
                 "frontend/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
+            if self.tracker is not None:
+                name = f"components/tracking/{tracker}.py"
+                run["source_hashes"][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
             (self.timing_dir / "run.json").write_text(json.dumps(run, indent=2), encoding="utf-8")
             print(f"Tracking timing log: {self.timing_dir}", flush=True)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sam3-video")
@@ -52,17 +62,32 @@ class TaskWorker:
     def busy(self):
         return self.future is not None
 
+    @property
+    def models_loaded(self):
+        return self.predictor.model is not None and (self.tracker is None or self.tracker.model is not None)
+
+    @property
+    def load_progress(self):
+        if self.tracker is not None and self.request is not None and self.request["kind"] == "start_tracker":
+            return self.tracker.load_progress or (f"Preparing {self.tracker_name} memory", None, None)
+        return self.predictor.load_progress or (self.tracker.load_progress if self.tracker is not None else None)
+
     def _run(self, request):
         started = perf_counter()
         kind = request["kind"]
         if kind == "load":
             self.predictor.load()
+            if self.tracker is not None:
+                self.tracker.load()
             return None
         if kind == "prepare":
             self.predictor.prepare_initial_frame(request["frame"], source_frame=request["metadata"]["frame_index"])
             return None
         if kind == "reset":
             self.predictor.reset()
+            if self.tracker is not None:
+                self.tracker.reset()
+                self.tracker_initialized = False
             self.prompts.clear()
             self.previous_trays.clear()
             self.previous_context = None
@@ -82,8 +107,18 @@ class TaskWorker:
                 object_id=prompt["object_id"], positive=prompt["positive"],
                 source_frame=request["metadata"]["frame_index"])
             self.prompts.append(deepcopy(prompt))
+        elif kind == "start_tracker":
+            if self.tracker is None:
+                raise ValueError("SAM3 does not require a tracker handoff")
+            initial = request["prediction"]
+            prediction = self.tracker.initialize(request["frame"], initial["object_ids"], initial["masks"],
+                                                source_frame=request["metadata"]["frame_index"])
+            self.tracker_initialized = True
         elif kind == "propagate":
-            prediction = self.predictor.propagate(request["frame"],
+            if not self.tracker_initialized:
+                raise ValueError("Finish the registered-mask handoff before tracking")
+            backend = self.tracker if self.tracker is not None else self.predictor
+            prediction = backend.propagate(request["frame"],
                 source_frame=request["metadata"]["frame_index"])
         elif kind == "trays":
             prediction = dict(request["prediction"])
@@ -116,6 +151,7 @@ class TaskWorker:
             prediction["inference_seconds"] = finished - started
             metadata = request["metadata"]
             prediction.update(source_frame_index=metadata["frame_index"],
+                              tracking_backend=self.tracker_name if kind in ("propagate", "start_tracker") else "sam3_registration",
                               observation_time_seconds=metadata.get("timestamp_seconds"),
                               task_submitted_at=request.get("submitted_at"), task_completed_at=finished)
         return prediction
@@ -135,7 +171,8 @@ class TaskWorker:
                       "source_frame_index": metadata.get("frame_index"),
                       "observation_time_seconds": metadata.get("timestamp_seconds"),
                       "submitted_at": request["submitted_at"], "started_at": started, "completed_at": finished,
-                      "request_seconds": finished - started, "device": self.predictor.device, "error": error}
+                      "request_seconds": finished - started, "device": self.predictor.device,
+                      "tracker": self.tracker_name, "error": error}
             if prediction is not None:
                 record.update(object_ids=prediction["object_ids"], timings_seconds=prediction["timings_seconds"],
                               timing_gpu_synchronized=prediction.get("timing_gpu_synchronized", False),

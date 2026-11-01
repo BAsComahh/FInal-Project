@@ -135,7 +135,7 @@ conda run --no-capture-output -n sam3-demo python -m tools.sam3_image_registrati
 conda run --no-capture-output -n sam3-demo python -m tools.sam3_registration inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30 --inference-fps 2
 ```
 
-左键／右键添加正负点，`N` 新增对象，数字键切换对象，空格首次完成注册并保存后播放，之后播放／暂停；`R` 重置，`S` 确认完成并保存。视频原速播放，单个后台线程低频运行模型，期间沿用最近的 mask。
+左键／右键添加正负点，`N` 新增对象，数字键切换对象，空格首次完成注册并保存后播放，之后冻结显示／返回实时；后台视频与追踪继续。`R` 重置，`S` 确认完成并保存。视频原速前进，单个后台线程按设定上限运行模型。`--tracker cutie|edgetam` 可将最终首帧 mask 交给候选后端，见 [tracking](../tracking/README.md)。
 
 标注期间只在内存中保留草稿，完成注册时一次性保存匹配的完整帧、叠加图、各对象的全图二值 mask、裁剪图、透明背景切图及 `instances.json`。素材接口为 `components.registration.extract_references(frame, prediction, source=...)`，工作流也提供 `RegistrationWorkflow.extract_references()`。详情和数据格式见 [registration](../registration/README.md)，模型会话见 [video/README.md](video/README.md)。
 

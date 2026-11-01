@@ -25,6 +25,7 @@ class TableSetup:
         self.size_select_all = True
         self.size_fields = []
         self.corner_mode = None
+        self.auto_result = None
         self.start_detection()
 
     def start_detection(self):
@@ -33,6 +34,7 @@ class TableSetup:
             return
         self.mode = "detecting"
         self.corners = None
+        self.auto_result = None
         self.points.clear()
         self.note = "Detecting the table on the first frame..."
         self.future = self.executor.submit(self._detect)
@@ -40,7 +42,7 @@ class TableSetup:
     def _detect(self):
         from components.boundary_detection.table import detect_table
 
-        return detect_table(self.frame)
+        return detect_table(self.frame, diagnostics=True)
 
     def poll(self):
         if self.future is None or not self.future.done():
@@ -53,13 +55,17 @@ class TableSetup:
         # Choosing manual input supersedes any still-running automatic result.
         if self.mode != "detecting" or self.confirmed:
             return False
+        self.auto_result = result
         if result["success"]:
             self.corners = result["corners"]
             self.mode = "review"
             self.note = "Check the four corner markers. Continue to confirm the table dimensions."
         else:
-            self.manual()
-            self.note = "Auto detection did not find four usable corners. Select the corners manually, in any order."
+            self.mode = "failed"
+            diagnostic = result.get("diagnostics", {})
+            sides = diagnostic.get("selected_sides", {})
+            reason = diagnostic.get("reason", "No usable automatic boundary; manual correction is required")
+            self.note = f"Auto detection: {sum(value is not None for value in sides.values())}/4 sides. {reason}. Retry [A] or select manually [M]."
         return True
 
     def manual(self):
@@ -175,9 +181,17 @@ class TableSetup:
                         (31, 29, 27), dtype=np.uint8)
         panel[:height] = cv2.resize(self.frame, preview_size)
         scale = np.asarray(preview_size) / np.asarray(self.frame.shape[1::-1])
+        if self.mode == "failed" and self.auto_result is not None:
+            for line in self.auto_result.get("diagnostics", {}).get("selected_sides", {}).values():
+                if line is not None:
+                    a, b = np.rint(np.asarray(line).reshape(2, 2) * scale).astype(int)
+                    cv2.line(panel[:height], tuple(a), tuple(b), (0, 165, 255), 2, cv2.LINE_AA)
         if self.corners is not None:
             points = np.rint(np.asarray([self.corners[name] for name in CORNER_NAMES]) * scale).astype(np.int32)
             cv2.polylines(panel[:height], [points], True, (210, 175, 70), 1, cv2.LINE_AA)
+            labels = CORNER_NAMES
+        elif self.mode == "failed" and self.auto_result and self.auto_result.get("candidate_corners"):
+            points = np.rint(np.asarray([self.auto_result["candidate_corners"][name] for name in CORNER_NAMES]) * scale).astype(np.int32)
             labels = CORNER_NAMES
         else:
             points = np.rint(np.asarray(self.points).reshape(-1, 2) * scale).astype(np.int32)
@@ -221,11 +235,13 @@ class TableSetup:
             return panel
 
         question = "Are the table corners aligned?" if self.corners is not None else (
-            "Mark the four table corners" if self.mode == "manual" else "Detecting table corners...")
+            "Mark the four table corners" if self.mode == "manual" else
+            "Automatic boundary needs correction" if self.mode == "failed" else "Detecting table corners...")
         centered(question, height + 43, min(30, max(14, width // 24)))
         self.buttons = []
         choices = ([("confirm", "YES", "Continue"), ("undo", "Undo", "Last point [U]"),
-                    ("clear", "Clear", "Start again [R]")] if self.mode == "manual" else
+                    ("clear", "Clear", "Start again [R]"), ("auto", "Auto", "Retry [A]")] if self.mode == "manual" else
+                   [("auto", "Retry", "Auto detection [A]"), ("manual", "Manual", "Select corners [M]")] if self.mode == "failed" else
                    [("confirm", "YES", "Continue"), ("manual", "NO", "Manual correction")])
         gap, margin = 16, 24
         button_width = (width - 2 * margin - gap * (len(choices) - 1)) // len(choices)

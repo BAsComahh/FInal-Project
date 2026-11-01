@@ -58,10 +58,15 @@ class RulesPanel:
     def action(self, action, flow):
         if action in ("distance", "los", "double"):
             self.mode = None if self.mode == action else action
+            if self.mode is not None:
+                flow.pause()
+            else:
+                flow.resume_live()
             self.input_mode = None
             self.vertices.clear()
             self.invalidate()
         elif action == "move":
+            flow.pause()
             self.mode = self.ORDERS[(self.ORDERS.index(self.mode) + 1) % len(self.ORDERS)] if self.mode in self.ORDERS else "advance"
             self.input_mode = None
             self.vertices.clear()
@@ -76,7 +81,7 @@ class RulesPanel:
             object_id = self.selected[-1] if self.selected else flow.active_id
             if flow.registration_locked:
                 raise ValueError("Initial facing is locked. Reset registration to mark it again.")
-            if flow.prediction is None or object_id not in flow.prediction.get("trays", {}):
+            if flow.data.current.prediction is None or object_id not in flow.data.current.prediction.get("trays", {}):
                 raise ValueError("Select a unit with a fitted tray and real board scale first.")
             self.selected = [object_id]
             self.input_mode = "front"
@@ -88,19 +93,20 @@ class RulesPanel:
             self.input_mode = None
             self.vertices.clear()
             object_id = self.selected[-1] if self.selected else flow.active_id
-            if flow.roster is None or object_id not in flow.roster.bindings:
+            if flow.data.units is None or object_id not in flow.data.units.bindings:
                 raise ValueError("Bind this mask to a unit type before editing its rule information.")
             flow.pause()
-            unit = flow.roster.units[flow.roster.bindings[object_id]]
-            profile = {**flow.roster.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
+            unit = flow.data.units.units[flow.data.units.bindings[object_id]]
+            profile = {**flow.data.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
             values = edit_unit_rules(profile)
             if values is not None:
                 unit["attributes"].update(values)
+                flow.refresh_analysis_inputs()
                 flow._prediction_changed()
                 self.invalidate()
                 self.note = "Unit rule information updated. States are supplied manually."
         elif action == "terrain":
-            if flow.image_to_plane is None:
+            if flow.data.board.image_to_plane is None:
                 raise ValueError("Set the real board scale before annotating terrain.")
             self.mode = None
             self.invalidate()
@@ -112,30 +118,32 @@ class RulesPanel:
         elif action == "undo_terrain":
             if self.vertices:
                 self.vertices.pop()
-            elif flow.rule_state.terrain:
-                flow.rule_state.terrain.pop()
+            elif flow.data.rules.terrain:
+                flow.data.rules.terrain.pop()
+                flow.refresh_analysis_inputs()
                 flow._prediction_changed()
                 self.invalidate()
 
     def click_input(self, point, flow, preview_scale):
         if self.input_mode == "front":
             object_id = self.selected[-1]
-            tray = flow.prediction.get("trays", {}).get(object_id)
+            tray = flow.data.current.prediction.get("trays", {}).get(object_id)
             if tray is None:
                 raise ValueError("The selected tray is no longer available.")
-            point_mm = transform_points(point, flow.image_to_plane)
-            flow.rule_state.set_front(object_id, tray, point_mm, flow.prediction_metadata["frame_index"])
+            point_mm = transform_points(point, flow.data.board.image_to_plane)
+            flow.data.rules.set_front(object_id, tray, point_mm, flow.data.current.prediction_metadata["frame_index"])
             self.input_mode = None
             flow._prediction_changed()
             self.invalidate()
             self.note = "Front edge recorded. Use E to confirm Speed, Height, Side and current states."
         elif self.input_mode == "terrain":
             if len(self.vertices) >= 3 and np.linalg.norm((np.asarray(point) - self.vertices[0]) * preview_scale) <= 12:
-                polygon_selection(flow.frame.shape, self.vertices)
+                polygon_selection(flow.data.current.frame.shape, self.vertices)
                 values = edit_terrain()
                 if values is not None:
-                    terrain_id = f"T{len(flow.rule_state.terrain) + 1}"
-                    flow.rule_state.terrain.append({"terrain_id": terrain_id, "polygon_image": deepcopy(self.vertices), **values})
+                    terrain_id = f"T{len(flow.data.rules.terrain) + 1}"
+                    flow.data.rules.terrain.append({"terrain_id": terrain_id, "polygon_image": deepcopy(self.vertices), **values})
+                    flow.refresh_analysis_inputs()
                     flow._prediction_changed()
                     self.invalidate()
                 self.vertices.clear()
@@ -144,6 +152,7 @@ class RulesPanel:
                 self.vertices.append(list(map(float, point)))
 
     def tick(self, flow):
+        view = flow.presentation
         changed = False
         if self.future is not None and self.future.done():
             future, self.future = self.future, None
@@ -156,30 +165,30 @@ class RulesPanel:
                 self.result_request = request
                 self.overlay = None
                 changed = True
-        if flow.prediction is None and self.result is not None:
+        if flow.data.current.prediction is None and self.result is not None:
             self.invalidate()
             changed = True
-        if self.mode is None or flow.prediction is None:
+        if self.mode is None or view.current.prediction is None:
             return changed
         needed = 2 if self.mode in ("distance", "los") else 1
         if len(self.selected) < needed:
             self.note = f"{self.mode}: click {needed} unit{'s' if needed > 1 else ''}."
             return changed
-        key = (self.mode, tuple(self.selected), flow.view_revision, flow.generation, self.epoch)
+        key = (self.mode, tuple(self.selected), view.current.view_revision, flow.generation, self.epoch)
         if self.future is not None or key == self.last_key:
             return changed
         self.last_key = key
         try:
-            scene = flow.rule_state.scene(flow.roster, flow.prediction, flow.image_to_plane,
-                                          flow.board_size_mm, flow.prediction_metadata)
-            ids = [flow.roster.bindings[object_id] for object_id in self.selected[:needed]]
+            scene = view.rules.scene(view.units, view.current.prediction, view.board.image_to_plane,
+                                          view.board.board_size_mm, view.current.prediction_metadata)
+            ids = [view.units.bindings[object_id] for object_id in self.selected[:needed]]
         except (ValueError, KeyError) as error:
             self.result = {"status": "unavailable", "reason": str(error)}
             self.result_request = None
             self.overlay = None
             return True
         self.request = {"epoch": self.epoch, "generation": flow.generation,
-                        "metadata": deepcopy(flow.prediction_metadata), "image_to_plane": flow.image_to_plane.copy()}
+                        "metadata": deepcopy(view.current.prediction_metadata), "image_to_plane": view.board.image_to_plane.copy()}
         self.future = self.executor.submit(_query, scene, self.mode, ids)
         return True
 
@@ -209,20 +218,22 @@ class RulesPanel:
                 text += f" | snapshot age {age:.2f}s"
             if self.result.get("warnings"):
                 text += " | " + "; ".join(self.result["warnings"][:1])
-        selected = ", ".join(flow.roster.bindings.get(i, f"Mask {i}") for i in self.selected) if flow.roster else ""
+        roster = flow.presentation.units
+        selected = ", ".join(roster.bindings.get(i, f"Mask {i}") for i in self.selected) if roster else ""
         draw_text(panel, f"KoW4 mini | Selected: {selected or 'none'} | estimates | Q clears query", (10, y + 86), size=12)
         limit = max(24, width // 7)
         for row in range(2):
             draw_text(panel, text[row * limit:(row + 1) * limit], (10, y + 106 + row * 18), size=12)
 
     def draw(self, preview, flow):
-        scale = np.asarray(preview.shape[1::-1]) / np.asarray(flow.frame.shape[1::-1])
-        for item in flow.rule_state.terrain:
+        view = flow.presentation
+        scale = np.asarray(preview.shape[1::-1]) / np.asarray(view.current.frame.shape[1::-1])
+        for item in view.rules.terrain:
             points = np.rint(np.asarray(item["polygon_image"]) * scale).astype(np.int32)
             cv2.polylines(preview, [points], True, (100, 180, 230), 1, cv2.LINE_AA)
-        if flow.prediction is not None:
+        if view.current.prediction is not None:
             for object_id in self.selected:
-                tray = flow.prediction.get("trays", {}).get(object_id)
+                tray = view.current.prediction.get("trays", {}).get(object_id)
                 if tray is not None:
                     points = np.rint(np.asarray(tray["corners_image"]) * scale).astype(np.int32)
                     cv2.polylines(preview, [points], True, (245, 245, 245), 2, cv2.LINE_AA)
@@ -231,10 +242,10 @@ class RulesPanel:
             cv2.polylines(preview, [points], False, (0, 220, 255), 2, cv2.LINE_AA)
             for point in points:
                 cv2.circle(preview, tuple(point), 4, (0, 220, 255), -1)
-        if flow.prediction is not None and flow.image_to_plane is not None:
-            inverse = np.linalg.inv(flow.image_to_plane)
-            for object_id, front in flow.rule_state.fronts.items():
-                tray = flow.prediction.get("trays", {}).get(object_id)
+        if view.current.prediction is not None and view.board.image_to_plane is not None:
+            inverse = np.linalg.inv(view.board.image_to_plane)
+            for object_id, front in view.rules.fronts.items():
+                tray = view.current.prediction.get("trays", {}).get(object_id)
                 if tray is None:
                     continue
                 center = np.asarray(tray["center_plane"])

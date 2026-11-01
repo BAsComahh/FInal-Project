@@ -1,4 +1,4 @@
-"""OpenCV desktop window; all application state is owned by its workflow."""
+"""OpenCV desktop window reading shared match data from its workflow."""
 
 from collections import deque
 from pathlib import Path
@@ -24,20 +24,21 @@ class VideoWindow:
         self.preview_width_limit = preview_width
         self.unit_panel = UnitPanel()
         self.table_setup = TableSetup(self.workflow.initial_frame,
-                                      board_size_in=np.asarray(self.workflow.board_size_mm) / 25.4)
+                                      board_size_in=np.asarray(self.workflow.data.board.board_size_mm) / 25.4)
         self.rules = RulesPanel()
         self.layers = VideoLayers(self.preview_size)
         self._layer_key = self._panel_key = self._panel_image = self._selected_row = None
         self.drag_type = self.drag_position = None
         self.show_masks = self.show_rectangles = True
         self.layer_buttons = []
+        self.view_buttons = []
         self.render_times = deque(maxlen=120)
         self.last_rendered_frame = -1
         self.dirty = True
 
     @property
     def preview_size(self):
-        height, width = self.workflow.frame.shape[:2]
+        height, width = self.workflow.data.current.frame.shape[:2]
         preview_width = min(self.preview_width_limit, width)
         return preview_width, max(1, round(height * preview_width / width))
 
@@ -54,17 +55,18 @@ class VideoWindow:
 
     def _update_layers(self):
         flow = self.workflow
-        key = (flow.view_revision, self.preview_size)
+        view = flow.presentation
+        key = (id(view), view.current.view_revision, self.preview_size)
         if key != self._layer_key:
             if self.layers.size != self.preview_size:
                 self.layers = VideoLayers(self.preview_size)
-            self.layers.update(flow.prediction, flow.frame.shape[1::-1],
-                               flow.roster.bindings if flow.roster else None,
+            self.layers.update(view.current.prediction, view.current.frame.shape[1::-1],
+                               view.units.bindings if view.units else None,
                                active_id=None if flow.stage is Stage.PLAYBACK else flow.active_id)
             self._layer_key = key
-        selection = (id(flow.roster), flow.selected_type)
+        selection = (id(flow.data.units), flow.selected_type)
         if selection != self._selected_row:
-            self.unit_panel.reveal(flow.roster, flow.selected_type)
+            self.unit_panel.reveal(flow.data.units, flow.selected_type)
             self._selected_row = selection
 
     def render(self):
@@ -74,12 +76,16 @@ class VideoWindow:
         return panel
 
     def _tray_caption(self):
+        view = self.workflow.presentation
+        if view is not self.workflow.data and self.show_rectangles:
+            count = len((view.current.prediction or {}).get("trays", {}))
+            return f"ON ({count})" if count else "NO FIT"
         return self.workflow.tray_status() if self.show_rectangles else "OFF"
 
     def _overlay(self):
         flow = self.workflow
-        return overlay_masks(flow.prediction_frame, flow.prediction,
-                             labels=flow.roster.bindings if flow.roster else None) if flow.prediction is not None else None
+        return overlay_masks(flow.data.current.prediction_frame, flow.data.current.prediction,
+                             labels=flow.data.units.bindings if flow.data.units else None) if flow.data.current.prediction is not None else None
 
     def _toggle_play(self):
         flow = self.workflow
@@ -87,9 +93,19 @@ class VideoWindow:
             self.rules.note = "Finish the rule input first, or press F / G again to cancel it."
             self.dirty = True
             return
+        if flow.stage is Stage.PLAYBACK and flow.display_snapshot is not None:
+            self._clear_query()
+            return
+        if flow.stage is not Stage.PLAYBACK:
+            self.rules.reset()
         flow.toggle_play(self._overlay() if not flow.registration_locked else None)
         if flow.stage is Stage.PLAYBACK:
             self.drag_type = self.drag_position = None
+
+    def _clear_query(self):
+        self.rules.reset()
+        self.workflow.resume_live()
+        self.dirty = True
 
     def _unit_action(self, action, unit_id=None):
         try:
@@ -162,18 +178,40 @@ class VideoWindow:
                 draw_text(panel, status[:max(28, self.preview_size[0] // 8)],
                           (16, panel.shape[0] - 35), size=14)
             return panel
-        preview = self.layers.render(flow.frame, show_masks=self.show_masks, show_rectangles=self.show_rectangles)
+        view = flow.presentation
+        preview = self.layers.render(view.current.frame, show_masks=self.show_masks, show_rectangles=self.show_rectangles)
         self.rules.draw(preview, flow)
         if flow.load_progress is not None:
             self._draw_loading_progress(preview)
         if flow.stage is Stage.PLAYBACK:
             width, height = self.preview_size
-            panel = np.full((height + 190, width, 3), 30, dtype=np.uint8)
+            show_status = flow.model_failed or flow.pending_play
+            panel = np.full((height + (272 if show_status else 232), width, 3), 30, dtype=np.uint8)
             panel[:height] = preview
             self._draw_layer_controls(panel, height + 8)
-            self.rules.controls(panel, self.preview_size, height + 46, flow)
+            self.view_buttons = []
+            labels = (("view", "Return live [Space]" if flow.display_snapshot is not None else "Hold view [Space]"),
+                      ("clear", "Clear query [Q]"))
+            for i, (action, label) in enumerate(labels):
+                button_width = min(190, (width - 30) // 2)
+                x, y = 10 + i * (button_width + 10), height + 42
+                rect = (x, y, x + button_width, y + 28)
+                cv2.rectangle(panel, rect[:2], rect[2:], (65, 65, 65), -1)
+                draw_text(panel, label, (x + 6, y + 20), size=max(10, min(13, button_width // 14)))
+                self.view_buttons.append((rect, action))
+            state = "HELD" if flow.display_snapshot is not None else "LIVE"
+            stamp = (view.current.prediction_metadata or {}).get("timestamp_seconds")
+            observed = "none" if stamp is None else f"{stamp:.2f}s"
+            draw_text(panel, f"{flow.worker.tracker_name} | View {state} | live {flow.source.frame_index / flow.source.fps:.2f}s | masks {observed}",
+                      (10, height + 84), size=12)
+            self.rules.controls(panel, self.preview_size, height + 92, flow)
+            if show_status:
+                limit = max(24, width // 7)
+                for row in range(2):
+                    draw_text(panel, flow.note[row * limit:(row + 1) * limit], (10, height + 238 + row * 18),
+                              (100, 170, 245) if flow.model_failed else (220, 220, 220), size=12)
             return panel
-        height, width = flow.frame.shape[:2]
+        height, width = flow.data.current.frame.shape[:2]
         for click in flow.clicks:
             if click["object_id"] == flow.active_id and click["video_frame"] == flow.source.frame_index:
                 x, y = click["point"]
@@ -185,17 +223,17 @@ class VideoWindow:
         self.last_rendered_frame = flow.source.frame_index
         fps = ((len(self.render_times) - 1) / (self.render_times[-1] - self.render_times[0])
                if len(self.render_times) > 1 and self.render_times[-1] > self.render_times[0] else 0)
-        lag = ("none" if flow.prediction_metadata is None else
-               f"{max(0, flow.source.frame_index - flow.prediction_metadata['frame_index']) / flow.source.fps:.2f}s")
+        lag = ("none" if flow.data.current.prediction_metadata is None else
+               f"{max(0, flow.source.frame_index - flow.data.current.prediction_metadata['frame_index']) / flow.source.fps:.2f}s")
         panel_height = max(500, self.preview_size[1] + 290)
         panel = np.full((panel_height, self.preview_size[0] + self.unit_panel.WIDTH, 3), 30, dtype=np.uint8)
         panel[:self.preview_size[1], :self.preview_size[0]] = preview
         known_ids = flow.known_ids()
-        key = (panel_height, id(flow.roster), tuple(flow.roster.bindings.items()) if flow.roster else (),
-               tuple(flow.roster.counters.items()) if flow.roster else (),
+        key = (panel_height, id(flow.data.units), tuple(flow.data.units.bindings.items()) if flow.data.units else (),
+               tuple(flow.data.units.counters.items()) if flow.data.units else (),
                flow.selected_type, flow.active_id, tuple(known_ids), tuple(self.unit_panel.offset.items()), flow.registration_locked, flow.interaction_mode)
         if key != self._panel_key:
-            self._panel_image = self.unit_panel.render(panel_height, flow.roster, flow.selected_type,
+            self._panel_image = self.unit_panel.render(panel_height, flow.data.units, flow.selected_type,
                                                        flow.active_id, known_ids, locked=flow.registration_locked, mode=flow.interaction_mode)
             self._panel_key = key
         panel[:, self.preview_size[0]:] = self._panel_image
@@ -244,14 +282,14 @@ class VideoWindow:
         draw_text(canvas, label, (left + 2, top + 22), size=14)
 
     def _mask_at(self, x, y):
-        flow = self.workflow
+        view = self.workflow.presentation
         width, height = self.preview_size
-        if flow.prediction is None or not (0 <= x < width and 0 <= y < height):
+        if view.current.prediction is None or not (0 <= x < width and 0 <= y < height):
             return None
-        source_height, source_width = flow.frame.shape[:2]
+        source_height, source_width = view.current.frame.shape[:2]
         px, py = min(source_width - 1, int(x * source_width / width)), min(source_height - 1, int(y * source_height / height))
         # The last mask is drawn on top when masks overlap.
-        for object_id, mask in reversed(list(zip(flow.prediction["object_ids"], flow.prediction["masks"]))):
+        for object_id, mask in reversed(list(zip(view.current.prediction["object_ids"], view.current.prediction["masks"]))):
             if mask[py, px]:
                 return object_id
         return None
@@ -274,6 +312,10 @@ class VideoWindow:
                 if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
                     self._rule_action(action)
                     return
+            for rect, action in self.view_buttons:
+                if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+                    self._clear_query() if action == "clear" else self._toggle_play()
+                    return
         width, height = self.preview_size
         if 0 <= x < width and 0 <= y < height:
             if self.rules.input_mode is not None:
@@ -281,7 +323,7 @@ class VideoWindow:
                     if event == cv2.EVENT_RBUTTONDOWN and self.rules.input_mode == "terrain":
                         self._rule_action("undo_terrain")
                     elif event == cv2.EVENT_LBUTTONDOWN:
-                        image_size = np.asarray(flow.frame.shape[1::-1])
+                        image_size = np.asarray(flow.data.current.frame.shape[1::-1])
                         self.rules.click_input(np.asarray([x, y]) * image_size / self.preview_size,
                                                flow, np.asarray(self.preview_size) / image_size)
                 except (ValueError, cv2.error) as error:
@@ -340,7 +382,7 @@ class VideoWindow:
                     flow.note = "No mask here. Tab switches back to segment mode."
                     self.dirty = True
                 return
-            height, width = flow.frame.shape[:2]
+            height, width = flow.data.current.frame.shape[:2]
             flow.click(x * width / preview_width, y * height / preview_height,
                        positive=event == cv2.EVENT_LBUTTONDOWN)
         elif event == cv2.EVENT_LBUTTONDOWN and preview_height + 8 <= y <= preview_height + 39:
@@ -376,8 +418,7 @@ class VideoWindow:
             self._rule_action(rule_keys[key])
             return
         if key == ord("q"):
-            self.rules.reset()
-            self.dirty = True
+            self._clear_query()
             return
         if flow.stage is Stage.PLAYBACK and key not in (ord("m"), ord("t"), 32, ord("r"), 27):
             return
@@ -412,6 +453,7 @@ class VideoWindow:
             self.rules.reset()
             self.drag_type = self.drag_position = None
             self.layer_buttons = []
+            self.view_buttons = []
             self.render_times.clear()
             flow.reset()
         elif key == ord("s"):

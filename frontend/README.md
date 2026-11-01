@@ -31,7 +31,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 2. 默认是分割模式：左键添加正点、右键添加排除点，`N` 新建对象。可以先分割所有目标，不指定任何 type。
 3. 按 `Tab` 或侧栏模式按钮切换到标注模式：点击 mask 再点击某方 type，也可以直接把 type 拖到 mask 上。List A 的 Type 1 对应内部类型 A1，实例依次生成 A1.1、A1.2；List B 的 Type 1 则生成 B1.1 等。按下 type 时不绑定，释放到目标才生效；拖到空白处取消。已绑定的 mask 可以重复选中并改绑，同 type 保留编号，换 type 释放旧编号而不重排其他单位。选中目标显示白色轮廓。
 4. `S` 完成注册，或按空格完成并播放：统一保存一次最终 reference，锁定点及类型修改，然后传播 mask。
-5. 首次成功播放后，自动隐藏类型侧栏、注册按钮、提示点及调试文字，保留视频、MASK／TRAY 开关与规则工具。暂停或区间播放结束后仍保持这一布局；空格播放／暂停，`R` 恢复注册界面并开始新注册，`Esc` 关闭。暂停不会重新允许编辑 SAM 提示或类型。
+5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、显示冻结／返回实时及规则工具。Space 冻结／恢复显示，视频源和追踪继续前进；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，`Esc` 关闭。冻结不会重新允许编辑 SAM 提示或类型。
 
 首次播放前可用 `Ctrl+Z`／`U` 撤回点提示，`Unbind`／退格键仅解除类型绑定。`Tab` 回到分割模式可继续修点，`N` 会自动进入分割模式以添加新 mask。标注模式下点击只选 mask，不添加 SAM 提示；改绑只更新单位信息与尺寸相关托盘候选，不重新分割。选择类型或切换标注模式时退出当前规则查询，避免查询拦截拖放。`B` 保留为重复绑定当前 type 的快捷键，正常点击／拖放无需它。首次播放后导入和类型编辑一并锁定；R 重置注册保留两份名单。
 
@@ -67,26 +67,47 @@ TRAY 按钮显示当前状态：`NO CALIB` 缺标定、`NO SIZES` 缺已绑定�
 ```text
 frontend/__main__.py                 命令行入口
 frontend/window.py                   窗口、输入事件、文件选择与绘制
-frontend/workflow.py                 桌角确认、注册草稿、播放与坐标数据
+frontend/workflow.py                 桌角确认、注册草稿与播放调度
 frontend/task_worker.py              串行后台 SAM 操作及可选托盘计算
 frontend/table_setup.py              首帧桌角检测确认及任意顺序手动标记
 frontend/annotation_panel.py         A／B 双列类型侧栏与独立滚动
 frontend/layers.py                   mask／矩形的独立显示缓存
 frontend/image/                      独立图片点选及注册窗口
 components/video_io/source.py        视频解码、帧号和源时间
+components/game_data.py              本局共享数据、观测快照及矩形状态历史
 components/sam3/video/predictor.py    已有 SAM 模型与官方会话接口
 components/registration/             单位表、mask 切图及最终快照保存
 components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过组合持有 `RegistrationWorkflow`，不代理对方属性。窗口保存图层开关、拖拽和显示缓存；工作流保存 TABLE／REGISTER／PLAYBACK 阶段、模型准备、注册草稿及播放状态。暂停仍处于 PLAYBACK，最终保存目录存在即表示注册已锁定。组件不导入前端；旧视频组件中的窗口、侧栏和 source 转发文件已移除。
+`VideoWindow` 通过组合持有 `RegistrationWorkflow`，不代理对方属性。窗口保存图层开关、拖拽和显示缓存；工作流保存 TABLE／REGISTER／PLAYBACK 阶段、模型准备、注册草稿及播放状态，并通过 `workflow.data` 持有一个本局 `GameData`。暂停仍处于 PLAYBACK，最终保存目录存在即表示注册已锁定。组件不导入前端；旧视频组件中的窗口、侧栏和 source 转发文件已移除。
 
 推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；无需窗口时可使用 `RegistrationWorkflow` 或各独立组件。单位与 reference 接口见 [registration](../components/registration/README.md)。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
 首帧准备调用公开的 `get_image_features` 和会话缓存方法；缓存键按本机后端源码对接，未添加虚拟对象或点提示。注册界面中的 `R` 仍回到同一首帧、保留已确认桌角，重新准备 SAM 会话；不会重新加载已就绪权重。
+
+## 本局共享数据
+
+[GameData](../components/game_data.py) 定义在一个文件中，每个工作流独立创建实例，不使用模块全局单例。新增公共业务数据在该类中增加明确字段，现有结构为：
+
+```text
+workflow.data
+  board              原图大小、桌面毫米尺寸、桌角和 Homography
+  units              UnitRoster：类型、单位实例、属性及 object_id 绑定
+  rules              RuleState：人工正面和地形
+  current            最新显示帧、匹配的推理帧／结果／源帧时间、显示版本
+  history            矩形位置和当时状态的独立副本
+  reference_folder   已完成注册的保存目录，也是注册锁定依据
+```
+
+`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；仅由工作流在核对任务 generation 后调用。完成注册成功保存后记录初始历史，后续接纳传播结果或人工修改已注册单位状态后调用 `data.record_history()`。每条历史包含 `frame_index`、`timestamp_seconds` 及按本局 `unit_id` 索引的 `units`；单位条目为 `corners_mm`、`position_status` 和 `state`。`state` 当前包含 `engaged`、`wavering`、`facing`，未知值保留为 null。没有有效托盘时位置为 null／unavailable；available 仅表示有几何结果，不是正确率判断。相同帧、矩形及状态不重复追加。
+
+`workflow.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。
+
+历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话、模型记忆及任务队列仍由算法／工作流管理。
 
 ## 游戏信息与规则工具（首版）
 
@@ -115,7 +136,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 | `Double [J]` | 点击一个单位，估计 At the Double 的可达姿态 |
 | `Q` | 清除规则查询和选择，返回原有交互 |
 
-选择单位时暂停视频以便查看；空格可继续播放。规则计算使用独立后台线程，输入是同一推理快照，并显示结果的 snapshot age。较新的待处理查询不会覆盖旧结果的时间标记。蓝色点表示采样到的可达**中心位置**，每个姿态的路径及朝向由组件返回；没有实心填充样本凸包，也没有宣称采样以外不可达。
+选择规则查询时冻结显示，背景、mask、托盘和规则输入取自同一观测；视频源时钟和追踪继续前进。Space／Hold view 也只冻结显示。Clear query [Q] 或 Return live [Space] 清除分析快照并回到最新画面；不会恢复历史提示或解除注册锁。规则计算使用独立后台线程，并显示 snapshot age；旧查询完成后不能覆盖已清除的结果。蓝色点表示采样到的可达**中心位置**，每个姿态的路径及朝向由组件返回；没有实心填充样本凸包，也没有宣称采样以外不可达。
 
 LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。原型只在目标完全不在前方弧时直接返回 `Blocked`；场景存在未拟合单位时不会将该不完整场景的射线升级为确定清晰。Hill、地形内外及 Height 等仅按已登记区域计算，未登记障碍仍可能改变结果。
 
@@ -124,4 +145,8 @@ LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。�
 
 默认 `--tray-search full` 保留全量托盘搜索；`--tray-search local` 先以上次成功姿态在当前 mask 和 LSD 上局部更新，失败才完整搜索。更换类型尺寸／标定或 R 重置会清除旧初值。界面分别显示 SAM 操作与托盘耗时。
 
-`--profile` 开启 GPU 分段同步并导出任务计时到终端给出的 `outputs/tracking_comparison/sam_.../`；额外同步可能影响速度，和正常模式分开比较。原型 LK 工具独立于本界面，不会切换正式追踪后端。
+`--profile` 开启 SAM3 GPU 分段同步并导出任务计时到终端给出的 `outputs/tracking_comparison/sam_.../`；额外同步可能影响速度，和正常模式分开比较。候选后端记录包含后处理／回传的操作总时延，不伪造细分 GPU 时间。
+
+`--tracker sam3|cutie|edgetam` 选择注册后的传播模型。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
+
+桌角自动检测失败会保留橙色候选边、缺边原因及 Retry／Manual 按钮；不会直接跳到空白手动页，也不会把无效候选当成成功。手动页提供 Auto 重试，手动输入继续优先于迟到的自动结果。
