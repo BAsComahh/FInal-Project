@@ -10,6 +10,7 @@ from components.registration.rule_state import RuleState
 
 @dataclass
 class BoardData:
+    calibration_version: int = 0
     source_size: tuple | None = None
     board_size_mm: tuple | None = None
     source_to_plane: object = None
@@ -34,6 +35,7 @@ class GameData:
     rules: RuleState = field(default_factory=RuleState)
     current: CurrentData = field(default_factory=CurrentData)
     history: list = field(default_factory=list)
+    calibrations: list = field(default_factory=list)
     reference_folder: Path | None = None
 
     def accept_observation(self, prediction, frame, metadata):
@@ -74,9 +76,15 @@ class GameData:
                           "wavering": deepcopy(profile.get("wavering")),
                           "facing": deepcopy(self.rules.fronts.get(object_id))},
             }
-        entry = {"frame_index": current.prediction_metadata["frame_index"],
+        entry = {"calibration_version": self.board.calibration_version,
+                 "frame_index": current.prediction_metadata["frame_index"],
                  "timestamp_seconds": current.prediction_metadata.get("timestamp_seconds"), "units": units}
         if self.history and self.history[-1] == entry:
             return False
         self.history.append(entry)
         return True
+
+    def record_calibration(self, metadata):
+        self.calibrations.append({"version": self.board.calibration_version,
+                                  "source": deepcopy(metadata), "board": deepcopy(self.board),
+                                  "reference_folder": self.reference_folder})

@@ -1,7 +1,7 @@
 """Serialize model operations outside the playback/UI thread."""
 
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
+from copy import copy, deepcopy
 import importlib.metadata
 import hashlib
 import json
@@ -68,6 +68,8 @@ class TaskWorker:
 
     @property
     def load_progress(self):
+        if self.request is not None and self.request["kind"] == "recalibrate":
+            return ("Rebuilding tracking for calibration", None, None)
         if self.tracker is not None and self.request is not None and self.request["kind"] == "start_tracker":
             return self.tracker.load_progress or (f"Preparing {self.tracker_name} memory", None, None)
         return self.predictor.load_progress or (self.tracker.load_progress if self.tracker is not None else None)
@@ -114,6 +116,16 @@ class TaskWorker:
             prediction = self.tracker.initialize(request["frame"], initial["object_ids"], initial["masks"],
                                                 source_frame=request["metadata"]["frame_index"])
             self.tracker_initialized = True
+        elif kind == "recalibrate":
+            backend = copy(self.tracker if self.tracker is not None else self.predictor)
+            # Detach the session before reset: the old backend remains valid until commit.
+            if hasattr(backend, "session"):
+                backend.session = None
+            backend.reset()
+            initial = request["prediction"]
+            prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
+                                            source_frame=request["metadata"]["frame_index"])
+            request["new_backend"] = backend
         elif kind == "propagate":
             if not self.tracker_initialized:
                 raise ValueError("Finish the registered-mask handoff before tracking")
@@ -151,7 +163,7 @@ class TaskWorker:
             prediction["inference_seconds"] = finished - started
             metadata = request["metadata"]
             prediction.update(source_frame_index=metadata["frame_index"],
-                              tracking_backend=self.tracker_name if kind in ("propagate", "start_tracker") else "sam3_registration",
+                              tracking_backend=self.tracker_name if kind in ("propagate", "start_tracker", "recalibrate") else "sam3_registration",
                               observation_time_seconds=metadata.get("timestamp_seconds"),
                               task_submitted_at=request.get("submitted_at"), task_completed_at=finished)
         return prediction
@@ -168,6 +180,7 @@ class TaskWorker:
             finished = perf_counter()
             metadata = request["metadata"] or {}
             record = {"kind": request["kind"], "generation": request["generation"],
+                      "calibration_version": metadata.get("calibration_version"),
                       "source_frame_index": metadata.get("frame_index"),
                       "observation_time_seconds": metadata.get("timestamp_seconds"),
                       "submitted_at": request["submitted_at"], "started_at": started, "completed_at": finished,
@@ -183,13 +196,15 @@ class TaskWorker:
             with (self.timing_dir / "observations.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(record) + "\n")
 
-    def submit(self, kind, *, frame=None, metadata=None, prompt=None, generation=0, clicks=None, prediction=None):
+    def submit(self, kind, *, frame=None, metadata=None, prompt=None, generation=0, clicks=None, prediction=None,
+               tray_context=None):
         if self.busy:
             raise RuntimeError("A SAM3 request is already in flight")
         self.request = {"kind": kind, "frame": frame.copy() if frame is not None else None,
                         "metadata": dict(metadata) if metadata is not None else None,
                         "prompt": prompt, "generation": generation, "clicks": deepcopy(clicks),
-                        "prediction": prediction, "tray_context": deepcopy(self.tray_context)}
+                        "prediction": prediction,
+                        "tray_context": deepcopy(self.tray_context if tray_context is None else tray_context)}
         self.request["submitted_at"] = perf_counter()
         self.future = self.executor.submit(self._recorded_run if self.timing_dir is not None else self._run, self.request)
 

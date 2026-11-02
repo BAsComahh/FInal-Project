@@ -14,6 +14,7 @@ from components.homography import warp_table
 from components.video_io import VideoSource
 from components.registration import UnitRoster, extract_references, save_registration, read_unit_list_pdf
 from components.game_data import GameData
+from components.recalibration import prepare_recalibration
 from .task_worker import TaskWorker
 
 
@@ -25,6 +26,7 @@ class Stage(Enum):
     TABLE = "table"
     REGISTER = "register"
     PLAYBACK = "playback"
+    RECALIBRATE = "recalibrate"
 
 
 def _read_tray_calibration(path):
@@ -78,6 +80,7 @@ class RegistrationWorkflow:
             self.worker.close()
             raise
         self.initial_frame = self.data.current.frame
+        self.registration_start_frame = self.source.frame_index
         self.data.board.source_size = self.data.current.frame.shape[1::-1]
         self.stage = Stage.TABLE
         self.start = start
@@ -102,6 +105,7 @@ class RegistrationWorkflow:
         self.model_failed = self.closed = self.playing = False
         self.display_snapshot = None
         self.pending_play = False
+        self.recalibration = None
         self.next_inference_time = 0.0
         self.last_submitted_frame = -1
         self.dirty = True
@@ -137,9 +141,11 @@ class RegistrationWorkflow:
         self.data.board.homography = {key: value for key, value in result.items() if key != "image"}
         self.data.current.frame = result["image"]
         self.data.board.table_boundary = deepcopy(boundary)
+        self.data.board.calibration_version += 1
         self.stage = Stage.REGISTER
         if self.data.board.source_to_plane is not None:
             self.data.board.image_to_plane = self.data.board.source_to_plane @ self.data.board.homography["inverse_matrix"]
+        self.data.record_calibration(self._frame_metadata())
         self._configure_trays()
         self._prediction_changed()
         self.note = "Table focused. Preparing SAM3 features for the rectified first frame."
@@ -149,18 +155,96 @@ class RegistrationWorkflow:
             return frame
         return cv2.warpPerspective(frame, self.data.board.homography["matrix"], self.data.board.homography["output_size"])
 
-    def _frame_metadata(self):
+    def _frame_metadata(self, *, board=None, frame=None):
+        board = self.data.board if board is None else board
+        frame = self.data.current.frame if frame is None else frame
         metadata = self.source.metadata()
-        if self.data.board.homography is not None:
+        if board.homography is not None:
             metadata.update(
-                coordinate_space="rectified_table_pixels", image_size=list(self.data.current.frame.shape[1::-1]),
-                source_image_size=list(self.data.board.source_size),
+                coordinate_space="rectified_table_pixels", image_size=list(frame.shape[1::-1]),
+                source_image_size=list(board.source_size), calibration_version=board.calibration_version,
                 homography={key: value.tolist() if isinstance(value, np.ndarray) else value
-                            for key, value in self.data.board.homography.items()},
+                            for key, value in board.homography.items()},
             )
-            if self.data.board.image_to_plane is not None:
-                metadata.update(image_to_plane=self.data.board.image_to_plane.tolist(), board_size_mm=list(self.data.board.board_size_mm))
+            if board.image_to_plane is not None:
+                metadata.update(image_to_plane=board.image_to_plane.tolist(), board_size_mm=list(board.board_size_mm))
         return metadata
+
+    def begin_recalibration(self):
+        if self.stage is not Stage.PLAYBACK or self.pending_play:
+            raise ValueError("Start playback before recalibrating the table.")
+        if self.model_failed:
+            raise ValueError("Resolve the tracking error before recalibrating.")
+        raw = self.source.read_frame(self.source.frame_index)
+        self.recalibration = {"frame": raw, "frame_index": self.source.frame_index,
+                              "resume_playing": self.playing, "held_view": self.display_snapshot, "draft": None}
+        self.playing = False
+        self.stage = Stage.RECALIBRATE
+        self.note = "Video paused. Confirm the table on this source frame; Esc cancels."
+        self._schedule(perf_counter())
+        self.dirty = True
+        return raw
+
+    def cancel_recalibration(self):
+        if self.recalibration is None:
+            return
+        if self.recalibration["draft"] is not None:
+            raise ValueError("Wait for tracking initialization before cancelling.")
+        context, self.recalibration = self.recalibration, None
+        self.stage = Stage.PLAYBACK
+        self.display_snapshot = context["held_view"]
+        if context["resume_playing"] and self.source.frame_index < self.end_index:
+            self._start_stream()
+        self.note = "Recalibration cancelled; previous calibration and tracking retained."
+        self.dirty = True
+
+    def apply_recalibration(self, corners, boundary, *, board_size_in):
+        context = self.recalibration
+        if context is None or context["draft"] is not None:
+            return
+        if self.model_failed:
+            raise ValueError("Tracking failed on the paused frame; cancel recalibration.")
+        metadata = self.data.current.prediction_metadata
+        if self.worker.busy or metadata is None or metadata["frame_index"] != context["frame_index"]:
+            raise ValueError("Preparing masks for the paused frame. Wait, then press Continue again.")
+        size = np.asarray(board_size_in, dtype=float) * 25.4
+        draft = prepare_recalibration(self.data, context["frame"], corners, boundary, size)
+        sizes = {obj: self.data.units.types[self.data.units.units[unit]["type_id"]].get("dimension", {})
+                 for obj, unit in self.data.units.bindings.items()}
+        tray_context = {"image_to_plane": draft["board"].image_to_plane,
+                        "sizes": {obj: (size["width_mm"], size["depth_mm"]) for obj, size in sizes.items()
+                                  if "width_mm" in size and "depth_mm" in size}}
+        self.generation += 1
+        self.worker.submit("recalibrate", frame=draft["frame"], prediction=draft["prediction"],
+                           metadata=self._frame_metadata(board=draft["board"], frame=draft["frame"]),
+                           generation=self.generation, tray_context=tray_context)
+        context["draft"] = draft
+        self.note = "Preparing tracking in the new calibration. Unit identities remain locked."
+        self.dirty = True
+
+    def _commit_recalibration(self, request):
+        context = self.recalibration
+        draft = context["draft"]
+        if self.worker.tracker is None:
+            self.worker.predictor = request["new_backend"]
+        else:
+            self.worker.tracker = request["new_backend"]
+        self.worker.tracker_initialized = True
+        self.worker.tray_context = request["tray_context"]
+        self.data.board, self.data.rules = draft["board"], draft["rules"]
+        self.data.current.frame = draft["frame"]
+        self.initial_frame = context["frame"]
+        self.registration_start_frame = context["frame_index"]
+        self.data.record_calibration(request["metadata"])
+        self.data.calibrations[-1]["unseeded_units"] = draft["unseeded_units"]
+        self.last_submitted_frame = context["frame_index"]
+        self.next_inference_time = perf_counter() + 1 / self.inference_fps
+        self.pending_trays = False
+        self.display_snapshot = None
+        self.stage = Stage.PLAYBACK
+        self.recalibration = None
+        if context["resume_playing"] and self.source.frame_index < self.end_index:
+            self._start_stream()
 
     def can_edit_points(self):
         if self.stage is Stage.TABLE:
@@ -230,6 +314,10 @@ class RegistrationWorkflow:
         self.data.rules.fronts.clear()
         self.data.board.image_to_plane = (self.data.board.source_to_plane @ self.data.board.homography["inverse_matrix"]
                                if self.data.board.homography is not None else self.data.board.source_to_plane)
+        self.data.board.calibration_version += 1
+        if self.data.current.prediction is not None:
+            self.data.current.prediction_metadata = self._frame_metadata()
+        self.data.record_calibration(self._frame_metadata())
         self._configure_trays()
         self._prediction_changed()
         self.note = "Tray calibration loaded. Trays will be refitted; facing marks were cleared."
@@ -469,6 +557,16 @@ class RegistrationWorkflow:
     def _schedule(self, now):
         if self.worker.busy or self.closed:
             return
+        if self.stage is Stage.RECALIBRATE:
+            context = self.recalibration
+            metadata = self.data.current.prediction_metadata
+            if (context["draft"] is None and not self.model_failed and metadata is not None
+                    and metadata["frame_index"] < context["frame_index"]):
+                self.worker.submit("propagate", frame=self._warp_frame(context["frame"]),
+                                   metadata=self._frame_metadata(), generation=self.generation)
+                self.last_submitted_frame = context["frame_index"]
+                self.next_inference_time = now + 1 / self.inference_fps
+            return
         if self.needs_reset:
             self.needs_reset = False
             self.worker.submit("reset", generation=self.generation)
@@ -500,10 +598,6 @@ class RegistrationWorkflow:
     def advance(self):
         if self.closed:
             return
-        progress = self.worker.load_progress
-        if progress != self.load_progress or progress is not None:
-            self.load_progress = progress
-            self.dirty = True
         now = perf_counter()
         completed = self.worker.poll()
         if completed is not None:
@@ -511,15 +605,20 @@ class RegistrationWorkflow:
             if request["generation"] == self.generation:
                 if request["kind"] == "replace":
                     self.updating_points = False
-                if error is not None:
+                if error is not None and request["kind"] == "recalibrate":
+                    self.recalibration["draft"] = None
+                    self.note = f"Recalibration failed: {error}. Retry or Esc to cancel."
+                elif error is not None:
                     self.model_failed = True
                     self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
+                    if request["kind"] == "recalibrate":
+                        self._commit_recalibration(request)
                     prediction["accepted_at"] = perf_counter()
                     if self.pending_trays:
                         prediction = {**prediction, "trays": {}, "tray_errors": {}}
                     self.data.accept_observation(prediction, request["frame"], request["metadata"])
-                    if self.registration_locked and request["kind"] == "propagate":
+                    if self.registration_locked and request["kind"] in ("propagate", "recalibrate"):
                         self.data.record_history()
                     if request["kind"] == "click":
                         request["prompt"]["session_frame"] = prediction["frame_idx"]
@@ -562,6 +661,11 @@ class RegistrationWorkflow:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
         self._schedule(now)
+
+        progress = self.worker.load_progress
+        if progress != self.load_progress or progress is not None:
+            self.load_progress = progress
+            self.dirty = True
 
     def extract_references(self):
         """Return masks and cutouts from the latest completed inference snapshot."""
@@ -611,6 +715,7 @@ class RegistrationWorkflow:
         self.playing = False
         self.display_snapshot = None
         self.pending_play = False
+        self.recalibration = None
         self.stage = Stage.REGISTER
         self.data.reference_folder = None
         self.data.history.clear()
@@ -624,7 +729,7 @@ class RegistrationWorkflow:
         self.pending_clicks.clear()
         self.pending_update = None
         self.updating_points = False
-        self.data.current.frame = self._warp_frame(self.source.read_at(self.start))
+        self.data.current.frame = self._warp_frame(self.source.read_frame(self.registration_start_frame))
         self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
         self.active_id = 1
         if self.data.units:

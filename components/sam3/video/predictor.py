@@ -148,6 +148,22 @@ class VideoPredictor:
         self._select_frame(source_frame, advance=True)
         return self._infer(frame)
 
+    def initialize(self, frame, object_ids, masks, *, source_frame=None):
+        """Start a new coordinate-space session from masks using the official API."""
+        object_ids = list(object_ids)
+        masks = np.asarray(masks)
+        if (not object_ids or len(set(object_ids)) != len(object_ids)
+                or masks.dtype != np.bool_ or masks.shape != (len(object_ids), *frame.shape[:2])):
+            raise ValueError("Initial masks must be bool arrays matching the distinct object IDs and frame.")
+        self.reset()
+        self._session()
+        self._select_frame(source_frame)
+        self.processor.add_inputs_to_inference_session(
+            inference_session=self.session, frame_idx=0, obj_ids=list(object_ids),
+            input_masks=list(masks), original_size=frame.shape[:2],
+        )
+        return self._infer(frame)
+
     def replace_initial_points(self, frame, clicks, *, source_frame=None, changed_ids=None):
         """Replace registration prompts before propagation using official APIs.
 

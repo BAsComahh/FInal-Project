@@ -32,10 +32,10 @@ class RuleState:
             if tray is None:
                 continue
             angles = edge_headings(tray["corners_plane"])
-            options = [front["parity"], front["parity"] + 2]
+            options = range(4) if front["parity"] is None else [front["parity"], front["parity"] + 2]
             edge = min(options, key=lambda i: abs((angles[i] - front["angle_deg"] + 180) % 360 - 180))
             source = front["source"] if front["frame_index"] == frame_index else "estimated_by_rectangle_continuity"
-            front.update(angle_deg=float(angles[edge]), frame_index=frame_index, source=source)
+            front.update(angle_deg=float(angles[edge]), parity=edge % 2, frame_index=frame_index, source=source)
 
     def scene(self, roster, prediction, image_to_plane, board_size_mm, metadata):
         if image_to_plane is None or board_size_mm is None:
@@ -43,6 +43,8 @@ class RuleState:
         if roster is None or prediction is None:
             raise ValueError("Register unit masks and bind their types first.")
         units, warnings = [], []
+        for object_id in roster.bindings.keys() - set(prediction["object_ids"]):
+            warnings.append(f"{roster.bindings[object_id]} has no current tracking mask; the registered scene is incomplete.")
         for object_id in prediction["object_ids"]:
             unit_id = roster.bindings.get(object_id)
             tray = prediction.get("trays", {}).get(object_id)
@@ -55,7 +57,7 @@ class RuleState:
             edge = None
             if front is not None:
                 angles = edge_headings(tray["corners_plane"])
-                options = [front["parity"], front["parity"] + 2]
+                options = range(4) if front["parity"] is None else [front["parity"], front["parity"] + 2]
                 edge = min(options, key=lambda i: abs((angles[i] - front["angle_deg"] + 180) % 360 - 180))
                 if front["source"] != "manual":
                     warnings.append(f"{unit_id}: facing estimated from rectangle continuity; 180-degree turns are ambiguous.")

@@ -18,6 +18,8 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 本局公共数据集中在 [GameData](components/game_data.py)：桌面标定、单位资料、最新观测和矩形／状态历史由同一个实例维护。历史只存在内存中；冻结分析画面时，后台继续更新实时数据。
 
+播放页的 `Recalibrate [K]` 可在当前帧重新选四角并确认尺寸，迁移可用 mask、地形与朝向估计，保留单位 ID 和原始 reference。成功后更新标定版本并继续播放，Esc 取消；详情见[重新标定流程](frontend/README.md#比赛中重新标定)。
+
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。
 
 ### 目录
@@ -33,6 +35,7 @@ frontend/
   image/                     Standalone image registration windows
 components/
   game_data.py               Shared match data and rectangle/state history
+  recalibration.py           Board, mask and annotation coordinate migration
   registration/              Unit catalog, bindings and reference export
   boundary_detection/        Shared LSD, table/tray fitting and Canny
   homography/                Rectification and coordinate transforms
@@ -98,13 +101,15 @@ Weights load at startup; rectified first-frame features are prepared after corne
 
 Use `--tracker cutie` or `--tracker edgetam` to initialize a candidate from the registered SAM3 masks; `sam3` remains the default. Prepare optional assets with `python -m tools.setup_tracking --backend all`. Queries and Space hold an analysis snapshot while the video source and tracking continue; Clear query / Return live returns to the latest state. LK has been removed. See [tracker setup and limits](components/tracking/README.md).
 
-Use `Import list A` / `Import list B` in the registration sidebar to select each army's PDF or single-army JSON directly. Two independent columns show Type 1, Type 2, etc., with click/drag binding. Instances of types A1/B1 become A1.1/B1.1; no catalog parameter is required. The [ABC test data](inputs/units.video_estimate.json) initially occupies List A: Type 1 is approximately 155 x 50 mm and Types 2/3 are 205 x 80 mm; List B awaits import. After locking the corners, confirm the `Length (in)` / `Width (in)` fields, prefilled with 72 / 48. These defaults are test assumptions, not verified measurements. External calibration and the standalone `tools.read_unit_list` converter remain available. The initial Homography assumes a fixed camera.
+Use `Import list A` / `Import list B` in the registration sidebar to select each army's PDF or single-army JSON directly. Two independent columns show Type 1, Type 2, etc., with click/drag binding. Instances of types A1/B1 become A1.1/B1.1; no catalog parameter is required. The [ABC test data](inputs/units.video_estimate.json) initially occupies List A: Type 1 is approximately 155 x 50 mm and Types 2/3 are 205 x 80 mm; List B awaits import. After locking the corners, confirm the `Length (in)` / `Width (in)` fields, prefilled with 72 / 48. These defaults are test assumptions, not verified measurements. External calibration and the standalone `tools.read_unit_list` converter remain available. The camera is assumed fixed between calibrations.
 
 Use `--board-size-in WIDTH DEPTH` to prefill different inch dimensions, or `--calibration PATH` to prefill the dimensions of an existing metric calibration; the two options are mutually exclusive. F marks the initial front edge, E edits unit rule information and manual states, and G annotates terrain. D/L/V/J query distance/LOS/ordinary movement/Double; Q clears the query. Results are based on registered geometry, not full match adjudication. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
 
 The directory tree and independent tool list above describe the current ownership. The window composes a workflow, which schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
 
 Each workflow owns one [GameData](components/game_data.py) instance for board calibration, unit data, current observations and rectangle/state history. History stays in memory and excludes frame images and masks. Holding the analysis view creates a separate observation snapshot while live tracking continues updating the match data.
+
+During playback, `Recalibrate [K]` pauses the source on the current frame and opens corner/dimension confirmation. It reprojects available masks, migrates board annotations and starts an independent tracking session using loaded weights, retaining unit IDs and original references. Success switches calibration versions and resumes from the paused frame; Esc cancels. Unavailable masks retain their unit records without fabricated positions. See [the recalibration workflow](frontend/README.md#比赛中重新标定).
 
 See [the UI guide](frontend/README.md), [registration data](components/registration/README.md), [SAM video API](components/sam3/video/README.md), [boundary detection](components/boundary_detection/README.md), [Homography](components/homography/README.md) and [DINOv2](components/dinov2/README.md). Design rationale and meaningful experimental findings are maintained in [项目思路.md](项目思路.md).
 

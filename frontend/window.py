@@ -32,25 +32,57 @@ class VideoWindow:
         self.show_masks = self.show_rectangles = True
         self.layer_buttons = []
         self.view_buttons = []
+        self.recalibration_cancel_button = None
         self.render_times = deque(maxlen=120)
         self.last_rendered_frame = -1
         self.dirty = True
 
     @property
     def preview_size(self):
-        height, width = self.workflow.data.current.frame.shape[:2]
+        frame = (self.table_setup.frame if self.workflow.stage is Stage.RECALIBRATE
+                 else self.workflow.data.current.frame)
+        height, width = frame.shape[:2]
         preview_width = min(self.preview_width_limit, width)
         return preview_width, max(1, round(height * preview_width / width))
 
     def _activate_table_view(self):
-        if not self.table_setup.confirmed or self.workflow.stage is not Stage.TABLE:
+        if not self.table_setup.confirmed or self.workflow.stage not in (Stage.TABLE, Stage.RECALIBRATE):
             return
         try:
-            self.workflow.confirm_table(self.table_setup.corners, self.table_setup.snapshot(),
-                                        board_size_in=self.table_setup.board_size_in)
+            if self.workflow.stage is Stage.RECALIBRATE:
+                boundary = self.table_setup.snapshot()
+                self.table_setup.confirmed = False
+                self.workflow.apply_recalibration(self.table_setup.corners, boundary,
+                                                  board_size_in=self.table_setup.board_size_in)
+            else:
+                self.workflow.confirm_table(self.table_setup.corners, self.table_setup.snapshot(),
+                                            board_size_in=self.table_setup.board_size_in)
         except (ValueError, cv2.error) as error:
             self.table_setup.confirmed = False
             self.table_setup.note = f"Cannot map these corners: {error}. Please correct them."
+        self.dirty = True
+
+    def _begin_recalibration(self):
+        if self.rules.input_mode is not None:
+            self.rules.note = "Finish or cancel the rule input before recalibrating."
+            self.dirty = True
+            return
+        try:
+            frame = self.workflow.begin_recalibration()
+        except (ValueError, OSError, cv2.error) as error:
+            self.workflow.note = str(error)
+        else:
+            self.rules.reset()
+            self.rules.note = "Select a rule tool, then click one or two units."
+            self.table_setup.close()
+            self.table_setup = TableSetup(frame, board_size_in=np.asarray(self.workflow.data.board.board_size_mm) / 25.4)
+        self.dirty = True
+
+    def _cancel_recalibration(self):
+        try:
+            self.workflow.cancel_recalibration()
+        except ValueError as error:
+            self.table_setup.note = str(error)
         self.dirty = True
 
     def _update_layers(self):
@@ -167,16 +199,24 @@ class VideoWindow:
 
     def _render(self):
         flow = self.workflow
-        if flow.stage is Stage.TABLE:
+        if flow.stage in (Stage.TABLE, Stage.RECALIBRATE):
             panel = self.table_setup.render(self.preview_size)
             if flow.load_progress is not None:
                 self._draw_loading_progress(panel)
-            else:
+            elif flow.stage is Stage.TABLE:
                 status = flow.note if flow.model_failed else (
                     "Weights ready. Confirm the table setup to continue." if flow.worker.predictor.model is not None
                     else "Loading SAM3...")
                 draw_text(panel, status[:max(28, self.preview_size[0] // 8)],
                           (16, panel.shape[0] - 35), size=14)
+            if flow.stage is Stage.RECALIBRATE:
+                panel = cv2.copyMakeBorder(panel, 0, 48, 0, 0, cv2.BORDER_CONSTANT, value=(31, 29, 27))
+                y = panel.shape[0] - 40
+                rect = (10, y, 195, y + 30)
+                cv2.rectangle(panel, rect[:2], rect[2:], (65, 61, 56), -1)
+                draw_text(panel, "Cancel / Return [Esc]", (18, y + 21), size=13)
+                self.recalibration_cancel_button = rect
+                draw_text(panel, flow.note[:max(12, (panel.shape[1] - 220) // 7)], (210, y + 21), size=12)
             return panel
         view = flow.presentation
         preview = self.layers.render(view.current.frame, show_masks=self.show_masks, show_rectangles=self.show_rectangles)
@@ -185,15 +225,17 @@ class VideoWindow:
             self._draw_loading_progress(preview)
         if flow.stage is Stage.PLAYBACK:
             width, height = self.preview_size
-            show_status = flow.model_failed or flow.pending_play
+            tracked = (flow.data.current.prediction or {}).get("object_ids", [])
+            missing = [unit for obj, unit in flow.data.units.bindings.items() if obj not in tracked]
+            show_status = flow.model_failed or flow.pending_play or bool(missing)
             panel = np.full((height + (272 if show_status else 232), width, 3), 30, dtype=np.uint8)
             panel[:height] = preview
             self._draw_layer_controls(panel, height + 8)
             self.view_buttons = []
             labels = (("view", "Return live [Space]" if flow.display_snapshot is not None else "Hold view [Space]"),
-                      ("clear", "Clear query [Q]"))
+                      ("clear", "Clear query [Q]"), ("recalibrate", "Recalibrate [K]"))
             for i, (action, label) in enumerate(labels):
-                button_width = min(190, (width - 30) // 2)
+                button_width = min(190, (width - 40) // 3)
                 x, y = 10 + i * (button_width + 10), height + 42
                 rect = (x, y, x + button_width, y + 28)
                 cv2.rectangle(panel, rect[:2], rect[2:], (65, 65, 65), -1)
@@ -202,13 +244,15 @@ class VideoWindow:
             state = "HELD" if flow.display_snapshot is not None else "LIVE"
             stamp = (view.current.prediction_metadata or {}).get("timestamp_seconds")
             observed = "none" if stamp is None else f"{stamp:.2f}s"
-            draw_text(panel, f"{flow.worker.tracker_name} | View {state} | live {flow.source.frame_index / flow.source.fps:.2f}s | masks {observed}",
+            draw_text(panel, f"{flow.worker.tracker_name} | View {state} | live {flow.source.frame_index / flow.source.fps:.2f}s | masks {observed} | calibration v{flow.data.board.calibration_version}",
                       (10, height + 84), size=12)
             self.rules.controls(panel, self.preview_size, height + 92, flow)
             if show_status:
+                status = (flow.note if flow.model_failed or flow.pending_play else
+                          "No tracking masks: " + ", ".join(missing) + ". Unit identities retained.")
                 limit = max(24, width // 7)
                 for row in range(2):
-                    draw_text(panel, flow.note[row * limit:(row + 1) * limit], (10, height + 238 + row * 18),
+                    draw_text(panel, status[row * limit:(row + 1) * limit], (10, height + 238 + row * 18),
                               (100, 170, 245) if flow.model_failed else (220, 220, 220), size=12)
             return panel
         height, width = flow.data.current.frame.shape[:2]
@@ -298,7 +342,14 @@ class VideoWindow:
         flow = self.workflow
         if flow.closed:
             return
-        if flow.stage is Stage.TABLE:
+        if flow.stage in (Stage.TABLE, Stage.RECALIBRATE):
+            if flow.stage is Stage.RECALIBRATE:
+                rect = self.recalibration_cancel_button
+                if event == cv2.EVENT_LBUTTONDOWN and rect and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+                    self._cancel_recalibration()
+                    return
+                if flow.recalibration["draft"] is not None:
+                    return
             self.table_setup.on_mouse(event, x, y, self.preview_size)
             self._activate_table_view()
             self.dirty = True
@@ -314,7 +365,12 @@ class VideoWindow:
                     return
             for rect, action in self.view_buttons:
                 if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
-                    self._clear_query() if action == "clear" else self._toggle_play()
+                    if action == "recalibrate":
+                        self._begin_recalibration()
+                    elif action == "clear":
+                        self._clear_query()
+                    else:
+                        self._toggle_play()
                     return
         width, height = self.preview_size
         if 0 <= x < width and 0 <= y < height:
@@ -396,13 +452,18 @@ class VideoWindow:
         flow = self.workflow
         if flow.closed:
             return
-        if flow.stage is Stage.TABLE:
+        if flow.stage in (Stage.TABLE, Stage.RECALIBRATE):
             if key == 27:
-                self.close()
+                self._cancel_recalibration() if flow.stage is Stage.RECALIBRATE else self.close()
+            elif flow.stage is Stage.RECALIBRATE and flow.recalibration["draft"] is not None:
+                return
             else:
                 self.table_setup.on_key(key)
                 self._activate_table_view()
             self.dirty = True
+            return
+        if key == ord("k") and flow.stage is Stage.PLAYBACK:
+            self._begin_recalibration()
             return
         if self.rules.input_mode == "terrain" and key in (26, ord("u"), ord("z")):
             self._rule_action("undo_terrain")

@@ -19,7 +19,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 尺寸页显示 `Length (in)` 和 `Width (in)` 两个输入栏，默认 72、48，分别对应 TL→TR 的横向长度和 TL→BL 的纵向宽度。点击输入栏或按 Tab 切换，输入数字会替换被选中的默认值，支持小数、退格、Ctrl+A 和 Enter；空值、零和非有限值不能继续。`Back to corners [B]` 返回四角检查，手动标记的 Undo 仍可用。`--board-size-in` 可预填其他英寸尺寸，外部 `--calibration` 则使用其毫米宽深换算后预填；两参数不能同时使用。
 
-确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册、播放、SAM、mask、托盘和 reference 都使用拉正图像坐标；后续帧及 R 重置沿用同一变换和尺寸，假设镜头固定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
+确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册、播放、SAM、mask、托盘和 reference 都使用拉正图像坐标；每一版标定期间沿用同一变换和尺寸，镜头变化后需显式重新标定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
 
 原始桌角和确认的英寸／毫米尺寸保存在最终 `prompts.json.table_boundary`，角点坐标空间为 `source_image_pixels`。注册元数据标明 `rectified_table_pixels`，保存原视频尺寸、拉正尺寸及正反矩阵；同样的信息会随每个 reference 保存。手动点不受图像四象限限制，强透视或接近菱形时仍需核对角名。
 
@@ -81,7 +81,7 @@ components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过组合持有 `RegistrationWorkflow`，不代理对方属性。窗口保存图层开关、拖拽和显示缓存；工作流保存 TABLE／REGISTER／PLAYBACK 阶段、模型准备、注册草稿及播放状态，并通过 `workflow.data` 持有一个本局 `GameData`。暂停仍处于 PLAYBACK，最终保存目录存在即表示注册已锁定。组件不导入前端；旧视频组件中的窗口、侧栏和 source 转发文件已移除。
+`VideoWindow` 通过组合持有 `RegistrationWorkflow`，不代理对方属性。窗口保存图层开关、拖拽和显示缓存；工作流保存 TABLE／REGISTER／PLAYBACK／RECALIBRATE 阶段、模型准备、注册草稿及播放状态，并通过 `workflow.data` 持有一个本局 `GameData`。显示冻结仍处于 PLAYBACK，显式重新标定进入 RECALIBRATE；最终保存目录存在即表示注册已锁定。组件不导入前端；旧视频组件中的窗口、侧栏和 source 转发文件已移除。
 
 推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；无需窗口时可使用 `RegistrationWorkflow` 或各独立组件。单位与 reference 接口见 [registration](../components/registration/README.md)。
 
@@ -100,14 +100,28 @@ workflow.data
   rules              RuleState：人工正面和地形
   current            最新显示帧、匹配的推理帧／结果／源帧时间、显示版本
   history            矩形位置和当时状态的独立副本
+  calibrations       各版本标定、源帧及 reference 来源
   reference_folder   已完成注册的保存目录，也是注册锁定依据
 ```
 
 `data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；仅由工作流在核对任务 generation 后调用。完成注册成功保存后记录初始历史，后续接纳传播结果或人工修改已注册单位状态后调用 `data.record_history()`。每条历史包含 `frame_index`、`timestamp_seconds` 及按本局 `unit_id` 索引的 `units`；单位条目为 `corners_mm`、`position_status` 和 `state`。`state` 当前包含 `engaged`、`wavering`、`facing`，未知值保留为 null。没有有效托盘时位置为 null／unavailable；available 仅表示有几何结果，不是正确率判断。相同帧、矩形及状态不重复追加。
 
-`workflow.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。
+`workflow.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史或整个标定版本列表。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。矩形历史及帧元数据包含 `calibration_version`，可在 `data.calibrations` 中找到当时的矩阵和实际尺寸，旧历史不随重新标定改写。
 
 历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话、模型记忆及任务队列仍由算法／工作流管理。
+
+## 比赛中重新标定
+
+播放页点击 `Recalibrate [K]` 或按 K：
+
+1. 暂停本地视频源，显示当前源帧的原图；等待在途追踪，必要时对该帧补一次传播。这里明确暂停输入，区别于 Space／规则查询的显示冻结。
+2. 复用桌角确认、任意顺序手工标记和 Undo，确认当前实际长宽。Esc／`Cancel / Return` 返回之前的标定和显示状态；正在建立新会话时需等结果后再取消。
+3. Continue 将当前 mask 映射到新拉正图，保留原 object ID 和单位绑定，以新的初始 mask 建立独立追踪会话。无需重新加载权重，点及 type 仍锁定；新托盘依据实际尺寸重新拟合。
+4. 初始化成功后整体切换，从暂停帧重新计时继续播放。失败时不替换原会话／标定，可重试或取消。规则查询及旧显示缓存清除；地形按桌面坐标迁移，正面重新关联矩形轴并标为估计。
+
+原 reference 保留初始图像与坐标来源，不重复导出。每次成功建立新标定递增版本，R 从最近一次标定帧重新注册，避免将新变换套到旧开局画面。原视频区间的结束位置保持。
+
+迁移只使用当前可用 mask；完全丢失或移出旧画面有效范围的单位保留资料及历史，但不会凭旧位置补出新 mask，界面显示 `No tracking masks`。全部单位都无可用 mask 时拒绝应用，可取消后选择较清晰的帧重试。这不是 ID 恢复；仍需检查 mask 是否对应正确单位。地形迁移假设桌面内容固定，新旧标定的物理桌角对应关系不变，镜头旋转导致角名对应改变时不能直接沿用旧标注。
 
 ## 游戏信息与规则工具（首版）
 
