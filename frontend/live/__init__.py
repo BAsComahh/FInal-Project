@@ -1,0 +1,1 @@
+"""Live frontend responsibilities."""

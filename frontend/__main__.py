@@ -8,7 +8,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.window import VideoWindow
-from frontend.workflow import DEFAULT_UNITS
+from frontend.config import DEFAULT_UNITS, PROJECT_ROOT
 
 
 def main():
@@ -33,7 +33,7 @@ def main():
     parser.add_argument("--profile", action="store_true", help="Synchronize GPU phase timing; may add profiling overhead")
     parser.add_argument("--tray-search", choices=("full", "local"), default="full",
                         help="Experimental local tray update with full-search fallback; full is the baseline")
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "outputs/sam3_registration")
+    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs/sam3_registration")
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):

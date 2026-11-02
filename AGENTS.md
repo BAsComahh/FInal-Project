@@ -10,6 +10,12 @@ decisions take precedence and must be synchronized into these documents;
 do not silently replace a recorded decision with a conversational assumption.
 `待人工确认.md` is a separate, Git-ignored local verification checklist.
 
+Frontend workflow ownership and navigation are documented in
+`frontend/README.md`. Keep the shared runtime independent of the displayed
+tool; initial registration, board recalibration, scene editing and geometry
+queries have separate controllers. Recovery, what-if and replay are still
+unimplemented; do not add placeholder flows or reopen registration for them.
+
 ## SAM-related work
 
 For all work involving SAM/SAM2/SAM3, verify the official approach before

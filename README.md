@@ -28,12 +28,15 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 ```text
 frontend/
-  window.py                  Window, input events and display
-  workflow.py                TABLE / REGISTER / PLAYBACK workflow
-  task_worker.py             Serial SAM and optional tray tasks
-  table_setup.py             Corner confirmation and manual correction
-  annotation_panel.py        Type selection
-  layers.py                  Cached mask and tray layers
+  window.py                  OpenCV window lifecycle and event loop
+  app.py                     Workflow composition and input routing
+  runtime/                   Video clock, serial model tasks and observations
+  registration/              Draft prompts, army lists, bindings and references
+  calibration/               Initial calibration and B08 transactions
+  live/                      Live / held view and missing-unit lists
+  geometry_tools/            Snapshot queries and measurement overlays
+  scene_editing/             Unit profiles, initial facing and terrain inputs
+  shared/                    Drawing, viewport transforms and cached layers
   image/                     Standalone image registration windows
 components/
   game_data.py               Shared match data and rectangle/state history
@@ -107,9 +110,9 @@ Use `Import list A` / `Import list B` in the registration sidebar to select each
 
 Use `--board-size-in WIDTH DEPTH` to prefill different inch dimensions, or `--calibration PATH` to prefill the dimensions of an existing metric calibration; the two options are mutually exclusive. F marks the initial front edge, E edits unit rule information and manual states, and G annotates terrain. D/L/V/J query distance/LOS/ordinary movement/Double; Q clears the query. Results are based on registered geometry, not full match adjudication. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
 
-The directory tree and independent tool list above describe the current ownership. The window composes a workflow, which schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
+The directory tree and independent tool list above describe the current ownership. The window owns a VideoApplication, which coordinates workflow controllers and views; MatchSession schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
 
-Each workflow owns one [GameData](components/game_data.py) instance for board calibration, unit data, current observations and rectangle/state history. History stays in memory and excludes frame images and masks. Holding the analysis view creates a separate observation snapshot while live tracking continues updating the match data.
+Each MatchSession owns one [GameData](components/game_data.py) instance for board calibration, unit data, current observations and rectangle/state history. History stays in memory and excludes frame images and masks. Holding the analysis view creates a separate observation snapshot while live tracking continues updating the match data.
 
 During playback, `Recalibrate [K]` pauses the source on the current frame and opens corner/dimension confirmation. It reprojects available masks, migrates board annotations and starts an independent tracking session using loaded weights, retaining unit IDs and original references. Success switches calibration versions and resumes from the paused frame; Esc cancels. Unavailable masks retain their unit records without fabricated positions. See [the recalibration workflow](frontend/README.md#比赛中重新标定).
 

@@ -7,14 +7,15 @@ import cv2
 import numpy as np
 
 from components.homography.geometry import CORNER_NAMES, order_corners
-from .annotation_panel import draw_text
+from ..shared.drawing import draw_text, draw_loading_progress
 
 
-class TableSetup:
+class CalibrationView:
     def __init__(self, frame, *, board_size_in):
         self.frame = frame.copy()
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="table-boundary")
         self.future = None
+        self.recalibration_cancel_button = None
         self.corners = None
         self.points = []
         self.confirmed = False
@@ -270,3 +271,23 @@ class TableSetup:
 
     def close(self):
         self.executor.shutdown(wait=False, cancel_futures=True)
+
+    def render_status(self, preview_size, session, context):
+        panel = self.render(preview_size)
+        if session.load_progress is not None:
+            draw_loading_progress(panel, session.load_progress)
+        elif context is None:
+            status = session.note if session.model_failed else (
+                "Weights ready. Confirm the table setup to continue." if session.worker.predictor.model is not None
+                else "Loading SAM3...")
+            draw_text(panel, status[:max(28, preview_size[0] // 8)],
+                      (16, panel.shape[0] - 35), size=14)
+        if context is not None:
+            panel = cv2.copyMakeBorder(panel, 0, 48, 0, 0, cv2.BORDER_CONSTANT, value=(31, 29, 27))
+            y = panel.shape[0] - 40
+            rect = (10, y, 195, y + 30)
+            cv2.rectangle(panel, rect[:2], rect[2:], (65, 61, 56), -1)
+            draw_text(panel, "Cancel / Return [Esc]", (18, y + 21), size=13)
+            self.recalibration_cancel_button = rect
+            draw_text(panel, session.note[:max(12, (panel.shape[1] - 220) // 7)], (210, y + 21), size=12)
+        return panel

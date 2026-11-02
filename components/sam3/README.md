@@ -137,6 +137,6 @@ conda run --no-capture-output -n sam3-demo python -m tools.sam3_registration inp
 
 左键／右键添加正负点，`N` 新增对象，数字键切换对象，空格首次完成注册并保存后播放，之后冻结显示／返回实时；后台视频与追踪继续。`R` 重置，`S` 确认完成并保存。视频原速前进，单个后台线程按设定上限运行模型。`--tracker cutie|edgetam` 可将最终首帧 mask 交给候选后端，见 [tracking](../tracking/README.md)。
 
-标注期间只在内存中保留草稿，完成注册时一次性保存匹配的完整帧、叠加图、各对象的全图二值 mask、裁剪图、透明背景切图及 `instances.json`。素材接口为 `components.registration.extract_references(frame, prediction, source=...)`，工作流也提供 `RegistrationWorkflow.extract_references()`。详情和数据格式见 [registration](../registration/README.md)，模型会话见 [video/README.md](video/README.md)。
+标注期间只在内存中保留草稿，完成注册时一次性保存匹配的完整帧、叠加图、各对象的全图二值 mask、裁剪图、透明背景切图及 `instances.json`。素材接口为 `components.registration.extract_references(frame, prediction, source=...)`，工作流也提供 `RegistrationController.extract_references()`。详情和数据格式见 [registration](../registration/README.md)，模型会话见 [video/README.md](video/README.md)。
 
-可用 `--units inputs/units.example.json` 导入类型表，或在视频界面的 `Load types` 中加载。只需提供 A／B 等 type；选择 mask 后指定类型并按 `Assign type`（`B`），同类单位会依次生成 A1、A2，不同类型分别编号。属性保留在导出元数据中；导入表后，未指定类型的 mask 会阻止保存。模型在程序启动时立即后台加载，窗口显示加载状态。草稿中被撤回的编号可以复用；最终确认后锁定点和类型标注，重复保存不生成副本。
+可用 `--units inputs/units.example.json` 导入类型表，或在视频注册侧栏使用 `Import list A`／`Import list B`。目录只提供 type；点击或拖放 type 到 mask 后自动生成实例编号，每个 type 独立计数，`B` 可重复绑定当前 type。属性保留在导出元数据中；未指定类型的 mask 会阻止保存。模型在程序启动时立即后台加载，窗口显示加载状态。草稿中被撤回的编号可以复用；最终确认后锁定点和类型标注，重复保存不生成副本。完整操作与模块导航见 [前端指南](../../frontend/README.md)。

@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from .annotation_panel import draw_text
+from .drawing import draw_text
 
 
 def _cache(rgba):
@@ -68,3 +68,39 @@ def overlay_masks(frame, prediction, *, labels=None):
             label = (labels or {}).get(object_id, f"Mask {object_id}")
             draw_text(canvas, label, (int(xs.min()), max(18, int(ys.min()) - 4)), color, size=18)
     return canvas
+
+
+class PresentationLayers:
+    """Current view's cached pixels and independent mask/tray display switches."""
+    def __init__(self):
+        self.layers = None
+        self.key = None
+        self.show_masks = self.show_rectangles = True
+        self.layer_buttons = []
+
+    def render(self, presentation, preview_size, active_id=None):
+        key = (id(presentation), presentation.current.view_revision, preview_size)
+        if key != self.key:
+            if self.layers is None or self.layers.size != preview_size:
+                self.layers = VideoLayers(preview_size)
+            labels = dict(presentation.units.bindings) if presentation.units else {}
+            for object_id in (presentation.current.prediction or {}).get("estimated_ids", []):
+                labels[object_id] = labels.get(object_id, f"Mask {object_id}") + " [Estimated]"
+            self.layers.update(presentation.current.prediction, presentation.current.frame.shape[1::-1], labels, active_id=active_id)
+            self.key = key
+        return self.layers.render(presentation.current.frame, show_masks=self.show_masks, show_rectangles=self.show_rectangles)
+
+    def controls(self, panel, y, preview_size, tray_caption):
+        button_width = min(165, (preview_size[0] - 30) // 2)
+        self.layer_buttons = []
+        for x, name, key, enabled, status in (
+            (10, "MASK", "m", self.show_masks, "ON" if self.show_masks else "OFF"),
+            (20 + button_width, "TRAY", "t", self.show_rectangles, tray_caption),
+        ):
+            rect = (x, y, x + button_width, y + 28)
+            color = (90, 65, 40) if enabled else (55, 55, 55)
+            if name == "TRAY" and enabled and not status.startswith("ON"):
+                color = (45, 85, 120)
+            cv2.rectangle(panel, rect[:2], rect[2:], color, -1)
+            draw_text(panel, f"{name} [{key.upper()}]: {status}", (x + 8, y + 20), size=13)
+            self.layer_buttons.append((rect, key))

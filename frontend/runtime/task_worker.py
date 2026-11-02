@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 
+from ..config import PROJECT_ROOT
 from components.sam3.video import VideoPredictor
 from components.tracking import create_tracker
 
@@ -38,16 +39,16 @@ class TaskWorker:
         self.previous_context = None
         self.timing_dir = None
         if profile:
-            self.timing_dir = Path(__file__).resolve().parents[1] / "outputs/tracking_comparison" / f"sam_{uuid4().hex[:12]}"
+            self.timing_dir = PROJECT_ROOT / "outputs/tracking_comparison" / f"sam_{uuid4().hex[:12]}"
             self.timing_dir.mkdir(parents=True)
             run = {"model": model_id, "tracker": tracker,
                    "tracker_model": self.tracker.model_id if self.tracker is not None else model_id,
                    "requested_device": device, "profile": True, "tray_search": tray_search,
                    "versions": {name: importlib.metadata.version(name) for name in ("torch", "transformers", "opencv-python")},
                    "model_precision": "float32", "inference_state_device": "cpu"}
-            root = Path(__file__).resolve().parents[1]
+            root = PROJECT_ROOT
             run["source_hashes"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
-                "frontend/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
+                "frontend/runtime/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
             if self.tracker is not None:
                 name = f"components/tracking/{tracker}.py"
                 run["source_hashes"][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()

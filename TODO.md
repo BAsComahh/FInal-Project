@@ -20,7 +20,7 @@
 
 ## 1. 桌面检测与标定
 
-主要证据：[桌边检测](components/boundary_detection/table.py)、[桌面设置](frontend/table_setup.py)、[工作流](frontend/workflow.py)、[Homography](components/homography/geometry.py)。
+主要证据：[桌边检测](components/boundary_detection/table.py)、[桌面设置](frontend/calibration/view.py)、[运行层](frontend/runtime/session.py)、[Homography](components/homography/geometry.py)。
 
 - [x] B01 自动提出桌边／四角，并由用户确认；检测失败转手动登记。
 - [x] B02 手动任意顺序选择四角，排序、校验凸四边形，支持撤回、清空和重新自动检测。
@@ -34,7 +34,7 @@
 
 ## 2. 单位、地形与可配置信息
 
-主要证据：[类型与实例](components/registration/units.py)、[PDF reader](components/registration/pdf_reader.py)、[规则输入](components/registration/rule_state.py)、[规则编辑表单](frontend/rule_editor.py)。
+主要证据：[类型与实例](components/registration/units.py)、[PDF reader](components/registration/pdf_reader.py)、[规则输入](components/registration/rule_state.py)、[规则编辑表单](frontend/scene_editing/dialogs.py)。
 
 - [x] U01 输入只需 type；绑定时分别生成实例编号。同 type 可有多个独立实例，不要求预声明数量或 ID。
 - [x] U02 独立 type 计数，重复绑定同 type 保号；解除绑定或撤回草稿单位释放编号，不重排其他实例。
@@ -52,7 +52,7 @@
 
 ## 3. 首帧注册与保存生命周期
 
-主要证据：[视频 predictor](components/sam3/video/predictor.py)、[工作流](frontend/workflow.py)、[窗口](frontend/window.py)、[reference 导出](components/registration/references.py)。
+主要证据：[视频 predictor](components/sam3/video/predictor.py)、[运行层](frontend/runtime/session.py)、[窗口](frontend/window.py)、[reference 导出](components/registration/references.py)。
 
 - [x] R01 首帧正点／负点提示、多对象分割及逐点撤回。
 - [x] R02 分割模式与类型标注模式分开；点击 mask＋type 或拖放 type 绑定，支持改绑与解除绑定。
@@ -83,7 +83,7 @@
 
 ## 5. 视频跟踪与身份恢复
 
-主要证据：[SAM 视频接口](components/sam3/video/predictor.py)、[串行任务](frontend/task_worker.py)、[工作流](frontend/workflow.py)。
+主要证据：[SAM 视频接口](components/sam3/video/predictor.py)、[串行任务](frontend/runtime/task_worker.py)、[运行层](frontend/runtime/session.py)。
 
 - [x] T01 SAM 根据注册对象 ID 传播视频 mask；低频后台推理，视频按源帧率时钟推进，模型忙时保留最近结果。
 - [x] T02 区分源视频帧号、会话帧号、显示帧与推理快照；携带时间及素材来源，旧注册代次的异步结果不会覆盖新注册。
@@ -115,7 +115,7 @@
 
 ## 7. 叠加层与解说交互
 
-主要证据：[视频窗口](frontend/window.py)、[显示缓存](frontend/layers.py)、[规则面板](frontend/rules_panel.py)、[独立俯视显示](components/homography/units.py)。
+主要证据：[视频窗口](frontend/window.py)、[显示缓存](frontend/shared/layers.py)、[查询控制器](frontend/geometry_tools/controller.py)、[独立俯视显示](components/homography/units.py)。
 
 - [x] I01 拉正战场上的 mask 与托盘独立开关；关闭显示不影响推理或已注册身份。
 - [x] I02 已有 mask／托盘边框、实例编号、注册选中高亮；完成并播放后隐藏注册侧栏，暂停保留播放布局。
@@ -211,6 +211,7 @@
 - [x] S05 Real-ESRGAN Vulkan 超分包装及独立 CLI；它是可选图像实验工具，未证明可以提高当前视频托盘精度。
 - [x] S06 桌边长度／距离配置改为图像短边百分比，托盘局部容差使用托盘短边百分比，CLI 与诊断滑块同步更新；几何尺度检查通过。真实图缩小仍可能缺边，多分辨率检测收益尚待评估；见 [项目思路](项目思路.md#检测几何参数的百分比归一化)。
 - [ ] S07 **可选实验**：用 Canny 边缘约束 LSD 候选。目前只有独立实验，尚未合入正式检测；没有证据时不增加主流程复杂度。
+- [x] S08 按流程拆分 frontend：注册、直播、几何查询、桌面标定与场景编辑各有目录，共享 runtime 维护源时钟、唯一模型队列及观测接纳；app 协调阶段，window 只负责原生窗口。入口、布局、保存锁与异步语义保持；恢复、what-if、replay 不建占位实现。模块导航见 [前端结构](frontend/README.md#结构)。已完成内联流程、页面对照及 RX 7900 XT 实际视频短测，未替代原生窗口或精度验收。
 
 ## 15. 版本差异与暂不扩展范围
 
@@ -239,7 +240,7 @@ P1：影响规则可信度，建议优先处理。P2：影响数据表达、交�
 
 ### Q02 · P1 · 场景不完整的 LOS 保护只存在于界面
 
-位置：[rules_panel.py:15](frontend/rules_panel.py#L15)、[queries.py:47](components/game_rules/queries.py#L47)、[CLI](tools/query_rules.py)。
+位置：[_query](frontend/geometry_tools/controller.py)、[queries.py:47](components/game_rules/queries.py#L47)、[CLI](tools/query_rules.py)。
 
 UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 uncertain；独立 CLI 直接调用组件，绕过这层保护。同一输入包含“Mask 3 没有有效托盘”的警告，行内实际得到：**组件 clear，UI uncertain**。修改警告文案还可能让字符串保护失效。
 
@@ -255,7 +256,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q04 · P2 · 暂停／片段结束后不会追上当前显示帧
 
-位置：[workflow.py:463](frontend/workflow.py#L463)、[workflow.py:526](frontend/workflow.py#L526)、[window.py:169](frontend/window.py#L169)。
+位置：[运行调度](frontend/runtime/session.py)、[直播显示](frontend/live/view.py)。
 
 传播提交要求 `self.playing`。到片段结尾先 pause，再调度；人工暂停也同样关闭后续传播。因此即使已有后台任务结束，它也可能只更新到更早帧。行内调度检查：显示帧 300、上次提交 240、已暂停且后台空闲，**不会提交补算**。播放布局还隐藏了普通 mask age，容易让用户对着较新画面选择较旧几何。
 
@@ -263,7 +264,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q05 · P2 · Obstacle Height 没有落实需求约束
 
-位置：[edit_terrain](frontend/rule_editor.py#L75)、[场景校验](components/game_rules/scene.py)。
+位置：[edit_terrain](frontend/scene_editing/dialogs.py)、[场景校验](components/game_rules/scene.py)。
 
 需求将 Obstacles 的规则 Height 定为 1；地形表单所有类别共用一个可为空的数字输入，场景校验也只检查非负数。因此可登记 `kind=obstacle, height=None` 或其他数值，影响 LOS。此项由表单和校验代码确认，未做原生弹窗实测。
 
@@ -271,7 +272,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q06 · P2 · 规则面板只展示第一条警告
 
-位置：[rules_panel.py:211](frontend/rules_panel.py#L211)。
+位置：[查询显示](frontend/geometry_tools/view.py)。
 
 面板只取 `warnings[:1]`，之后又按两行截断。移动接口默认就带通用估计警告，排在后面的缺失几何、朝向歧义、未支持规则等信息可能看不到。接口保存了警告并不等于操作者能读到关键限制。
 
@@ -279,15 +280,15 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q07 · P3 · FPS 统计位于播放布局提前返回之后
 
-位置：[window.py:169](frontend/window.py#L169)、[window.py:183](frontend/window.py#L183)。
+位置：[注册页统计](frontend/registration/view.py)、[直播显示](frontend/live/view.py)。
 
-播放态 `_render` 已提前返回，后面的 `if flow.playing` 才尝试追加 `render_times`；正常流程中 playing=True 时 stage 也是 PLAYBACK，因而该统计分支不会采样。相关 deque、last_rendered_frame、重置处理和显示文本成为无效维护负担。这是控制流结论，未把旧短测 FPS 当作当前指标。
+重构前播放态 `_render` 提前返回，后面的 `if flow.playing` 不会采样；现已按职责迁入注册页的同一统计分支，直播页另行绘制，正常 playing=True 时仍处于 PLAYBACK，因而该分支仍不采样。相关 deque、last_rendered_frame、重置处理和显示文本成为无效维护负担。这是控制流结论，未把旧短测 FPS 当作当前指标。
 
 - [ ] Q07 若继续测 FPS，将采样放到共同渲染路径；若产品不展示它，则删除整组无效统计状态。两者选一即可。
 
 ### Q08 · P3 · 旧的整表加载路径与当前双军表入口重复
 
-位置：[workflow.load_units](frontend/workflow.py#L184)、[window._unit_action](frontend/window.py#L94)。
+位置：[RegistrationController.load_units](frontend/registration/controller.py)、[VideoApplication._unit_action](frontend/app.py)。
 
 仓库内没有 `load_units(...)` 调用点；当前侧栏导入走 `import_unit_list`，`_unit_action` 还保留旧 `load` 别名并转到 A 导入。两套路径的状态清理不完全一致：旧 `load_units` 继承绑定，却不清理相应正面。当前正常界面不走该路径，故不作为已发生的界面故障。
 
@@ -305,7 +306,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 - [ ] Q10 同步 Harris 已移除、box prompt 的版本差异、动态状态人工维护、72／48 输入方向，以及“素材播放”和“历史回放”的区别。`docs/` 被 Git 忽略也意味着其中的更新默认不会纳入版本记录；是否调整忽略范围另作决定，本轮不改 `.gitignore`。
 
-此外，[draw_text](frontend/annotation_panel.py#L16) 的非 ASCII 字体写死为 Windows 微软雅黑。当前 Windows 环境可以沿用；若以后需要在 ICF／Linux 或其他电脑运行界面，再增加字体回退即可，不必现在扩展 UI 框架。
+此外，[draw_text](frontend/shared/drawing.py) 的非 ASCII 字体写死为 Windows 微软雅黑。当前 Windows 环境可以沿用；若以后需要在 ICF／Linux 或其他电脑运行界面，再增加字体回退即可，不必现在扩展 UI 框架。
 
 不建议仅为减少行数合并所有几何函数或所有线程：纯 Python 规则几何与 OpenCV／NumPy 图像几何的边界有价值；SAM 串行任务保证会话顺序，独立规则线程避免查询阻塞模型。优先删除失效分支、统一相同语义的规则判定与数据传递。
 
@@ -318,9 +319,9 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 5. **基于确认历史扩展解说能力**：H03／H06／H07、P02–P05、W01–W04；不把原始视频播放当作历史局面重建。
 6. **按实际痛点精简**：Q07／Q08／Q09／Q10 与 S06；可选项保持可选，Charge／3D 继续延期。
 
-## 18. 本轮证据与检查边界
+## 18. 首次 TODO 核对的证据与检查边界（2026-10-31）
 
-使用本机 `sam3-demo`：Python 3.13.16、Transformers 5.18.0。检查方式是源码对照与行内运行，没有新增测试文件。
+以下保留首次核对的证据范围；后续追踪失败与前端重构的 GPU／流程验证见 E08、S08 和项目设计记录。首次核对使用本机 `sam3-demo`：Python 3.13.16、Transformers 5.18.0，采用源码对照与行内运行，没有新增测试文件。
 
 - 对 81 个 Python 文件做语法解析；不是逐个函数的行为验证。
 - 重新读取两份真实 PDF，验证各自合计、独立编号、编号释放复用及只替换一方时保留另一方属性。

@@ -1,28 +1,9 @@
-"""Cached unit-list sidebar for the desktop registration window."""
+"""Cached A/B type catalog sidebar."""
 
-from functools import lru_cache
 from pathlib import Path
-
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
-
-@lru_cache(maxsize=8)
-def _font(size):
-    return ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", size)
-
-
-def draw_text(image, text, position, color=(230, 230, 230), size=15):
-    text = str(text)
-    if text.isascii():
-        cv2.putText(image, text, position, cv2.FONT_HERSHEY_SIMPLEX, size / 30, color, 1, cv2.LINE_AA)
-    else:
-        # Keep channel order unchanged: fill is already BGR/BGRA like the canvas.
-        canvas = Image.fromarray(image)
-        ImageDraw.Draw(canvas).text(position, text, font=_font(size), fill=color, anchor="ls")
-        image[:] = np.asarray(canvas)
-
+from ..shared.drawing import draw_text
 
 class UnitPanel:
     WIDTH = 520

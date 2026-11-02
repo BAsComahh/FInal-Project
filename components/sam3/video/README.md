@@ -4,9 +4,9 @@
 
 `initialize(frame, object_ids, masks, source_frame=...)` 使用本机 Transformers 5.18.0 官方 `init_video_session` 和 `add_inputs_to_inference_session(input_masks=...)`，为重新标定后的图像建立新会话。应用在独立的 predictor 副本上调用，复用模型／processor，成功后替换旧会话；不变换旧时序记忆，也不重新开放播放后的点击修改。已使用实际 processor/session 和替身模型检查 API，尚未以真实 SAM3 权重完成重新标定视频回归。官方依据：[Meta 跟踪器](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。
 
-前端 `--profile` 把各任务及错误记录到新的 `outputs/tracking_comparison/sam_.../`，目录在终端显示；不保存提示点、图像或中间 reference。原 session、FP32 和 CPU state 策略保持当前基准配置。本轮没有测得有效 GPU 推理时间。
+前端 `--profile` 把各任务及错误记录到新的 `outputs/tracking_comparison/sam_.../`，目录在终端显示；不保存提示点、图像或中间 reference。原 session、FP32 和 CPU state 策略保持当前基准配置。RX 7900 XT 真实权重及实际视频短测已验证接入与日志输出，尚未进行公平性能或身份准确率评测，证据范围见 [项目设计记录](../../../项目思路.md)。
 
-本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `frontend/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
+本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `frontend/runtime/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
 
 完整视频示范从 [frontend](../../../frontend/README.md) 启动：
 

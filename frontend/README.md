@@ -66,12 +66,15 @@ TRAY 按钮显示当前状态：`NO CALIB` 缺标定、`NO SIZES` 缺已绑定�
 
 ```text
 frontend/__main__.py                 命令行入口
-frontend/window.py                   窗口、输入事件、文件选择与绘制
-frontend/workflow.py                 桌角确认、注册草稿与播放调度
-frontend/task_worker.py              串行后台 SAM 操作及可选托盘计算
-frontend/table_setup.py              首帧桌角检测确认及任意顺序手动标记
-frontend/annotation_panel.py         A／B 双列类型侧栏与独立滚动
-frontend/layers.py                   mask／矩形的独立显示缓存
+frontend/window.py                   OpenCV 窗口生命周期与事件循环
+frontend/app.py                      流程组装、阶段衔接与输入路由
+frontend/runtime/                    视频源、串行任务、观测接纳与历史
+frontend/registration/               首帧提示草稿、军表、绑定及 reference 发布
+frontend/calibration/                首次桌面标定与 B08 事务、四角和尺寸页面
+frontend/live/                       LIVE／HELD 显示、播放布局和只读失败名单
+frontend/geometry_tools/             查询选择、后台计算与测量叠加
+frontend/scene_editing/              单位资料、初始正面和地形的受控编辑
+frontend/shared/                     文字、坐标换算与 mask／托盘图层缓存
 frontend/image/                      独立图片点选及注册窗口
 components/video_io/source.py        视频解码、帧号和源时间
 components/game_data.py              本局共享数据、观测快照及矩形状态历史
@@ -81,9 +84,13 @@ components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过组合持有 `RegistrationWorkflow`，不代理对方属性。窗口保存图层开关、拖拽和显示缓存；工作流保存 TABLE／REGISTER／PLAYBACK／RECALIBRATE 阶段、模型准备、注册草稿及播放状态，并通过 `workflow.data` 持有一个本局 `GameData`。显示冻结仍处于 PLAYBACK，显式重新标定进入 RECALIBRATE；最终保存目录存在即表示注册已锁定。组件不导入前端；旧视频组件中的窗口、侧栏和 source 转发文件已移除。
+`VideoWindow` 通过 `window.app` 持有 `VideoApplication`。应用组装各控制器与视图，保留 TABLE／REGISTER／PLAYBACK／RECALIBRATE 四阶段；`app.session.data` 是唯一的本局 `GameData`。运行层不随当前工具关闭或重启，直播控制器独立管理冻结快照。显示冻结仍处于 PLAYBACK，显式重新标定进入 RECALIBRATE；最终保存目录存在即表示注册已锁定。组件不导入前端，不使用动态属性转发或 mixin 共享全部状态。
 
-推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；无需窗口时可使用 `RegistrationWorkflow` 或各独立组件。单位与 reference 接口见 [registration](../components/registration/README.md)。
+推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；程序化驱动使用 `frontend.app.VideoApplication`。单位与 reference 接口见 [registration](../components/registration/README.md)。
+
+修改提示、撤回、编号或保存规则时先看 `registration/controller.py`；修改注册页布局和拖放时看同目录 `view.py`／`unit_panel.py`。修改直播页及失败名单时看 `live/`；修改几何查询调度和测量显示时看 `geometry_tools/`；修改属性、正面或地形输入时看 `scene_editing/`。初始标定和 B08 位于 `calibration/`，视频调度与模型队列位于 `runtime/`。只有跨流程的阶段切换、重置与输入优先级才需要改 `app.py`。
+
+恢复、what-if 和 replay 尚未实现，不创建占位目录。未来恢复只处理失败的已有实例，可复用注册控件，但不能重新分配实例 ID 或解锁整场注册。what-if／replay 分别提供布局副本／重建历史场景，几何组件继续消费显式场景；这些边界不代表已具备对应功能。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
@@ -94,27 +101,28 @@ components/boundary_detection/tray/  已有托盘拟合及批量适配
 [GameData](../components/game_data.py) 定义在一个文件中，每个工作流独立创建实例，不使用模块全局单例。新增公共业务数据在该类中增加明确字段，现有结构为：
 
 ```text
-workflow.data
+app.session.data
   board              原图大小、桌面毫米尺寸、桌角和 Homography
   units              UnitRoster：类型、单位实例、属性及 object_id 绑定
   rules              RuleState：人工正面和地形
   current            最新显示帧、匹配的推理帧／结果／源帧时间、显示版本
   history            矩形位置和当时状态的独立副本
   calibrations       各版本标定、源帧及 reference 来源
+  tracking           按稳定 unit ID 保存可见性、缺失计时与失败锁定
   reference_folder   已完成注册的保存目录，也是注册锁定依据
 ```
 
-`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；仅由工作流在核对任务 generation 后调用。完成注册成功保存后记录初始历史，后续接纳传播结果或人工修改已注册单位状态后调用 `data.record_history()`。每条历史包含 `frame_index`、`timestamp_seconds` 及按本局 `unit_id` 索引的 `units`；单位条目为 `corners_mm`、`position_status` 和 `state`。`state` 当前包含 `engaged`、`wavering`、`facing`，未知值保留为 null。没有有效托盘时位置为 null／unavailable；available 仅表示有几何结果，不是正确率判断。相同帧、矩形及状态不重复追加。
+`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定并记录初始观测。完成注册成功保存后记录初始历史，后续接纳传播结果或人工修改已注册单位状态后调用 `data.record_history()`。每条历史包含 `frame_index`、`timestamp_seconds` 及按本局 `unit_id` 索引的 `units`；单位条目为 `corners_mm`、`position_status` 和 `state`。`state` 当前包含 `engaged`、`wavering`、`facing`，未知值保留为 null。没有有效托盘时位置为 null／unavailable；available 仅表示有几何结果，不是正确率判断。相同帧、矩形及状态不重复追加。
 
-`workflow.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史或整个标定版本列表。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。矩形历史及帧元数据包含 `calibration_version`，可在 `data.calibrations` 中找到当时的矩阵和实际尺寸，旧历史不随重新标定改写。
+`app.live.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史或整个标定版本列表。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。矩形历史及帧元数据包含 `calibration_version`，可在 `data.calibrations` 中找到当时的矩阵和实际尺寸，旧历史不随重新标定改写。
 
-历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话、模型记忆及任务队列仍由算法／工作流管理。
+历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话及记忆由算法适配器管理，唯一模型队列由运行层管理。
 
 ## 追踪失败判定与只读名单
 
 完成注册后启用持续无 mask 判定。修改 [config.py](config.py) 的 `TRACKING_DISAPPEARANCE_SECONDS` 可调整缺失阈值，默认 10 秒，须为正的有限数；程序启动时读取，不新增设置控件。首次无有效 mask 的源视频时间保存为 `disappeared_time`，不同源帧的后续缺失观测才推进计时。阈值前恢复非空 mask 自动清零；单纯卡顿、同帧刷新和显示冻结不累计新的失败证据。
 
-`workflow.data.tracking[unit_id]` 保存 `visibility`（最近一次是否有非空 mask）、`status`（tracking／pending／failed）、`disappeared_time`、最近观测帧／时间／标定版本及 `last_accepted_position`。最后位置有自己的源帧与版本；它表示按当前业务假设曾被接纳，不是测得的身份置信度。显式 `routed=True`／`removed=True` 的属性令记录不在场并排除失败名单；正式移除编辑入口尚未实现。
+`app.session.data.tracking[unit_id]` 保存 `visibility`（最近一次是否有非空 mask）、`status`（tracking／pending／failed）、`disappeared_time`、最近观测帧／时间／标定版本及 `last_accepted_position`。最后位置有自己的源帧与版本；它表示按当前业务假设曾被接纳，不是测得的身份置信度。显式 `routed=True`／`removed=True` 的属性令记录不在场并排除失败名单；正式移除编辑入口尚未实现。
 
 超时才在播放页出现 A／B 双列，只列失败实例，显示 ID、type、Damage 摘要及最后位置时间，支持分别滚动；没有 Damage 时显示 `?`。名单与当前 LIVE／HELD 观测一致。失败后重新出现的 mask 标为 `[Estimated]`，仍保持失败，不进入当前规则位置、朝向更新或有效位置历史。已有 mask 但拟合失败只导致当前几何不可用，不进入这份失踪名单；旧位置不会自动填回。
 

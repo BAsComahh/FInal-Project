@@ -3,7 +3,8 @@
 import cv2
 import numpy as np
 
-from .annotation_panel import UnitPanel, draw_text
+from ..registration.unit_panel import UnitPanel
+from ..shared.drawing import draw_text
 
 
 class MissingUnitPanel:
