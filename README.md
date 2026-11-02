@@ -18,6 +18,8 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 本局公共数据集中在 [GameData](components/game_data.py)：桌面标定、单位资料、最新观测和矩形／状态历史由同一个实例维护。历史只存在内存中；冻结分析画面时，后台继续更新实时数据。
 
+完成注册后按源视频时间检测持续无 mask，默认 10 秒，通过 [frontend/config.py](frontend/config.py) 修改。超时实例进入 A／B 失败名单；重新出现的 mask 只标 `Estimated`，不自动恢复为有效位置。自动恢复及人工补标记仍待实现，详见[失败判定说明](frontend/README.md#追踪失败判定与只读名单)及[需求与待澄清列表](待澄清列表.md)。
+
 播放页的 `Recalibrate [K]` 可在当前帧重新选四角并确认尺寸，迁移可用 mask、地形与朝向估计，保留单位 ID 和原始 reference。成功后更新标定版本并继续播放，Esc 取消；详情见[重新标定流程](frontend/README.md#比赛中重新标定)。
 
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。

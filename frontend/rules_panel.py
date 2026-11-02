@@ -244,7 +244,10 @@ class RulesPanel:
                 cv2.circle(preview, tuple(point), 4, (0, 220, 255), -1)
         if view.current.prediction is not None and view.board.image_to_plane is not None:
             inverse = np.linalg.inv(view.board.image_to_plane)
+            unavailable = set(view.current.prediction.get("unavailable_ids", [])) | set(view.current.prediction.get("inactive_ids", []))
             for object_id, front in view.rules.fronts.items():
+                if object_id in unavailable:
+                    continue
                 tray = view.current.prediction.get("trays", {}).get(object_id)
                 if tray is None:
                     continue

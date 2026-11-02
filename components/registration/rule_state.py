@@ -27,7 +27,10 @@ class RuleState:
                                   "frame_index": frame_index, "source": "manual"}
 
     def observe(self, prediction, frame_index):
+        unavailable = set(prediction.get("unavailable_ids", [])) | set(prediction.get("inactive_ids", []))
         for object_id, front in self.fronts.items():
+            if object_id in unavailable:
+                continue
             tray = prediction.get("trays", {}).get(object_id)
             if tray is None:
                 continue
@@ -43,9 +46,13 @@ class RuleState:
         if roster is None or prediction is None:
             raise ValueError("Register unit masks and bind their types first.")
         units, warnings = [], []
-        for object_id in roster.bindings.keys() - set(prediction["object_ids"]):
-            warnings.append(f"{roster.bindings[object_id]} has no current tracking mask; the registered scene is incomplete.")
+        inactive = set(prediction.get("inactive_ids", []))
+        unavailable = set(prediction.get("unavailable_ids", [])) | (roster.bindings.keys() - set(prediction["object_ids"]))
+        for object_id in unavailable - inactive:
+            warnings.append(f"{roster.bindings[object_id]} has no accepted tracking position; the registered scene is incomplete.")
         for object_id in prediction["object_ids"]:
+            if object_id in unavailable or object_id in inactive:
+                continue
             unit_id = roster.bindings.get(object_id)
             tray = prediction.get("trays", {}).get(object_id)
             if unit_id is None or tray is None:

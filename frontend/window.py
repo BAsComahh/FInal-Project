@@ -12,6 +12,7 @@ from .layers import VideoLayers, overlay_masks
 from .table_setup import TableSetup
 from .workflow import RegistrationWorkflow, Stage
 from .rules_panel import RulesPanel
+from .missing_panel import MissingUnitPanel
 
 
 class VideoWindow:
@@ -23,6 +24,7 @@ class VideoWindow:
         self.workflow = RegistrationWorkflow(video, **options)
         self.preview_width_limit = preview_width
         self.unit_panel = UnitPanel()
+        self.missing_panel = MissingUnitPanel()
         self.table_setup = TableSetup(self.workflow.initial_frame,
                                       board_size_in=np.asarray(self.workflow.data.board.board_size_mm) / 25.4)
         self.rules = RulesPanel()
@@ -92,8 +94,10 @@ class VideoWindow:
         if key != self._layer_key:
             if self.layers.size != self.preview_size:
                 self.layers = VideoLayers(self.preview_size)
-            self.layers.update(view.current.prediction, view.current.frame.shape[1::-1],
-                               view.units.bindings if view.units else None,
+            labels = dict(view.units.bindings) if view.units else {}
+            for object_id in (view.current.prediction or {}).get("estimated_ids", []):
+                labels[object_id] = labels.get(object_id, f"Mask {object_id}") + " [Estimated]"
+            self.layers.update(view.current.prediction, view.current.frame.shape[1::-1], labels,
                                active_id=None if flow.stage is Stage.PLAYBACK else flow.active_id)
             self._layer_key = key
         selection = (id(flow.data.units), flow.selected_type)
@@ -225,11 +229,14 @@ class VideoWindow:
             self._draw_loading_progress(preview)
         if flow.stage is Stage.PLAYBACK:
             width, height = self.preview_size
-            tracked = (flow.data.current.prediction or {}).get("object_ids", [])
-            missing = [unit for obj, unit in flow.data.units.bindings.items() if obj not in tracked]
+            missing = self.missing_panel.failed_units(view)
             show_status = flow.model_failed or flow.pending_play or bool(missing)
-            panel = np.full((height + (272 if show_status else 232), width, 3), 30, dtype=np.uint8)
-            panel[:height] = preview
+            panel_height = max(332 if missing else 0, height + (272 if show_status else 232))
+            panel_width = width + (self.missing_panel.WIDTH if missing else 0)
+            panel = np.full((panel_height, panel_width, 3), 30, dtype=np.uint8)
+            panel[:height, :width] = preview
+            if missing:
+                panel[:, width:] = self.missing_panel.render(panel_height, view)
             self._draw_layer_controls(panel, height + 8)
             self.view_buttons = []
             labels = (("view", "Return live [Space]" if flow.display_snapshot is not None else "Hold view [Space]"),
@@ -249,7 +256,7 @@ class VideoWindow:
             self.rules.controls(panel, self.preview_size, height + 92, flow)
             if show_status:
                 status = (flow.note if flow.model_failed or flow.pending_play else
-                          "No tracking masks: " + ", ".join(missing) + ". Unit identities retained.")
+                          "Tracking failed: " + ", ".join(missing) + ". Returned masks remain Estimated.")
                 limit = max(24, width // 7)
                 for row in range(2):
                     draw_text(panel, status[row * limit:(row + 1) * limit], (10, height + 238 + row * 18),
@@ -395,6 +402,9 @@ class VideoWindow:
                         self.dirty = True
                 return
         if flow.stage is Stage.PLAYBACK:
+            if x >= width and event == cv2.EVENT_MOUSEWHEEL:
+                self.missing_panel.scroll(x - width, -3 if (flags >> 16) > 0 else 3)
+                self.dirty = True
             return
         if self.drag_type is not None:
             if event == cv2.EVENT_MOUSEMOVE:

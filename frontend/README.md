@@ -110,6 +110,16 @@ workflow.data
 
 历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话、模型记忆及任务队列仍由算法／工作流管理。
 
+## 追踪失败判定与只读名单
+
+完成注册后启用持续无 mask 判定。修改 [config.py](config.py) 的 `TRACKING_DISAPPEARANCE_SECONDS` 可调整缺失阈值，默认 10 秒，须为正的有限数；程序启动时读取，不新增设置控件。首次无有效 mask 的源视频时间保存为 `disappeared_time`，不同源帧的后续缺失观测才推进计时。阈值前恢复非空 mask 自动清零；单纯卡顿、同帧刷新和显示冻结不累计新的失败证据。
+
+`workflow.data.tracking[unit_id]` 保存 `visibility`（最近一次是否有非空 mask）、`status`（tracking／pending／failed）、`disappeared_time`、最近观测帧／时间／标定版本及 `last_accepted_position`。最后位置有自己的源帧与版本；它表示按当前业务假设曾被接纳，不是测得的身份置信度。显式 `routed=True`／`removed=True` 的属性令记录不在场并排除失败名单；正式移除编辑入口尚未实现。
+
+超时才在播放页出现 A／B 双列，只列失败实例，显示 ID、type、Damage 摘要及最后位置时间，支持分别滚动；没有 Damage 时显示 `?`。名单与当前 LIVE／HELD 观测一致。失败后重新出现的 mask 标为 `[Estimated]`，仍保持失败，不进入当前规则位置、朝向更新或有效位置历史。已有 mask 但拟合失败只导致当前几何不可用，不进入这份失踪名单；旧位置不会自动填回。
+
+本轮名单是只读信息入口；Correct / No、拖放绑定、自动恢复和只针对缺失实例的补标记尚未实现。R 开始新注册会清空状态；B08 保留原 ID 及失败锁定。恢复与桌面重新标定是独立流程，不通过解除首帧全局编辑锁来恢复单位。需求基准及未决问题见 [待澄清列表](../待澄清列表.md)。
+
 ## 比赛中重新标定
 
 播放页点击 `Recalibrate [K]` 或按 K：

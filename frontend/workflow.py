@@ -15,6 +15,8 @@ from components.video_io import VideoSource
 from components.registration import UnitRoster, extract_references, save_registration, read_unit_list_pdf
 from components.game_data import GameData
 from components.recalibration import prepare_recalibration
+from components.tracking.status import validate_disappearance_seconds
+from . import config
 from .task_worker import TaskWorker
 
 
@@ -54,6 +56,7 @@ class RegistrationWorkflow:
             raise ValueError("stride must be positive")
         if calibration is not None and board_size_in is not None:
             raise ValueError("Use either --calibration or --board-size-in, not both.")
+        self.disappearance_seconds = validate_disappearance_seconds(config.TRACKING_DISAPPEARANCE_SECONDS)
         self.data = GameData()
         if calibration is not None:
             self.data.board.source_to_plane, self.data.board.board_size_mm = _read_tray_calibration(calibration)
@@ -617,7 +620,9 @@ class RegistrationWorkflow:
                     prediction["accepted_at"] = perf_counter()
                     if self.pending_trays:
                         prediction = {**prediction, "trays": {}, "tray_errors": {}}
-                    self.data.accept_observation(prediction, request["frame"], request["metadata"])
+                    self.data.accept_observation(
+                        prediction, request["frame"], request["metadata"],
+                        disappearance_seconds=self.disappearance_seconds if self.registration_locked else None)
                     if self.registration_locked and request["kind"] in ("propagate", "recalibrate"):
                         self.data.record_history()
                     if request["kind"] == "click":
@@ -705,6 +710,8 @@ class RegistrationWorkflow:
         folder = save_registration(self.data.current.prediction_frame, overlay, references, metadata,
                                    self.output_dir, roster=self.data.units)
         self.data.reference_folder = folder
+        self.data.accept_observation(self.data.current.prediction, self.data.current.prediction_frame,
+                                     self.data.current.prediction_metadata, disappearance_seconds=self.disappearance_seconds)
         self.data.record_history()
         print(f"Saved: {folder.resolve()}", flush=True)
         self.note = f"Registration complete; final references saved. Space plays. {folder}"
@@ -719,6 +726,7 @@ class RegistrationWorkflow:
         self.stage = Stage.REGISTER
         self.data.reference_folder = None
         self.data.history.clear()
+        self.data.tracking.clear()
         self.data.rules.fronts.clear()
         self.interaction_mode = "segment"
         self.generation += 1
