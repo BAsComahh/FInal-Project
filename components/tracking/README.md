@@ -1,6 +1,6 @@
 # 注册后的候选视频追踪
 
-首帧仍由现有 SAM3 点击分割、撤回、绑定 type，并一次保存 reference。可通过 `--tracker sam3|cutie|edgetam` 选择后续传播；默认 `sam3` 保留对照，LK 已移除。候选不要求预先认识本局兵种，只接收已注册实例的完整 mask 和 ID。
+首帧仍由现有 SAM3 点击分割、撤回、绑定 type，并一次保存 reference。可通过 `--tracker sam3|cutie|edgetam` 选择后续传播；默认 `edgetam`，显式选择 `sam3` 或 `cutie` 可作对照，LK 已移除。传播后端不要求预先认识本局兵种，只接收已注册实例的完整 mask 和 ID。默认运行前需准备下述 EdgeTAM 资产；此切换不表示取得了新的速度或准确率排名。
 
 ## 准备与启动
 

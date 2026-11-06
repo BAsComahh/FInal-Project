@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from ..config import PROJECT_ROOT
+from ..config import DEFAULT_TRACKER, PROJECT_ROOT
 from components.sam3.video import VideoPredictor
 from components.tracking import create_tracker
 
@@ -27,7 +27,7 @@ class TaskWorker:
     """One in-flight request; playback never waits for its result."""
 
     def __init__(self, model_id="facebook/sam3", device=None, *, profile=False, tray_search="full",
-                 tracker="sam3", tracker_model=None, tracker_cache=None):
+                 tracker=DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
         if tray_search not in ("full", "local"):
             raise ValueError("tray_search must be full or local")
         self.predictor = VideoPredictor(model_id, device, profile=profile)

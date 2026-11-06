@@ -8,7 +8,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.window import VideoWindow
-from frontend.config import DEFAULT_UNITS, PROJECT_ROOT
+from frontend.config import DEFAULT_TRACKER, DEFAULT_UNITS, PROJECT_ROOT
 
 
 def main():
@@ -26,8 +26,8 @@ def main():
     parser.add_argument("--preview-width", type=int, default=960, help="Preview width; prompts and masks use full rectified-frame coordinates")
     parser.add_argument("--device", help="Torch device; automatically choose the GPU with the most memory")
     parser.add_argument("--model", default="facebook/sam3")
-    parser.add_argument("--tracker", choices=("sam3", "cutie", "edgetam"), default="sam3",
-                        help="Video propagation backend; first-frame registration always uses SAM3")
+    parser.add_argument("--tracker", choices=("sam3", "cutie", "edgetam"), default=DEFAULT_TRACKER,
+                        help=f"Video propagation backend (default: {DEFAULT_TRACKER}); first-frame registration always uses SAM3")
     parser.add_argument("--tracker-model", help="Optional local checkpoint or HF model ID for the selected candidate")
     parser.add_argument("--tracker-cache", type=Path, help="Candidate model cache root (default: outputs/model_cache)")
     parser.add_argument("--profile", action="store_true", help="Synchronize GPU phase timing; may add profiling overhead")

@@ -1,20 +1,50 @@
 # Project working agreements
 
-## Requirement records
+## Root documents and working context
+
+The root files below are maintained project records. Preserve their
+decisions, evidence and open questions during refactoring or cleanup; do not
+treat them as disposable handoff notes just because a task is complete.
+
+| File | Purpose and authority |
+| --- | --- |
+| `AGENTS.md` | Working agreements and required development practices. |
+| `README.md` | Current capabilities, startup commands and module navigation. |
+| `项目思路.md` | Design rationale, assumptions, algorithms, sources and experimental evidence for the dissertation. |
+| `TODO.md` | Implementation status, remaining tasks and known issues; not a source of new approved requirements. |
+| `待澄清列表.md` | Confirmed tracking-failure/recovery requirements, terminology and unresolved decisions; proposed answers remain unapproved. |
+| `澄清列表回复.txt` | Original user answers. Preserve as source material; later explicit decisions and their synchronized records supersede conflicting answers. |
+| `追踪优化调研与执行计划.md` | Scoped tracking research, candidate approaches and experiment plans; dated findings and proposals must be checked against current code and later decisions. |
+| `待人工确认.md` | Local verification checklist. Git-ignored; do not stage or commit it. |
+
+Before substantial implementation, read this file and the relevant sections
+of `项目思路.md` and `TODO.md`; inspect `git status` and the current diff before
+editing. Consult the requirement and research records relevant to the task.
+Use section-level reading when possible rather than loading every document
+in full for each small change. Keep these records synchronized when their
+requirements, implementation status or design changes. Remove temporary
+handoffs only after retaining their lasting content in the appropriate record
+and updating references.
 
 Use the confirmed decisions and terminology in `待澄清列表.md` as the current
-requirement baseline for tracking failure and unit recovery. `TODO.md` records
-implementation status; `项目思路.md` records design and evidence. Open questions
+requirement baseline for tracking failure and unit recovery. Open questions
 and suggested answers are not approved requirements. New explicit user
 decisions take precedence and must be synchronized into these documents;
 do not silently replace a recorded decision with a conversational assumption.
-`待人工确认.md` is a separate, Git-ignored local verification checklist.
 
 Frontend workflow ownership and navigation are documented in
 `frontend/README.md`. Keep the shared runtime independent of the displayed
 tool; initial registration, board recalibration, scene editing and geometry
 queries have separate controllers. Recovery, what-if and replay are still
 unimplemented; do not add placeholder flows or reopen registration for them.
+
+The 2026-11-06 product target is continuous display and source playback for
+all post-start workflows, including recovery, geometry tools and B08; a
+stop-source fallback is not currently accepted. Existing HELD queries and
+B08's paused transaction do not yet meet this target. Keep current behavior
+distinct from the pending redesign; resolve the relevant CL questions first.
+EdgeTAM is now the default propagation backend, initialized from SAM3's
+registered masks; explicit SAM3 and Cutie selection remain available.
 
 ## SAM-related work
 
@@ -48,6 +78,11 @@ registration: reuse its UI only for failed existing instances, retain their
 IDs and attributes, and preserve unaffected units. It does not reopen global
 point/type editing, create replacement instance IDs, or change the table
 Homography. Recovery session integration is still pending, not implemented.
+The 2026-11-06 manual-intervention requirement also allows the operator to
+mark a tracked instance as a detection error and request scoped manual
+recovery directly. It does not allow silently taking another assigned unit's
+identity. Ambiguous instance matches require human assignment, even with
+high appearance similarity; never randomly swap physical IDs or histories.
 
 The input unit catalog supplies types only. Assigning type A to successive
 masks generates A1, A2, etc.; each type has its own counter. Do not require

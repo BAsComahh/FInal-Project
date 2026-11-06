@@ -78,7 +78,7 @@ frontend/shared/                     文字、坐标换算与 mask／托盘图�
 frontend/image/                      独立图片点选及注册窗口
 components/video_io/source.py        视频解码、帧号和源时间
 components/game_data.py              本局共享数据、观测快照及矩形状态历史
-components/sam3/video/predictor.py    已有 SAM 模型与官方会话接口
+components/sam3/video/predictor.py   已有 SAM 模型与官方会话接口
 components/registration/             单位表、mask 切图及最终快照保存
 components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
@@ -179,6 +179,8 @@ LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。�
 
 `--profile` 开启 SAM3 GPU 分段同步并导出任务计时到终端给出的 `outputs/tracking_comparison/sam_.../`；额外同步可能影响速度，和正常模式分开比较。候选后端记录包含后处理／回传的操作总时延，不伪造细分 GPU 时间。
 
-`--tracker sam3|cutie|edgetam` 选择注册后的传播模型。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
+`--tracker sam3|cutie|edgetam` 选择注册后的传播模型，默认 `edgetam`（`frontend/config.py` 的 `DEFAULT_TRACKER`）。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
+
+2026-11-06 的新目标是所有播放后流程不冻结画面、不停源，包括几何工具与 B08；尚待统一设计和实现。本页的 HELD／Space／查询快照及 B08 停源说明仍描述当前代码，不是新目标的验收结论。需求与交互缺口见根目录 [待澄清列表](../待澄清列表.md)。
 
 桌角自动检测失败会保留橙色候选边、缺边原因及 Retry／Manual 按钮；不会直接跳到空白手动页，也不会把无效候选当成成功。手动页提供 Auto 重试，手动输入继续优先于迟到的自动结果。

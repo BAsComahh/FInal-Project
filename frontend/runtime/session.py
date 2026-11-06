@@ -11,7 +11,7 @@ from .task_worker import TaskWorker
 class MatchSession:
     def __init__(self, video, data, *, model_id="facebook/sam3", device=None, start=0, seconds=10,
                  inference_fps=2, stride=None, output_dir=None,
-                 profile=False, tray_search="full", tracker="sam3", tracker_model=None, tracker_cache=None):
+                 profile=False, tray_search="full", tracker=config.DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
         if seconds <= 0 or not np.isfinite(seconds):
             raise ValueError("seconds must be positive")
         if inference_fps <= 0 or not np.isfinite(inference_fps):
