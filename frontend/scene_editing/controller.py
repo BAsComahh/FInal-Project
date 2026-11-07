@@ -17,7 +17,7 @@ class SceneEditor:
         if refresh_inputs:
             self.live.refresh_analysis_inputs()
             if self.session.registration_locked:
-                self.data.record_history()
+                self.data.record_history(kind="manual_state", source=self.session.source.metadata())
         self.session.mark_changed()
         self.geometry.invalidate()
 

@@ -264,9 +264,10 @@ class RegistrationController:
         folder = save_registration(self.data.current.prediction_frame, overlay, references, metadata,
                                    self.session.output_dir, roster=self.data.units)
         self.data.reference_folder = folder
+        self.data.start_history(folder, metadata)
         self.data.accept_observation(self.data.current.prediction, self.data.current.prediction_frame,
                                      self.data.current.prediction_metadata, disappearance_seconds=self.session.disappearance_seconds)
-        self.data.record_history()
+        self.data.record_history(kind="registration")
         print(f"Saved: {folder.resolve()}", flush=True)
         self.session.note = f"Registration complete; final references saved. Space plays. {folder}"
         self.session.dirty = True

@@ -14,12 +14,15 @@ from .calibration.controller import CalibrationController, configure_board
 from .calibration.view import CalibrationView
 from .live.controller import LiveController
 from .live.view import LiveView
+from .replay.controller import ReplayController
+from .replay.view import ReplayView
 from .geometry_tools.controller import GeometryController
 from .geometry_tools.view import GeometryView
 from .scene_editing.controller import SceneEditor
 from .scene_editing.view import SceneEditingView
 from .shared.layers import PresentationLayers, overlay_masks
 from .shared.viewport import Viewport
+from .shared.drawing import draw_text
 
 class Stage(Enum):
     TABLE = "table"
@@ -38,6 +41,8 @@ class VideoApplication:
         self.session = MatchSession(video, data, **options)
         self.registration = RegistrationController(self.session)
         self.live = LiveController(self.session)
+        self.replay = ReplayController(self.session)
+        self.replay_view = ReplayView(self.replay)
         self.calibration = CalibrationController(self.session, self.live)
         self.geometry = GeometryController()
         self.editor = SceneEditor(self.session, self.live, self.geometry)
@@ -67,12 +72,22 @@ class VideoApplication:
             self.session.pause_source()
 
     def render(self):
-        if self.stage in (Stage.TABLE, Stage.RECALIBRATE):
+        if self.replay.active:
+            image = self.replay_view.render(self.preview_size)
+        elif self.stage in (Stage.TABLE, Stage.RECALIBRATE):
             image = self.table_setup.render_status(self.preview_size, self.session, self.calibration.context)
         elif self.stage is Stage.PLAYBACK:
             image = self.live_view.render(self.preview_size)
         else:
             image = self.registration_view.render(self.preview_size)
+        if self.session.history_warning:
+            width = image.shape[1]
+            banner = np.full((48, width, 3), (35, 35, 100), dtype=np.uint8)
+            limit = max(20, width // 7)
+            warning = self.session.history_warning
+            for row in range(2):
+                draw_text(banner, warning[row * limit:(row + 1) * limit], (10, 18 + row * 20), size=12)
+            image = np.vstack((image, banner))
         self.dirty = self.session.dirty = False
         return image
 
@@ -160,6 +175,21 @@ class VideoApplication:
         self.live.return_live()
         self.dirty = True
 
+    def _replay_action(self, action):
+        if action in ("open", "live"):
+            self._reset_tools()
+            self.live.return_live()
+            self.display.layer_buttons = []
+            self.geometry_view.buttons = []
+            self.live_view.view_buttons = []
+            self.replay_view.buttons = []
+            self.replay.open() if action == "open" else self.replay.clear()
+        elif action == "refresh":
+            self.replay.refresh()
+        elif action in ("previous", "next"):
+            self.replay.navigate(-1 if action == "previous" else 1)
+        self.dirty = True
+
     def _unit_action(self, action, unit_id=None):
         try:
             if action in ("load", "import_A", "import_B", "calibration"):
@@ -199,6 +229,13 @@ class VideoApplication:
     def _on_mouse(self, event, x, y, flags):
         if self.session.closed:
             return
+        if self.replay.active:
+            if event == cv2.EVENT_LBUTTONDOWN:
+                for rect, action in self.replay_view.buttons:
+                    if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
+                        self._replay_action(action)
+                        break
+            return
         if self.stage in (Stage.TABLE, Stage.RECALIBRATE):
             if self.stage is Stage.RECALIBRATE:
                 rect = self.table_setup.recalibration_cancel_button
@@ -226,6 +263,8 @@ class VideoApplication:
                         self._begin_recalibration()
                     elif action == "clear":
                         self._clear_query()
+                    elif action == "replay":
+                        self._replay_action("open")
                     else:
                         self._toggle_play()
                     return
@@ -267,6 +306,16 @@ class VideoApplication:
 
     def _on_key(self, key):
         if self.session.closed:
+            return
+        if self.replay.active:
+            if key == 27:
+                self._replay_action("live")
+            elif key in (ord("r"), ord("R")):
+                self.reset()
+            elif key in (0x250000, ord("a"), ord("A")):
+                self._replay_action("previous")
+            elif key in (0x270000, ord("d"), ord("D")):
+                self._replay_action("next")
             return
         if self.stage in (Stage.TABLE, Stage.RECALIBRATE):
             if key == 27:
@@ -341,6 +390,10 @@ class VideoApplication:
 
     def advance(self):
         self.session.advance(self.registration, self.calibration)
+        if self.replay.poll():
+            self.dirty = True
+        if self.replay.active:
+            return
         if self.stage is Stage.RECALIBRATE and self.calibration.context is None:
             self.stage = Stage.PLAYBACK
         if self.table_setup.poll():
@@ -367,6 +420,8 @@ class VideoApplication:
         self.dirty = True
 
     def reset(self):
+        self.replay.clear()
+        self.replay_view.buttons = []
         self._reset_tools()
         self.registration_view.drag_type = self.registration_view.drag_position = None
         self.display.layer_buttons = []
@@ -381,6 +436,7 @@ class VideoApplication:
         self.session.schedule(self.registration, self.calibration)
 
     def close(self):
+        self.replay.close()
         self.live.return_live()
         self.session.close()
         self.table_setup.close()

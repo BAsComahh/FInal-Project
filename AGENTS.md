@@ -2,6 +2,13 @@
 
 ## Root documents and working context
 
+The three core project records are `待澄清列表.md` (confirmed requirements and
+open decisions), `TODO.md` (implementation status and remaining work), and
+`项目思路.md` (design, assumptions and evidence). Keep their responsibilities
+distinct and synchronize new decisions across the relevant records. Once user
+answers have been integrated, retain their source through Git history rather
+than maintaining a duplicate reply file.
+
 The root files below are maintained project records. Preserve their
 decisions, evidence and open questions during refactoring or cleanup; do not
 treat them as disposable handoff notes just because a task is complete.
@@ -13,7 +20,6 @@ treat them as disposable handoff notes just because a task is complete.
 | `项目思路.md` | Design rationale, assumptions, algorithms, sources and experimental evidence for the dissertation. |
 | `TODO.md` | Implementation status, remaining tasks and known issues; not a source of new approved requirements. |
 | `待澄清列表.md` | Confirmed tracking-failure/recovery requirements, terminology and unresolved decisions; proposed answers remain unapproved. |
-| `澄清列表回复.txt` | Original user answers. Preserve as source material; later explicit decisions and their synchronized records supersede conflicting answers. |
 | `追踪优化调研与执行计划.md` | Scoped tracking research, candidate approaches and experiment plans; dated findings and proposals must be checked against current code and later decisions. |
 | `待人工确认.md` | Local verification checklist. Git-ignored; do not stage or commit it. |
 
@@ -35,8 +41,12 @@ do not silently replace a recorded decision with a conversational assumption.
 Frontend workflow ownership and navigation are documented in
 `frontend/README.md`. Keep the shared runtime independent of the displayed
 tool; initial registration, board recalibration, scene editing and geometry
-queries have separate controllers. Recovery, what-if and replay are still
+queries have separate controllers. Recovery and what-if are still
 unimplemented; do not add placeholder flows or reopen registration for them.
+Replay is authorized on 2026-11-07 as a separate read-only workflow: completed
+movement and rotation each form a step, ordered by their geometry end time.
+It replaces the visible live view while source playback, tracking and history
+recording continue; returning live must show the latest data.
 
 The 2026-11-06 product target is continuous display and source playback for
 all post-start workflows, including recovery, geometry tools and B08; a

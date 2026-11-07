@@ -19,9 +19,9 @@ class VideoWindow:
                 self.app.advance()
                 if self.app.dirty or self.app.session.dirty:
                     cv2.imshow(self.WINDOW, self.app.render())
-                key = cv2.waitKey(self.app.input_delay())
+                key = cv2.waitKeyEx(self.app.input_delay())
                 if key >= 0:
-                    self.app.on_key(key & 0xff)
+                    self.app.on_key(key)
                 if cv2.getWindowProperty(self.WINDOW, cv2.WND_PROP_VISIBLE) < 1:
                     break
         finally:

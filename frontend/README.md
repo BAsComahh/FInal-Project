@@ -31,7 +31,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 2. 默认是分割模式：左键添加正点、右键添加排除点，`N` 新建对象。可以先分割所有目标，不指定任何 type。
 3. 按 `Tab` 或侧栏模式按钮切换到标注模式：点击 mask 再点击某方 type，也可以直接把 type 拖到 mask 上。List A 的 Type 1 对应内部类型 A1，实例依次生成 A1.1、A1.2；List B 的 Type 1 则生成 B1.1 等。按下 type 时不绑定，释放到目标才生效；拖到空白处取消。已绑定的 mask 可以重复选中并改绑，同 type 保留编号，换 type 释放旧编号而不重排其他单位。选中目标显示白色轮廓。
 4. `S` 完成注册，或按空格完成并播放：统一保存一次最终 reference，锁定点及类型修改，然后传播 mask。
-5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、显示冻结／返回实时及规则工具。Space 冻结／恢复显示，视频源和追踪继续前进；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，`Esc` 关闭。冻结不会重新允许编辑 SAM 提示或类型。
+5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、显示冻结／返回实时及规则工具。Space 冻结／恢复显示，视频源和追踪继续前进；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，实况页的 `Esc` 关闭窗口，回放页的 `Esc` 返回实况。冻结不会重新允许编辑 SAM 提示或类型。
 
 首次播放前可用 `Ctrl+Z`／`U` 撤回点提示，`Unbind`／退格键仅解除类型绑定。`Tab` 回到分割模式可继续修点，`N` 会自动进入分割模式以添加新 mask。标注模式下点击只选 mask，不添加 SAM 提示；改绑只更新单位信息与尺寸相关托盘候选，不重新分割。选择类型或切换标注模式时退出当前规则查询，避免查询拦截拖放。`B` 保留为重复绑定当前 type 的快捷键，正常点击／拖放无需它。首次播放后导入和类型编辑一并锁定；R 重置注册保留两份名单。
 
@@ -72,12 +72,16 @@ frontend/runtime/                    视频源、串行任务、观测接纳与�
 frontend/registration/               首帧提示草稿、军表、绑定及 reference 发布
 frontend/calibration/                首次桌面标定与 B08 事务、四角和尺寸页面
 frontend/live/                       LIVE／HELD 显示、播放布局和只读失败名单
+frontend/replay/                     历史索引异步读取、动作切步与数字棋盘
 frontend/geometry_tools/             查询选择、后台计算与测量叠加
 frontend/scene_editing/              单位资料、初始正面和地形的受控编辑
 frontend/shared/                     文字、坐标换算与 mask／托盘图层缓存
 frontend/image/                      独立图片点选及注册窗口
 components/video_io/source.py        视频解码、帧号和源时间
 components/game_data.py              本局共享数据、观测快照及矩形状态历史
+components/history.py                独立后台历史写盘与按单位／源时间索引读取
+components/motion_history.py         独立平移／旋转事件识别与中断分段
+components/replay.py                 固定读取边界下的动作索引与历史场景重建
 components/sam3/video/predictor.py   已有 SAM 模型与官方会话接口
 components/registration/             单位表、mask 切图及最终快照保存
 components/boundary_detection/table.py  可复用桌角检测接口
@@ -90,7 +94,7 @@ components/boundary_detection/tray/  已有托盘拟合及批量适配
 
 修改提示、撤回、编号或保存规则时先看 `registration/controller.py`；修改注册页布局和拖放时看同目录 `view.py`／`unit_panel.py`。修改直播页及失败名单时看 `live/`；修改几何查询调度和测量显示时看 `geometry_tools/`；修改属性、正面或地形输入时看 `scene_editing/`。初始标定和 B08 位于 `calibration/`，视频调度与模型队列位于 `runtime/`。只有跨流程的阶段切换、重置与输入优先级才需要改 `app.py`。
 
-恢复、what-if 和 replay 尚未实现，不创建占位目录。未来恢复只处理失败的已有实例，可复用注册控件，但不能重新分配实例 ID 或解锁整场注册。what-if／replay 分别提供布局副本／重建历史场景，几何组件继续消费显式场景；这些边界不代表已具备对应功能。
+回放由 `replay/` 独立管理历史场景与游标，共享运行层持续推进视频源、追踪和写盘。进入回放清理原有查询与 HELD 显示，返回时读取最新实况。恢复与 what-if 仍待实现。未来恢复只处理失败的已有实例并保留 ID，可复用注册控件。what-if 将提供独立布局副本，几何组件继续消费显式场景。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
@@ -106,17 +110,82 @@ app.session.data
   units              UnitRoster：类型、单位实例、属性及 object_id 绑定
   rules              RuleState：人工正面和地形
   current            最新显示帧、匹配的推理帧／结果／源帧时间、显示版本
-  history            矩形位置和当时状态的独立副本
+  history            近 5～5.5 分钟矩形／状态缓存（另保留未写盘条目）
+  history_store      当前注册的后台 SQLite 写入器，不属于分析快照
+  global_history     进行中与近期的平移／旋转事件缓存
+  motion_recorder    由有效几何源帧推进的事件识别器，不属于分析快照
   calibrations       各版本标定、源帧及 reference 来源
   tracking           按稳定 unit ID 保存可见性、缺失计时与失败锁定
   reference_folder   已完成注册的保存目录，也是注册锁定依据
 ```
 
-`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定并记录初始观测。完成注册成功保存后记录初始历史，后续接纳传播结果或人工修改已注册单位状态后调用 `data.record_history()`。每条历史包含 `frame_index`、`timestamp_seconds` 及按本局 `unit_id` 索引的 `units`；单位条目为 `corners_mm`、`position_status` 和 `state`。`state` 当前包含 `engaged`、`wavering`、`facing`，未知值保留为 null。没有有效托盘时位置为 null／unavailable；available 仅表示有几何结果，不是正确率判断。相同帧、矩形及状态不重复追加。
+`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定和该次历史写入器。后续接纳传播结果或人工修改状态时记录历史。每条历史含独立 `sequence`、`kind`、接纳／操作时的 `frame_index`／`timestamp_seconds` 和几何自身的 `observation_frame_index`／`observation_timestamp_seconds`。两者可能不同，迟到几何不会把当前人工状态写到过去，也不能当作新的几何采样。按本局 `unit_id` 索引的 `units` 保存 type、有效属性、`corners_mm`、`position_status`、追踪状态／可见性和 `state`（含 engaged／wavering／facing）。未知值保留 null，无有效托盘为 null／unavailable，available 不是准确率判断。相同源帧和内容不重复追加，同帧不同编辑按 sequence 保序。
 
-`app.live.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者只包含同一观测及其标定／单位资料，不复制历史或整个标定版本列表。冻结时追踪继续写实时实例及历史；Clear query／Return live 切回实时实例。R 清空当前观测、单位绑定及历史，保留类型目录、桌面标定和原有地形。矩形历史及帧元数据包含 `calibration_version`，可在 `data.calibrations` 中找到当时的矩阵和实际尺寸，旧历史不随重新标定改写。
+`app.live.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者不复制历史、整个标定版本列表或写入器。冻结时后台继续写历史；Clear query／Return live 切回实时实例。R 清空当前观测、绑定及短缓存，保留类型目录、桌面标定、原有地形及旧数据库；旧待写批次继续重试。矩形历史包含 `calibration_version`，对应最终坐标变换和尺寸保存在数据库与 `data.calibrations` 中，旧历史不随重新标定改写。
 
-历史仅在内存中累积，不保存逐帧 mask／图像，也不自动落盘或恢复；已有最终 reference 导出格式保持。模型会话及记忆由算法适配器管理，唯一模型队列由运行层管理。
+## 短长历史存储
+
+完成注册后，该次 reference 输出目录新增 `history.sqlite3`。现有 reference 文件不重写，数据库不存逐帧 mask／图像或选桌角中间记录。独立后台任务持续事务写入观测、人工状态／规则输入及最终标定版本；不占用模型队列。按接纳／操作源时间保留至少 5 分钟内存缓存，以 30 秒块淘汰已确认写盘的旧条目，正常约 5～5.5 分钟。
+
+磁盘不可写／被锁时，各页面底部显示英文 `History not saved`，终端记录路径和原因；直播继续，每 5 秒重试。未写盘数据保留，内存可暂时超窗，恢复后再裁剪。关闭时等待在途批次并作最终写入尝试；若故障持续，会在终端报告尚未保存数量，退出后无法保证这些内存数据保留。
+
+独立读取基础接口无需模型、UI 或 GPU：
+
+```python
+from components.history import read_unit_history, read_history_context
+
+records = read_unit_history("outputs/sam3_registration/frame_.../history.sqlite3",
+                            "A1.1", start=30, end=90)
+context = read_history_context("outputs/sam3_registration/frame_.../history.sqlite3")
+```
+
+时间区间为包含两端的**接纳／人工操作源秒数**，每条返回记录只含指定单位，几何观测源时间另见 `observation_timestamp_seconds`。这些磁盘读接口只见已提交记录。回放组件另外合并打开时捕获的内存更新，见下方回放说明。全局事件与局部片段读取见下节，整场续赛恢复仍待实现。
+
+## 全局移动与旋转事件
+
+H03 将有效局部观测整理为独立的平移与旋转事件，两者允许同时发生、各自停稳结束。修改 [config.py](config.py) 后重启生效：
+
+```python
+MOTION_POSITION_TOLERANCE_MM = 10.0
+MOTION_ROTATION_TOLERANCE_DEG = 10.0
+MOTION_SETTLE_SECONDS = 5.0
+```
+
+平移看托盘中心，旋转看无向托盘轴。相对参考姿态的变化超出容差时开始／继续对应事件，之后新有效几何采样在 5 秒内都未再超出容差，才标为 `completed`。例如最后显著变化在 10 秒、15 秒确认停稳，终点保留 10 秒观测，另存 15 秒确认来源。起点是触发前一有效观测的估计；同帧刷新、人工改状态和推理等候不推进计时。
+
+`ongoing` 为尚未确认停稳，`interrupted` 为位置缺失、几何失败、标定变化、模型错误、R 或关闭造成的记录中断，不算已完成一步。恢复后重新建立起点，不补缺口运动；停稳后继续移动则生成新事件。事件及相关局部记录同事务写盘，沿用写盘失败提示、保留内存和重试；新库为 v2，已有 v1 局部历史仍可读，继续写入时加表迁移。
+
+```python
+from components.history import read_motion_events, read_event_history
+
+events = read_motion_events(history_path, "A1.1", start=30, end=90)
+segment = read_event_history(history_path, events[0]["event_id"]) if events else None
+# segment["event"] 是事件，segment["records"] 是对应的原始单位局部记录。
+```
+
+事件区间筛选使用**几何观测源时间**，返回与闭区间相交的事件。上一节局部记录的时间筛选使用接纳／操作时间。片段通过序号关联，包含停稳确认或同标定下的中断证据，并排除新标定坐标。并行事件可以引用同一批记录。这些磁盘接口只见已提交结果。
+
+## 历史棋盘回放
+
+播放页点击 `Replay` 打开本次注册的历史。回放占主画面，以毫米平面中的矩形和实例 ID 表示单位。后台的视频源、追踪和历史记录继续运行。点击 `Back to Live` 或按 `Esc` 返回最新实况。
+
+每步背景使用该动作终点的 Homography 后源输入截图，矩形和 ID 叠在对应标定的画面上。初始 Step 0 也保存截图，同一终点的移动／旋转共用图片。截图后台保存到本次注册的 `replay_frames/v版本_s序号.jpg`。停稳确认前暂存活动终点帧，完成后写盘。旧历史没有截图或图片无法读取时，显示基础棋盘和 `Step image unavailable`。
+
+- 初始注册为 Step 0。每个已完成 Move 或 Rotate 各占一步，按动作结束的几何源时间排序。同一结束时间先列 Move，再列 Rotate，并保留各事件的独立身份。
+- `Previous`／`Next` 按钮、`←`／`→` 或 `A`／`D` 切换步骤。回放中的 D 用于下一步，实况中的 D 仍用于测距。首尾会停在有效步骤范围内。
+- 同时完成的移动与旋转可以显示相同棋盘，当前动作的实例与类型会分别高亮。进行中和记录中断事件保留在历史中，步骤列表只包含已完成事件。
+- `Refresh` 重新捕获最新历史边界，并按事件 ID 保留当前选择。打开后步骤列表固定，后台新增动作会在刷新后出现。
+- 每步显示动作终点对应的完整观测与标定版本。页面分别标示几何观测时间和状态记录时间。不可用或已移除单位列出 ID，有效单位使用当时的矩形。
+
+读取由独立后台任务执行。`capture_replay_inputs(data)` 在运行层线程捕获源路径、序号边界、近期记录与事件更新，`read_replay_index(inputs)` 合并磁盘与内存并形成步骤列表，`read_replay_scene(index, step_index)` 按终点序号读取整盘记录。超过内存窗口的场景从 SQLite 按需读取。初始注册名单固定，因此旧场景可按实例 ID 与序号使用既有索引定位。
+
+首次写入尚未完成或磁盘不可用时，完整内存记录可直接构建回放。如果较早记录已经淘汰且磁盘无法读取，页面显示读取失败，保留刷新和返回入口。R 开始新注册并清理回放，过期读取结果通过会话与请求版本过滤。
+
+后续可行提升是从 5 秒停稳等待期内选择遮挡较少、整盘有效几何与终点一致的帧。此选帧策略保留为待实现项，设计见项目思路。
+
+当前提供本次注册的离散切步。外部比赛选择、时间滑块、自动播放速度与运动插值保留在 TODO 中。v1 历史没有动作事件，可通过读取接口查看初始棋盘。
+
+容差是尚未视频调参的初值。净位移／估计净转角不是实际路径长度，往返也可能形成净变化为零的事件。矩形轴有 180° 歧义，近方形另有 90° 歧义，无法保证识别所有真实转身。容差须为正有限数，旋转容差须小于 45°；采样稀疏或变化小于容差时，事件可能延迟触发或提前判断停稳。
 
 ## 追踪失败判定与只读名单
 

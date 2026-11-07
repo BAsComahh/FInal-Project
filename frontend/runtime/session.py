@@ -1,10 +1,12 @@
 """Source clock, one serial model queue and accepted observations/history."""
 from pathlib import Path
+import sys
 from time import perf_counter
 import cv2
 import numpy as np
 from components.video_io import VideoSource
 from components.tracking.status import validate_disappearance_seconds
+from components.motion_history import MotionRecorder
 from .. import config
 from .task_worker import TaskWorker
 
@@ -20,6 +22,9 @@ class MatchSession:
             raise ValueError("stride must be positive")
         self.disappearance_seconds = validate_disappearance_seconds(config.TRACKING_DISAPPEARANCE_SECONDS)
         self.data = data
+        self.data.motion_recorder = MotionRecorder(position_tolerance_mm=config.MOTION_POSITION_TOLERANCE_MM,
+                                                   rotation_tolerance_deg=config.MOTION_ROTATION_TOLERANCE_DEG,
+                                                   settle_seconds=config.MOTION_SETTLE_SECONDS)
         self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search,
                                  tracker=tracker, tracker_model=tracker_model, tracker_cache=tracker_cache)
         self.worker.submit("load", generation=0)
@@ -52,12 +57,42 @@ class MatchSession:
         self.next_inference_time = 0.0
         self.last_submitted_frame = -1
         self.dirty = True
+        self.retired_histories = []
+        self._history_errors = ()
         self.configure_trays()
         self.note = "Loading SAM3 and preparing the first frame. Confirm the table boundary first."
 
     @property
     def registration_locked(self):
         return self.data.reference_folder is not None
+
+    def _history_stores(self):
+        current = [self.data.history_store] if self.data.history_store is not None else []
+        return current + self.retired_histories
+
+    @property
+    def history_warning(self):
+        failed = [store for store in self._history_stores() if store.error is not None]
+        if not failed:
+            return None
+        count = sum(store.pending_count for store in failed)
+        return f"History not saved: {count} updates pending. Retrying; RAM may grow. {failed[0].error}"
+
+    def _poll_history(self):
+        self.data.poll_history()
+        for store in self.retired_histories[:]:
+            store.poll()
+            if not store.pending_count:
+                store.close()
+                self.retired_histories.remove(store)
+        errors = tuple((str(store.path), store.error) for store in self._history_stores() if store.error is not None)
+        if errors != self._history_errors:
+            for path, error in errors:
+                print(f"History not saved: {path}: {error}. Retrying; pending data retained in RAM.", file=sys.stderr, flush=True)
+            if not errors and self._history_errors:
+                print("History writes resumed; any remaining queued updates are draining.", flush=True)
+            self._history_errors = errors
+            self.dirty = True
 
     def _warp_frame(self, frame):
         if self.data.board.homography is None:
@@ -174,6 +209,7 @@ class MatchSession:
                     calibration.context["draft"] = None
                     self.note = f"Recalibration failed: {error}. Retry or Esc to cancel."
                 elif error is not None:
+                    self.data.finish_motion("model_error", self.source.metadata())
                     self.model_failed = True
                     self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
@@ -186,7 +222,9 @@ class MatchSession:
                         prediction, request["frame"], request["metadata"],
                         disappearance_seconds=self.disappearance_seconds if self.registration_locked else None)
                     if self.registration_locked and request["kind"] in ("propagate", "recalibrate"):
-                        self.data.record_history()
+                        self.data.record_history(
+                            kind="recalibration" if request["kind"] == "recalibrate" else "observation",
+                            source=self.source.metadata())
                     if request["kind"] == "click":
                         self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
                         self.next_inference_time = now + 1 / self.inference_fps
@@ -223,6 +261,7 @@ class MatchSession:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
         self.schedule(registration, calibration, now)
+        self._poll_history()
 
         progress = self.worker.load_progress
         if progress != self.load_progress or progress is not None:
@@ -235,8 +274,14 @@ class MatchSession:
 
     def reset(self):
         self.playing = self.pending_play = False
+        self.data.finish_motion("reset", self.source.metadata())
+        if self.data.history_store is not None:
+            self.retired_histories.append(self.data.history_store)
+            self.data.history_store = None
         self.data.reference_folder = None
         self.data.history.clear()
+        self.data.global_history.clear()
+        self.data.motion_recorder.reset()
         self.data.tracking.clear()
         self.data.rules.fronts.clear()
         self.generation += 1
@@ -257,5 +302,10 @@ class MatchSession:
             return
         self.closed = True
         self.playing = False
+        self.data.finish_motion("session_closed", self.source.metadata())
         self.source.close()
         self.worker.close()
+        for store in self._history_stores():
+            if not store.close():
+                print(f"History not saved on exit: {store.path}: {store.pending_count} updates remain in RAM; "
+                      f"they will be lost when the process exits. {store.error}", file=sys.stderr, flush=True)

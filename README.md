@@ -16,7 +16,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 操作说明见 [frontend](frontend/README.md)，单位表和导出格式见 [registration](components/registration/README.md)，设计、官方依据与实验结论见 [项目思路.md](项目思路.md)。
 
-本局公共数据集中在 [GameData](components/game_data.py)：桌面标定、单位资料、最新观测和矩形／状态历史由同一个实例维护。历史只存在内存中；冻结分析画面时，后台继续更新实时数据。
+本局公共数据集中在 [GameData](components/game_data.py)：保留局部观测历史及全局平移／旋转事件，完成注册后持续写入该次输出目录的 `history.sqlite3`。平移与旋转独立判断，容差内停稳 5 秒完成，初始位置容差 10 mm、旋转容差 10°；缺失或标定切换保存中断记录，不算完成一步。内存保留约 5～5.5 分钟及进行中／未写盘数据，R 保留旧数据库。播放页的 Replay 以步骤对应的 Homography 后截图为背景，叠加 ID 和矩形重建历史棋盘，每次已完成移动或旋转各为一步，支持 ←／→、A／D 和按钮切步。回放期间后台继续运行，Back to Live 返回最新实况。用法见 [历史棋盘回放](frontend/README.md#历史棋盘回放)。
 
 完成注册后按源视频时间检测持续无 mask，默认 10 秒，通过 [frontend/config.py](frontend/config.py) 修改。超时实例进入 A／B 失败名单；重新出现的 mask 只标 `Estimated`，不自动恢复为有效位置。自动恢复及人工补标记仍待实现，详见[失败判定说明](frontend/README.md#追踪失败判定与只读名单)及[需求与待澄清列表](待澄清列表.md)。
 
@@ -34,12 +34,16 @@ frontend/
   registration/              Draft prompts, army lists, bindings and references
   calibration/               Initial calibration and B08 transactions
   live/                      Live / held view and missing-unit lists
+  replay/                    Historical board display and discrete event navigation
   geometry_tools/            Snapshot queries and measurement overlays
   scene_editing/             Unit profiles, initial facing and terrain inputs
   shared/                    Drawing, viewport transforms and cached layers
   image/                     Standalone image registration windows
 components/
   game_data.py               Shared match data and rectangle/state history
+  history.py                 Background SQLite history and indexed per-unit reads
+  motion_history.py          Independent translation / rotation event detection
+  replay.py                  Captured history index and endpoint scene reconstruction
   recalibration.py           Board, mask and annotation coordinate migration
   registration/              Unit catalog, bindings and reference export
   boundary_detection/        Shared LSD, table/tray fitting and Canny
@@ -112,7 +116,7 @@ Use `--board-size-in WIDTH DEPTH` to prefill different inch dimensions, or `--ca
 
 The directory tree and independent tool list above describe the current ownership. The window owns a VideoApplication, which coordinates workflow controllers and views; MatchSession schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
 
-Each MatchSession owns one [GameData](components/game_data.py) instance for board calibration, unit data, current observations and rectangle/state history. History stays in memory and excludes frame images and masks. Holding the analysis view creates a separate observation snapshot while live tracking continues updating the match data.
+Each MatchSession owns one [GameData](components/game_data.py) instance for local observations and global translation/rotation events. The two event types run independently and finish after 5 seconds of sampled stability, initially using 10 mm / 10 degree tolerances. Missing geometry and calibration changes interrupt events without claiming a completed move. Records continuously write to `history.sqlite3`, with recent, ongoing and unsaved data cached in memory. R preserves the old database. Replay projects saved rectified step images onto the historical board and overlays unit IDs and rectangles. Each completed move or rotation forms one step, navigated with Left/Right, A/D or buttons. Source playback, tracking and recording continue in the background, and Back to Live returns to the latest view. Refresh includes newly completed events. See [replay controls](frontend/README.md#历史棋盘回放).
 
 During playback, `Recalibrate [K]` pauses the source on the current frame and opens corner/dimension confirmation. It reprojects available masks, migrates board annotations and starts an independent tracking session using loaded weights, retaining unit IDs and original references. Success switches calibration versions and resumes from the paused frame; Esc cancels. Unavailable masks retain their unit records without fabricated positions. See [the recalibration workflow](frontend/README.md#比赛中重新标定).
 

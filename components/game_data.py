@@ -2,11 +2,20 @@
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+from math import floor
 from pathlib import Path
 
+from components.history import HistoryStore
+from components.motion_history import MotionRecorder
 from components.registration.units import UnitRoster
 from components.registration.rule_state import RuleState
 from components.tracking.status import update_tracking
+
+
+def _history_source(metadata):
+    return {key: deepcopy(value) for key, value in metadata.items() if key in (
+        "type", "video", "frame_index", "timestamp_seconds", "fps", "source_timestamp_seconds",
+        "source_url", "calibration_version", "coordinate_space", "image_size", "source_image_size")}
 
 
 @dataclass
@@ -39,6 +48,11 @@ class GameData:
     calibrations: list = field(default_factory=list)
     tracking: dict = field(default_factory=dict)
     reference_folder: Path | None = None
+    history_store: HistoryStore | None = field(default=None, repr=False)
+    global_history: dict = field(default_factory=dict)
+    motion_recorder: MotionRecorder | None = field(default=None, repr=False)
+    _history_sequence: int = 0
+    _history_latest_time: float = 0.0
 
     def accept_observation(self, prediction, frame, metadata, *, disappearance_seconds=None):
         """Accept a completed result with its matching image and source time."""
@@ -69,8 +83,52 @@ class GameData:
             reference_folder=self.reference_folder,
         )
 
-    def record_history(self):
-        """Copy rectangle positions and current states; never retain frame/mask arrays."""
+    def start_history(self, folder, source):
+        """Start one persistent registration; analysis snapshots never own a writer."""
+        if self.history_store is not None:
+            raise RuntimeError("Close the previous history before starting another registration")
+        self.history_store = HistoryStore(Path(folder) / "history.sqlite3", {
+            "source": _history_source(source), "reference_folder": str(folder),
+            "units": self.units.snapshot() if self.units is not None else None,
+            "rules": self.rules.snapshot(),
+            "time_basis": "acceptance/edit clip_source_seconds; geometry retains its own observation source time",
+        })
+        self._history_sequence = 0
+        self._history_latest_time = 0.0
+        self.global_history.clear()
+        if self.motion_recorder is None:
+            self.motion_recorder = MotionRecorder()
+        else:
+            self.motion_recorder.reset()
+
+    def _calibration_records(self):
+        records = []
+        for item in self.calibrations:
+            board = item["board"]
+            records.append({"version": item["version"], "source": _history_source(item["source"]),
+                            "reference_folder": item["reference_folder"],
+                            "board": {key: deepcopy(getattr(board, key)) for key in (
+                                "source_size", "board_size_mm", "source_to_plane", "image_to_plane", "homography")}})
+        return records
+
+    def poll_history(self):
+        if self.history_store is None:
+            return
+        self.history_store.poll()
+        cutoff = floor((self._history_latest_time - 300.0) / 30.0) * 30.0
+        self.history[:] = [entry for entry in self.history
+                           if entry["timestamp_seconds"] >= cutoff
+                           or entry["sequence"] > self.history_store.saved_sequence]
+        self.global_history = {key: event for key, event in self.global_history.items()
+                               if event["status"] == "ongoing" or event["recorded_source"]["timestamp_seconds"] >= cutoff
+                               or event["updated_sequence"] > self.history_store.saved_sequence}
+
+    def finish_motion(self, reason, source):
+        if self.motion_recorder is not None and self.motion_recorder.has_active:
+            self.record_history(kind="interruption", source=source, interruption=reason)
+
+    def record_history(self, *, kind="observation", source=None, interruption=None):
+        """Record geometry/states; the writer separately retains active step images."""
         current = self.current
         if self.units is None or current.prediction is None or current.prediction_metadata is None:
             return False
@@ -82,21 +140,42 @@ class GameData:
             tray = current.prediction.get("trays", {}).get(object_id) if object_id not in unavailable else None
             tracking = self.tracking.get(unit_id)
             units[unit_id] = {
+                "type_id": unit["type_id"], "attributes": deepcopy(profile),
                 "corners_mm": deepcopy(tray["corners_plane"]) if tray is not None else None,
                 "position_status": "available" if tray is not None else "unavailable",
                 "tracking_status": tracking.status if tracking else None,
                 "visibility": tracking.visibility if tracking else None,
                 "disappeared_time": tracking.disappeared_time if tracking else None,
+                "active": tracking.active if tracking else not (profile.get("routed") or profile.get("removed")),
                 "state": {"engaged": deepcopy(profile.get("engaged")),
                           "wavering": deepcopy(profile.get("wavering")),
                           "facing": deepcopy(self.rules.fronts.get(object_id))},
             }
-        entry = {"calibration_version": self.board.calibration_version,
-                 "frame_index": current.prediction_metadata["frame_index"],
-                 "timestamp_seconds": current.prediction_metadata.get("timestamp_seconds"), "units": units}
-        if self.history and self.history[-1] == entry:
+        observation = current.prediction_metadata
+        source = observation if source is None else source
+        entry = {"calibration_version": self.board.calibration_version, "kind": kind,
+                 "source": _history_source(source), "observation_source": _history_source(observation),
+                 "rules": self.rules.snapshot(),
+                 "observation_frame_index": observation["frame_index"],
+                 "observation_timestamp_seconds": observation.get("timestamp_seconds"),
+                 "frame_index": source["frame_index"],
+                 "timestamp_seconds": source.get("timestamp_seconds"), "units": units}
+        if self.history and {key: value for key, value in self.history[-1].items()
+                            if key not in ("sequence", "motion_events", "motion_event_ids")} == entry:
             return False
+        self._history_sequence += 1
+        entry["sequence"] = self._history_sequence
+        if self.motion_recorder is not None:
+            events = (self.motion_recorder.interrupt_all(entry, interruption) if interruption is not None
+                      else self.motion_recorder.observe(entry))
+            entry["motion_events"] = events
+            entry["motion_event_ids"] = [event["event_id"] for event in events]
+            self.global_history.update({event["event_id"]: event for event in events})
         self.history.append(entry)
+        if self.history_store is not None:
+            self.history_store.append(entry, self._calibration_records(), frame=current.prediction_frame)
+            self._history_latest_time = max(self._history_latest_time, entry["timestamp_seconds"])
+            self.poll_history()
         return True
 
     def record_calibration(self, metadata):
