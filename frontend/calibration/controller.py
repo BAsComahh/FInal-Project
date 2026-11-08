@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from time import perf_counter
 import numpy as np
+import cv2
 from components.homography import warp_table
 from components.recalibration import prepare_recalibration
 from ..config import DEFAULT_BOARD_SIZE_IN
@@ -69,49 +70,83 @@ class CalibrationController:
             raise ValueError("Start playback before recalibrating the table.")
         if self.session.model_failed:
             raise ValueError("Resolve the tracking error before recalibrating.")
-        raw = self.session.source.read_frame(self.session.source.frame_index)
-        self.context = {"frame": raw, "frame_index": self.session.source.frame_index,
-                              "resume_playing": self.session.playing, "held_view": self.live.snapshot, "draft": None}
-        self.session.playing = False
-        self.session.note = "Video paused. Confirm the table on this source frame; Esc cancels."
+        raw = self.session.source.frame
+        self.context = {"frame_index": self.session.source.frame_index,
+                        "token": object(), "draft": None, "pending": None, "error": None}
+        self.session.note = "Live recalibration. Select the table corners. Esc cancels."
         self.session.dirty = True
         return raw
 
     def cancel_recalibration(self):
         if self.context is None:
             return
-        if self.context["draft"] is not None:
-            raise ValueError("Wait for tracking initialization before cancelling.")
-        context, self.context = self.context, None
-        self.live.snapshot = context["held_view"]
-        if context["resume_playing"] and self.session.source.frame_index < self.session.end_index:
-            self.session.start_stream()
+        self.context = None
         self.session.note = "Recalibration cancelled; previous calibration and tracking retained."
         self.session.dirty = True
 
     def apply_recalibration(self, corners, boundary, *, board_size_in):
         context = self.context
-        if context is None or context["draft"] is not None:
+        if context is None or context["draft"] is not None or context["pending"] is not None:
             return
         if self.session.model_failed:
-            raise ValueError("Tracking failed on the paused frame; cancel recalibration.")
+            raise ValueError("Resolve the tracking error before applying recalibration.")
+        context["pending"] = (deepcopy(corners), deepcopy(boundary), np.asarray(board_size_in, dtype=float) * 25.4)
+        context["error"] = None
+        self.session.note = "Waiting for a matching observation; source playback continues."
+        self.session.dirty = True
+
+    def submit_pending(self):
+        context = self.context
+        if context is None or context["pending"] is None or context["draft"] is not None or self.session.model_failed:
+            return False
         metadata = self.data.current.prediction_metadata
-        if self.session.worker.busy or metadata is None or metadata["frame_index"] != context["frame_index"]:
-            raise ValueError("Preparing masks for the paused frame. Wait, then press Continue again.")
-        size = np.asarray(board_size_in, dtype=float) * 25.4
-        draft = prepare_recalibration(self.data, context["frame"], corners, boundary, size)
+        raw = self.session.prediction_raw_frame
+        if metadata is None or raw is None or metadata["frame_index"] < context["frame_index"]:
+            if self.session.source.frame_index > self.session.last_submitted_frame:
+                self.session.worker.submit("propagate", frame=self.data.current.frame,
+                                           metadata=self.session.frame_metadata(), generation=self.session.generation,
+                                           raw_frame=self.session.source.frame)
+                self.session.last_submitted_frame = self.session.source.frame_index
+                self.session.next_inference_time = perf_counter() + 1 / self.session.inference_fps
+                return True
+            return False
+        corners, boundary, size = context["pending"]
+        try:
+            draft = prepare_recalibration(self.data, raw, corners, boundary, size)
+        except (ValueError, cv2.error) as error:
+            context["pending"] = None
+            self.session.note = f"Recalibration not applied: {error}"
+            context["error"] = self.session.note
+            return False
         sizes = {obj: self.data.units.types[self.data.units.units[unit]["type_id"]].get("dimension", {})
                  for obj, unit in self.data.units.bindings.items()}
         tray_context = {"image_to_plane": draft["board"].image_to_plane,
                         "sizes": {obj: (size["width_mm"], size["depth_mm"]) for obj, size in sizes.items()
                                   if "width_mm" in size and "depth_mm" in size}}
-        self.session.generation += 1
+        source_metadata = self.session.frame_metadata(board=draft["board"], frame=draft["frame"])
+        for key in ("frame_index", "timestamp_seconds", "source_timestamp_seconds"):
+            if key in metadata:
+                source_metadata[key] = metadata[key]
         self.session.worker.submit("recalibrate", frame=draft["frame"], prediction=draft["prediction"],
-                           metadata=self.session.frame_metadata(board=draft["board"], frame=draft["frame"]),
+                           metadata=source_metadata, raw_frame=raw, calibration_token=context["token"],
                            generation=self.session.generation, tray_context=tray_context)
         context["draft"] = draft
+        context["pending"] = None
         self.session.note = "Preparing tracking in the new calibration. Unit identities remain locked."
         self.session.dirty = True
+        return True
+
+    def accept_result(self, request, prediction, error):
+        context = self.context
+        if context is None or request.get("calibration_token") is not context["token"]:
+            return False
+        if error is not None or prediction is None or not any(mask.any() for mask in prediction["masks"]):
+            context["draft"] = None
+            self.session.note = f"Recalibration failed: {error or 'No usable initialized masks'}. Old tracking retained."
+            context["error"] = self.session.note
+            return False
+        self.commit_recalibration(request)
+        return True
 
     def commit_recalibration(self, request):
         context = self.context
@@ -123,18 +158,16 @@ class CalibrationController:
         self.session.worker.tracker_initialized = True
         self.session.worker.tray_context = request["tray_context"]
         self.data.board, self.data.rules = draft["board"], draft["rules"]
-        self.data.current.frame = draft["frame"]
-        self.session.initial_frame = context["frame"]
-        self.session.registration_start_frame = context["frame_index"]
+        self.data.current.frame = self.session._warp_frame(self.session.source.frame)
+        self.session.initial_frame = request["raw_frame"]
+        self.session.registration_start_frame = request["metadata"]["frame_index"]
         self.data.record_calibration(request["metadata"])
         self.data.calibrations[-1]["unseeded_units"] = draft["unseeded_units"]
-        self.session.last_submitted_frame = context["frame_index"]
+        self.session.last_submitted_frame = request["metadata"]["frame_index"]
         self.session.next_inference_time = perf_counter() + 1 / self.session.inference_fps
         self.session.pending_trays = False
-        self.live.snapshot = None
+        self.session.generation += 1
         self.context = None
-        if context["resume_playing"] and self.session.source.frame_index < self.session.end_index:
-            self.session.start_stream()
 
     def load_calibration(self, path):
         self.data.board.source_to_plane, self.data.board.board_size_mm = _read_tray_calibration(path)

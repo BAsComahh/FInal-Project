@@ -10,7 +10,9 @@ class SceneEditingView:
     def draw_terrain(self, preview, view):
         scale = np.asarray(preview.shape[1::-1]) / np.asarray(view.current.frame.shape[1::-1])
         for item in view.rules.terrain:
-            points = np.rint(np.asarray(item["polygon_image"]) * scale).astype(np.int32)
+            polygon = (transform_points(item["polygon_source"], view.board.homography["matrix"])
+                       if item.get("polygon_source") is not None else np.asarray(item["polygon_image"]))
+            points = np.rint(polygon * scale).astype(np.int32)
             cv2.polylines(preview, [points], True, (100, 180, 230), 1, cv2.LINE_AA)
 
     def draw_inputs(self, preview, view):

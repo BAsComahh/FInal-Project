@@ -1,4 +1,4 @@
-"""Frozen-scene query selection, request epochs and asynchronous rule results."""
+"""Coalesced live-observation queries with independent asynchronous results."""
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -33,6 +33,14 @@ class GeometryController:
         self.epoch += 1
         self.last_key = self.result = self.overlay = None
         self.result_request = None
+
+    def result_current(self, view):
+        request = self.result_request
+        metadata = view.current.prediction_metadata
+        return (request is not None and metadata is not None and
+                request["view_revision"] == view.current.view_revision and
+                request["metadata"]["frame_index"] == metadata["frame_index"] and
+                request["metadata"].get("calibration_version") == view.board.calibration_version)
 
     def select(self, object_id):
         if self.mode in ("distance", "los"):
@@ -80,7 +88,8 @@ class GeometryController:
         self.last_key = key
         try:
             scene = view.rules.scene(view.units, view.current.prediction, view.board.image_to_plane,
-                                          view.board.board_size_mm, view.current.prediction_metadata)
+                                      view.board.board_size_mm, view.current.prediction_metadata,
+                                      source_to_plane=view.board.source_to_plane)
             ids = [view.units.bindings[object_id] for object_id in self.selected[:needed]]
         except (ValueError, KeyError) as error:
             self.result = {"status": "unavailable", "reason": str(error)}
@@ -88,6 +97,7 @@ class GeometryController:
             self.overlay = None
             return True
         self.request = {"epoch": self.epoch, "generation": session.generation,
+                        "view_revision": view.current.view_revision,
                         "metadata": deepcopy(view.current.prediction_metadata), "image_to_plane": view.board.image_to_plane.copy()}
         self.future = self.executor.submit(_query, scene, self.mode, ids)
         return True

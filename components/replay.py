@@ -14,8 +14,11 @@ import re
 import sqlite3
 
 import cv2
+import numpy as np
 
 from components.image_io import load_image
+from components.homography import transform_points
+from components.motion_history import MotionRecorder, SOURCE_COORDINATE_BASIS
 from components.replay_frames import replay_frame_path
 
 
@@ -204,9 +207,97 @@ def _scene(index, step, observation):
         raise ReplayError(f"Replay observation {sequence} has no unit mapping")
     # Keep original payloads, including unavailable/removed IDs and empty geometry.
     # Renderers must honour position_status/active rather than reuse older corners.
+    units = deepcopy(observation["units"])
+    matrix = board.get("source_to_plane")
+    if matrix is not None:
+        inverse = np.linalg.inv(matrix)
+        for unit in units.values():
+            if unit.get("position_status") != "available":
+                continue
+            if unit.get("corners_source") is None and unit.get("corners_mm") is not None:
+                unit["corners_source"] = transform_points(unit["corners_mm"], inverse).tolist()
+                unit["center_source"] = transform_points(np.asarray(unit["corners_mm"]).mean(axis=0), inverse).tolist()
+            if unit.get("corners_source") is not None:
+                unit["corners_mm"] = transform_points(unit["corners_source"], matrix).tolist()
     return deepcopy({"step": step, "observation": observation, "calibration": calibration,
-                     "board_size_mm": list(dimensions), "units": observation["units"],
+                     "board_size_mm": list(dimensions), "units": units,
                      "metadata": index._metadata})
+
+
+def _rebuild_records(connection, memory, cutoff):
+    if connection is None:
+        yield from (memory[sequence] for sequence in range(1, cutoff + 1))
+        return
+    headers = iter(connection.execute("SELECT sequence,payload FROM observations WHERE sequence<=? ORDER BY sequence", (cutoff,)))
+    units = iter(connection.execute("SELECT sequence,unit_id,payload FROM unit_history WHERE sequence<=? ORDER BY sequence,unit_id", (cutoff,)))
+    header, unit = next(headers, None), next(units, None)
+    for sequence in range(1, cutoff + 1):
+        cached = sequence in memory
+        entry = memory.get(sequence)
+        if header is not None and header[0] == sequence:
+            if not cached:
+                entry = _mapping(header[1], "observation")
+                entry["units"] = {}
+            header = next(headers, None)
+        if entry is None or entry.get("sequence") != sequence:
+            raise ReplayError(f"Replay reconstruction is missing observation {sequence}")
+        while unit is not None and unit[0] == sequence:
+            if not cached:
+                entry["units"][unit[1]] = _mapping(unit[2], "unit history")
+            unit = next(units, None)
+        yield entry
+
+
+def _rebuild_motion(records, original_events, calibrations, metadata):
+    parameters = dict(metadata.get("motion_parameters", {}))
+    for kind, parameter in (("translation", "position_tolerance_mm"), ("rotation", "rotation_tolerance_deg")):
+        values = {event["tolerance"] for event in original_events.values() if event.get("kind") == kind and "tolerance" in event}
+        if len(values) > 1:
+            raise ReplayError("Cannot reconstruct history with mixed motion thresholds")
+        if values and parameter not in parameters:
+            parameters[parameter] = values.pop()
+    settle = {event["settle_seconds"] for event in original_events.values() if "settle_seconds" in event}
+    if len(settle) > 1:
+        raise ReplayError("Cannot reconstruct history with mixed settle times")
+    if settle and "settle_seconds" not in parameters:
+        parameters["settle_seconds"] = settle.pop()
+    recorder = MotionRecorder(**parameters)
+    interruptions = {event["updated_sequence"]: event.get("interruption_reason", "recording_interrupted")
+                     for event in original_events.values() if event.get("status") == "interrupted"}
+    events = {}
+    for entry in records:
+        if entry["kind"] == "interruption":
+            updates = recorder.interrupt_all(entry, interruptions.get(entry["sequence"], "recording_interrupted"))
+        else:
+            if entry["kind"] in ("registration", "observation", "recalibration") and entry["calibration_version"] not in calibrations:
+                raise ReplayError(f"Calibration v{entry['calibration_version']} required for motion reconstruction is missing")
+            board = calibrations.get(entry["calibration_version"], {}).get("board", {})
+            updates = recorder.observe(entry, source_to_plane=board.get("source_to_plane"))
+        for event in updates:
+            event["reconstructed_from_source"] = True
+            events[event["event_id"]] = event
+    return events
+
+
+def _source_background(observation, calibration):
+    source = observation.get("observation_source", {})
+    path = source.get("video")
+    sequence = observation.get("observation_frame_index")
+    homography = calibration.get("board", {}).get("homography")
+    if (not isinstance(path, str) or not Path(path).is_file() or isinstance(sequence, bool)
+            or not isinstance(sequence, int) or sequence < 0 or not homography):
+        return None
+    capture = cv2.VideoCapture(path)
+    try:
+        if not capture.isOpened():
+            return None
+        capture.set(cv2.CAP_PROP_POS_FRAMES, sequence)
+        success, frame = capture.read()
+        if not success or abs(capture.get(cv2.CAP_PROP_POS_FRAMES) - 1 - sequence) > .5:
+            return None
+        return cv2.warpPerspective(frame, np.asarray(homography["matrix"]), tuple(homography["output_size"]))
+    finally:
+        capture.release()
 
 
 def read_replay_index(inputs):
@@ -281,6 +372,19 @@ def _read_index(inputs):
             _merge_event(events, event, cutoff)
     for event in inputs.events:
         _merge_event(events, event, cutoff)
+    if (metadata.get("spatial_coordinate_basis") != SOURCE_COORDINATE_BASIS
+            and any(event.get("interruption_reason") == "recalibration" for event in events.values())):
+        if path is not None:
+            try:
+                with _database(path) as (connection, _):
+                    events = _rebuild_motion(_rebuild_records(connection, memory, cutoff), events, calibrations, metadata)
+            except (OSError, sqlite3.Error):
+                if len(memory) != cutoff:
+                    raise
+                events = _rebuild_motion(_rebuild_records(None, memory, cutoff), events, calibrations, metadata)
+        else:
+            events = _rebuild_motion(_rebuild_records(None, memory, cutoff), events, calibrations, metadata)
+        metadata["reconstructed_motion_events"] = True
     completed = [event for event in events.values()
                  if event.get("status") == "completed" and event.get("kind") in ("translation", "rotation")]
     completed.sort(key=lambda event: _event_key(event, cutoff))
@@ -332,6 +436,12 @@ def read_replay_scene(index, step_index):
                 scene["background"] = load_image(replay_frame_path(index.path, key)) if index.path is not None else None
             except (OSError, ValueError, cv2.error):
                 scene["background"] = None
+        if scene["background"] is None:
+            if step.get("event") is not None and step["event"].get("reconstructed_from_source"):
+                try:
+                    scene["background"] = _source_background(observation, scene["calibration"])
+                except (OSError, ValueError, KeyError, TypeError, cv2.error):
+                    scene["background"] = None
         if scene["background"] is None:
             scene["background_note"] = "Step image unavailable."
         return scene

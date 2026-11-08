@@ -66,9 +66,7 @@ class VideoApplication:
         self.editor.clear()
 
     def _pause(self):
-        if self.stage is Stage.PLAYBACK:
-            self.live.hold_view()
-        else:
+        if self.stage is Stage.REGISTER:
             self.session.pause_source()
 
     def render(self):
@@ -110,10 +108,6 @@ class VideoApplication:
         self.dirty = True
 
     def _begin_recalibration(self):
-        if self.editor.input_mode is not None:
-            self.geometry.note = "Finish or cancel the rule input before recalibrating."
-            self.dirty = True
-            return
         try:
             frame = self.calibration.begin_recalibration()
         except (ValueError, OSError, cv2.error) as error:
@@ -139,15 +133,12 @@ class VideoApplication:
                              labels=self.session.data.units.bindings if self.session.data.units else None) if self.session.data.current.prediction is not None else None
 
     def _toggle_play(self):
-        if self.editor.input_mode is not None:
+        if self.editor.input_mode is not None and self.stage is not Stage.PLAYBACK:
             self.geometry.note = "Finish the rule input first, or press F / G again to cancel it."
             self.dirty = True
             return
         if self.stage is Stage.PLAYBACK:
-            if self.live.snapshot is None:
-                self.live.hold_view()
-            else:
-                self._clear_query()
+            self._clear_query()
         elif self.session.source.frame_index >= self.session.end_index:
             self.session.note = "End of video interval. R restarts."
         else:
@@ -195,6 +186,14 @@ class VideoApplication:
             if action in ("load", "import_A", "import_B", "calibration"):
                 kind = "calibration" if action == "calibration" else "B" if action == "import_B" else "A"
                 self._load_catalog_dialog(kind)
+            elif action == "dimensions":
+                if not self.registration.can_import_list():
+                    return
+                from .registration.dimensions import edit_type_dimensions
+
+                dimensions = edit_type_dimensions(self.session.data.units)
+                if dimensions is not None and self.registration.update_dimensions(dimensions):
+                    self._reset_tools()
             else:
                 if action == "mode":
                     self._reset_tools()
@@ -242,7 +241,7 @@ class VideoApplication:
                 if event == cv2.EVENT_LBUTTONDOWN and rect and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
                     self._cancel_recalibration()
                     return
-                if self.calibration.context["draft"] is not None:
+                if self.calibration.context["draft"] is not None or self.calibration.context["pending"] is not None:
                     return
             self.table_setup.on_mouse(event, x, y, self.preview_size)
             self._activate_table_view()
@@ -320,14 +319,15 @@ class VideoApplication:
         if self.stage in (Stage.TABLE, Stage.RECALIBRATE):
             if key == 27:
                 self._cancel_recalibration() if self.stage is Stage.RECALIBRATE else self.close()
-            elif self.stage is Stage.RECALIBRATE and self.calibration.context["draft"] is not None:
+            elif self.stage is Stage.RECALIBRATE and (self.calibration.context["draft"] is not None or
+                                                       self.calibration.context["pending"] is not None):
                 return
             else:
                 self.table_setup.on_key(key)
                 self._activate_table_view()
             self.dirty = True
             return
-        if key == ord("k") and self.stage is Stage.PLAYBACK:
+        if key in (ord("k"), ord("K")) and self.stage is Stage.PLAYBACK:
             self._begin_recalibration()
             return
         if self.editor.input_mode == "terrain" and key in (26, ord("u"), ord("z")):
@@ -390,12 +390,17 @@ class VideoApplication:
 
     def advance(self):
         self.session.advance(self.registration, self.calibration)
+        if self.editor.poll():
+            self.geometry.note = self.editor.note
+            self.dirty = True
         if self.replay.poll():
             self.dirty = True
         if self.replay.active:
             return
         if self.stage is Stage.RECALIBRATE and self.calibration.context is None:
             self.stage = Stage.PLAYBACK
+        if self.stage is Stage.RECALIBRATE:
+            self.table_setup.frame = self.session.source.frame
         if self.table_setup.poll():
             self.dirty = True
         self._activate_table_view()
@@ -437,6 +442,7 @@ class VideoApplication:
 
     def close(self):
         self.replay.close()
+        self.editor.clear()
         self.live.return_live()
         self.session.close()
         self.table_setup.close()

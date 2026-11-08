@@ -2,6 +2,7 @@
 from collections import deque
 from pathlib import Path
 import cv2
+from components.homography import transform_points
 from components.registration import UnitRoster, extract_references, save_registration, read_unit_list_pdf
 
 class RegistrationController:
@@ -88,6 +89,28 @@ class RegistrationController:
             self.session.note += f" Reassign {len(cleared)} masks from the replaced list."
         return True
 
+    def update_dimensions(self, dimensions):
+        if not self.can_import_list():
+            return False
+        roster = self.data.units.with_dimensions(dimensions)
+        changed = {key for key in roster.types
+                   if roster.types[key].get("dimension") != self.data.units.types[key].get("dimension")}
+        if not changed:
+            self.session.note = "Tray dimensions unchanged."
+            self.session.dirty = True
+            return False
+        affected = [object_id for object_id, unit_id in roster.bindings.items()
+                    if roster.units[unit_id]["type_id"] in changed]
+        for object_id in affected:
+            self.data.rules.fronts.pop(object_id, None)
+        self.data.units = roster
+        self.session.configure_trays()
+        self.session.mark_changed()
+        self.session.note = f"Updated tray dimensions for {len(changed)} types."
+        if affected:
+            self.session.note += " Refitting trays; set their front edges again with F."
+        return True
+
     def bind_active(self):
         if not self.can_edit_points():
             return
@@ -116,7 +139,6 @@ class RegistrationController:
         self.session.note = f"Mask {self.active_id} is unlabelled. Click a type to bind it."
 
     def select_mask(self, object_id):
-        self.session.pause_source()
         self.active_id = object_id
         if self.data.units and object_id in self.data.units.bindings:
             unit_id = self.data.units.bindings[object_id]
@@ -183,6 +205,7 @@ class RegistrationController:
             self.session.note = "Start this object with a positive click."
             return
         click = {"object_id": self.active_id, "point": [float(x), float(y)],
+                 "point_source": transform_points([x, y], self.data.board.homography["inverse_matrix"]).tolist(),
                  "positive": positive, "video_frame": self.session.source.frame_index, "session_frame": None,
                  "click_id": self.next_click_id}
         self.next_click_id += 1
@@ -260,7 +283,8 @@ class RegistrationController:
                     "table_boundary": self.data.board.table_boundary, "rule_inputs": self.data.rules.snapshot()}
         if self.data.board.image_to_plane is not None and self.data.units is not None:
             metadata["rule_scene"] = self.data.rules.scene(self.data.units, self.data.current.prediction, self.data.board.image_to_plane,
-                                                          self.data.board.board_size_mm, self.data.current.prediction_metadata)
+                                                          self.data.board.board_size_mm, self.data.current.prediction_metadata,
+                                                          source_to_plane=self.data.board.source_to_plane)
         folder = save_registration(self.data.current.prediction_frame, overlay, references, metadata,
                                    self.session.output_dir, roster=self.data.units)
         self.data.reference_folder = folder

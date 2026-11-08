@@ -113,6 +113,21 @@ class UnitRoster:
                 self.units[unit_id] = deepcopy(unit)
                 self.bindings[object_id] = unit_id
 
+    def with_dimensions(self, dimensions):
+        """Validate a detached size edit while retaining every instance and binding."""
+        if not isinstance(dimensions, dict) or dimensions.keys() - self.types.keys():
+            raise ValueError("Dimensions must map existing type IDs to sizes or null.")
+        records = deepcopy(self.types)
+        for type_id, dimension in dimensions.items():
+            if dimension is None:
+                records[type_id].pop("dimension", None)
+            else:
+                records[type_id]["dimension"] = deepcopy(dimension)
+        payload = {**deepcopy(self.payload), "unit_types": list(records.values())}
+        roster = UnitRoster(payload, source=self.source)
+        roster.retain_bindings(self)
+        return roster
+
     def with_list(self, list_id, payload, *, source=None):
         """Return a validated replacement for one side, preserving the other side's bindings."""
         if list_id not in ("A", "B"):

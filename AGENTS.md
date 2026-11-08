@@ -47,12 +47,28 @@ Replay is authorized on 2026-11-07 as a separate read-only workflow: completed
 movement and rotation each form a step, ordered by their geometry end time.
 It replaces the visible live view while source playback, tracking and history
 recording continue; returning live must show the latest data.
+Opening replay selects the latest completed step; Refresh preserves the
+currently selected event, including Step 0 (confirmed 2026-11-08).
+
+The later 2026-11-08 coordinate decision uses original video pixels as the
+canonical spatial record. Keep source anchors, frame/size and calibration
+provenance; derive rectified display coordinates and millimetre rule inputs
+with the appropriate mapping. Compare both motion poses under the same metric
+mapping. Recalibration alone does not interrupt an action when source mappings
+are compatible; actual tracking/geometry loss still interrupts it. This assumes
+the agreed stable camera. Legacy replay may reconstruct derived events read-only;
+do not rewrite original observations or infer motion across real gaps.
 
 The 2026-11-06 product target is continuous display and source playback for
 all post-start workflows, including recovery, geometry tools and B08; a
-stop-source fallback is not currently accepted. Existing HELD queries and
-B08's paused transaction do not yet meet this target. Keep current behavior
-distinct from the pending redesign; resolve the relevant CL questions first.
+stop-source fallback is not accepted. The 2026-11-08 implementation removes
+HELD/Hold, updates geometry from live observations, and pumps rule/terrain
+forms without blocking the main loop. B08 keeps playback active and assumes
+a stable camera under the user's later 2026-11-08 decision; do not add camera
+motion detection or automatic corner invalidation. New tracking is committed
+only after isolated initialization succeeds;
+cancelled results cannot replace the old session. Recovery remains pending;
+resolve its relevant CL questions before implementing it.
 EdgeTAM is now the default propagation backend, initialized from SAM3's
 registered masks; explicit SAM3 and Cutie selection remain available.
 

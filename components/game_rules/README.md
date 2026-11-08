@@ -7,6 +7,11 @@ The screen plane is x-right/y-down. `heading_deg` describes the outward normal
 of the declared front edge, clockwise from screen-right. Corners retain their
 cyclic order and original front-edge index after a rotation.
 
+The frontend keeps original-video pixel anchors for trays, terrain and facing.
+`RuleState.scene(..., source_to_plane=...)` projects those anchors into one
+current millimetre plane before calling these queries. Pixel distance is never
+used as physical distance; calibration versions remain attached to observations.
+
 ```powershell
 python tools/query_rules.py scene.json --mode distance --units A1 B1
 python tools/query_rules.py scene.json --mode los --units A1 B1 --output los.json

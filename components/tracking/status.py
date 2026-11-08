@@ -62,6 +62,8 @@ def update_tracking(records, roster, prediction, metadata, disappearance_seconds
             if record.status == "tracking" and record.visibility and tray is not None:
                 record.last_accepted_position = {
                     "corners_mm": deepcopy(tray["corners_plane"]), "frame_index": frame_index,
+                    "corners_source": deepcopy(tray.get("corners_source")),
+                    "center_source": deepcopy(tray.get("center_source")),
                     "timestamp_seconds": float(stamp), "calibration_version": version,
                 }
         if record.status != "tracking" or object_id not in visible:

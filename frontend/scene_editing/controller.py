@@ -12,10 +12,10 @@ class SceneEditor:
         self.input_mode = None
         self.vertices = []
         self.note = ""
+        self.dialog = self.dialog_request = None
 
     def changed(self, *, refresh_inputs=True):
         if refresh_inputs:
-            self.live.refresh_analysis_inputs()
             if self.session.registration_locked:
                 self.data.record_history(kind="manual_state", source=self.session.source.metadata())
         self.session.mark_changed()
@@ -31,12 +31,15 @@ class SceneEditor:
         if tray is None:
             raise ValueError("The selected tray is no longer available.")
         point_mm = transform_points(point, self.data.board.image_to_plane)
-        self.data.rules.set_front(object_id, tray, point_mm, self.data.current.prediction_metadata["frame_index"])
+        self.data.rules.set_front(object_id, tray, point_mm, self.data.current.prediction_metadata["frame_index"],
+                                  source_to_plane=self.data.board.source_to_plane)
         self.changed(refresh_inputs=False)
 
     def add_terrain(self, vertices, values):
         terrain_id = f"T{len(self.data.rules.terrain) + 1}"
-        self.data.rules.terrain.append({"terrain_id": terrain_id, "polygon_image": deepcopy(vertices), **values})
+        source = transform_points(vertices, self.data.board.homography["inverse_matrix"]).tolist()
+        self.data.rules.terrain.append({"terrain_id": terrain_id, "polygon_source": source,
+                                        "polygon_image": deepcopy(vertices), **values})
         self.changed()
 
     def undo_terrain(self):
@@ -47,8 +50,42 @@ class SceneEditor:
             self.changed()
 
     def clear(self):
+        if self.dialog is not None:
+            self.dialog.close()
+        self.dialog = self.dialog_request = None
         self.input_mode = None
         self.vertices.clear()
+
+    def open_dialog(self, dialog, **request):
+        if self.dialog is not None:
+            self.dialog.close()
+        self.dialog = dialog
+        self.dialog_request = {**request, "generation": self.session.generation,
+                               "calibration_version": self.data.board.calibration_version}
+
+    def poll(self):
+        if self.dialog is None:
+            return False
+        request = self.dialog_request
+        if (request["generation"] != self.session.generation or
+                request["calibration_version"] != self.data.board.calibration_version):
+            self.clear()
+            return True
+        if not self.dialog.poll():
+            return False
+        values = self.dialog.result
+        self.dialog = self.dialog_request = None
+        if values is not None:
+            if request["kind"] == "profile":
+                if self.data.units.bindings.get(request["object_id"]) != request["unit_id"]:
+                    self.note = "Unit selection changed; the old edit was discarded."
+                    return True
+                self.update_unit_profile(request["object_id"], values)
+                self.note = "Unit rule information updated."
+            else:
+                self.add_terrain(request["vertices"], values)
+                self.note = "Terrain registered."
+        return True
 
     def action(self, action, active_id, pause):
         if action == "front":
@@ -78,10 +115,9 @@ class SceneEditor:
             pause()
             unit = self.data.units.units[self.data.units.bindings[object_id]]
             profile = {**self.data.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
-            values = edit_unit_rules(profile)
-            if values is not None:
-                self.update_unit_profile(object_id, values)
-                self.note = "Unit rule information updated. States are supplied manually."
+            self.open_dialog(edit_unit_rules(profile), kind="profile", object_id=object_id,
+                             unit_id=self.data.units.bindings[object_id])
+            self.note = "Edit unit information in the separate window; live playback continues."
         elif action == "terrain":
             if self.data.board.image_to_plane is None:
                 raise ValueError("Set the real board scale before annotating terrain.")
@@ -104,9 +140,7 @@ class SceneEditor:
         elif self.input_mode == "terrain":
             if len(self.vertices) >= 3 and np.linalg.norm((np.asarray(point) - self.vertices[0]) * preview_scale) <= 12:
                 polygon_selection(self.data.current.frame.shape, self.vertices)
-                values = edit_terrain()
-                if values is not None:
-                    self.add_terrain(self.vertices, values)
+                self.open_dialog(edit_terrain(), kind="terrain", vertices=deepcopy(self.vertices))
                 self.vertices.clear()
                 self.input_mode = None
             else:

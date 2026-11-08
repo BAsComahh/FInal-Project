@@ -38,12 +38,12 @@ class CalibrationView:
         self.auto_result = None
         self.points.clear()
         self.note = "Detecting the table on the first frame..."
-        self.future = self.executor.submit(self._detect)
+        self.future = self.executor.submit(self._detect, self.frame.copy())
 
-    def _detect(self):
+    def _detect(self, frame):
         from components.boundary_detection.table import detect_table
 
-        return detect_table(self.frame, diagnostics=True)
+        return detect_table(frame, diagnostics=True)
 
     def poll(self):
         if self.future is None or not self.future.done():
@@ -283,11 +283,14 @@ class CalibrationView:
             draw_text(panel, status[:max(28, preview_size[0] // 8)],
                       (16, panel.shape[0] - 35), size=14)
         if context is not None:
-            panel = cv2.copyMakeBorder(panel, 0, 48, 0, 0, cv2.BORDER_CONSTANT, value=(31, 29, 27))
-            y = panel.shape[0] - 40
+            panel = cv2.copyMakeBorder(panel, 0, 96, 0, 0, cv2.BORDER_CONSTANT, value=(31, 29, 27))
+            y = panel.shape[0] - 88
             rect = (10, y, 195, y + 30)
             cv2.rectangle(panel, rect[:2], rect[2:], (65, 61, 56), -1)
             draw_text(panel, "Cancel / Return [Esc]", (18, y + 21), size=13)
             self.recalibration_cancel_button = rect
-            draw_text(panel, session.note[:max(12, (panel.shape[1] - 220) // 7)], (210, y + 21), size=12)
+            status = context.get("error") or ("Waiting for a matching observation; live playback continues."
+                                             if context["pending"] is not None else session.note)
+            for row, line in enumerate(wrap(status, max(20, panel.shape[1] // 8))[:2]):
+                draw_text(panel, line, (10, y + 49 + row * 18), size=12)
         return panel

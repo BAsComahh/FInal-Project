@@ -3,39 +3,67 @@
 import math
 
 
-def edit_fields(title, fields, parse):
-    import tkinter as tk
-    from tkinter import messagebox, ttk
+class FieldDialog:
+    """Pump Tk on the application thread without entering a nested event loop."""
+    def __init__(self, title, fields, parse):
+        import tkinter as tk
+        from tkinter import ttk
 
-    root = tk.Tk()
-    root.title(title)
-    root.attributes("-topmost", True)
-    root.resizable(False, False)
-    variables, result = {}, []
-    for row, (key, label, value, kind) in enumerate(fields):
-        ttk.Label(root, text=label).grid(row=row, column=0, padx=14, pady=7, sticky="w")
-        variable = tk.BooleanVar(value=bool(value)) if kind == "bool" else tk.StringVar(value="" if value is None else str(value))
-        variables[key] = variable
-        if kind == "bool":
-            widget = ttk.Checkbutton(root, variable=variable)
-        elif isinstance(kind, tuple):
-            widget = ttk.Combobox(root, textvariable=variable, values=kind, state="readonly", width=28)
-        else:
-            widget = ttk.Entry(root, textvariable=variable, width=31)
-        widget.grid(row=row, column=1, padx=14, pady=7, sticky="w")
+        self.tk, self.parse = tk, parse
+        self.result, self.done = None, False
+        self.root = root = tk.Tk()
+        root.title(title)
+        root.attributes("-topmost", True)
+        root.resizable(False, False)
+        self.variables = {}
+        for row, (key, label, value, kind) in enumerate(fields):
+            ttk.Label(root, text=label).grid(row=row, column=0, padx=14, pady=7, sticky="w")
+            variable = (tk.BooleanVar(master=root, value=bool(value)) if kind == "bool" else
+                        tk.StringVar(master=root, value="" if value is None else str(value)))
+            self.variables[key] = variable
+            if kind == "bool":
+                widget = ttk.Checkbutton(root, variable=variable)
+            elif isinstance(kind, tuple):
+                widget = ttk.Combobox(root, textvariable=variable, values=kind, state="readonly", width=28)
+            else:
+                widget = ttk.Entry(root, textvariable=variable, width=31)
+            widget.grid(row=row, column=1, padx=14, pady=7, sticky="w")
+        self.error = tk.StringVar(master=root, value="")
+        ttk.Label(root, textvariable=self.error, foreground="firebrick", wraplength=430).grid(
+            row=len(fields), column=0, columnspan=2, padx=14, sticky="w")
+        ttk.Button(root, text="Save", command=self.save).grid(row=len(fields) + 1, column=0, padx=14, pady=14)
+        ttk.Button(root, text="Cancel", command=self.close).grid(row=len(fields) + 1, column=1, padx=14, pady=14)
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        root.bind("<Escape>", lambda event: self.close())
 
-    def save():
+    def save(self):
         try:
-            result.append(parse({key: value.get() for key, value in variables.items()}))
+            self.result = self.parse({key: value.get() for key, value in self.variables.items()})
         except ValueError as error:
-            messagebox.showerror(title, str(error), parent=root)
+            self.error.set(str(error))
             return
-        root.destroy()
+        self.close()
 
-    ttk.Button(root, text="Save", command=save).grid(row=len(fields), column=0, padx=14, pady=14)
-    ttk.Button(root, text="Cancel", command=root.destroy).grid(row=len(fields), column=1, padx=14, pady=14)
-    root.mainloop()
-    return result[0] if result else None
+    def poll(self):
+        if not self.done:
+            try:
+                self.root.update_idletasks()
+                self.root.update()
+            except self.tk.TclError:
+                self.close()
+        return self.done
+
+    def close(self):
+        if not self.done:
+            self.done = True
+            try:
+                self.root.destroy()
+            except self.tk.TclError:
+                pass
+
+
+def edit_fields(title, fields, parse):
+    return FieldDialog(title, fields, parse)
 
 
 def optional_number(value, label, *, positive=False):

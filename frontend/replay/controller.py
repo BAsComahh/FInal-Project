@@ -75,6 +75,7 @@ class ReplayController:
             future, self.index_future = self.index_future, None
             # Navigation can continue while Refresh loads: preserve the event now.
             event_id = self.steps[self.selected]["event_id"] if self.steps else None
+            opening = self.index is None
             try:
                 index = future.result()
                 steps = index.steps
@@ -82,8 +83,8 @@ class ReplayController:
                 self.error = str(error)
             else:
                 self.index, self.steps = index, steps
-                self.selected = next((i for i, step in enumerate(steps)
-                                      if step["event_id"] == event_id), 0)
+                self.selected = (max(0, len(steps) - 1) if opening else
+                                 next((i for i, step in enumerate(steps) if step["event_id"] == event_id), 0))
                 self.scene = None
                 self.error = ""
                 if self.scene_future is not None and self.scene_future.cancel():

@@ -43,9 +43,10 @@ class UnitPanel:
         draw_text(canvas, "Unit annotation [locked]" if locked else "Unit annotation", (12, 23), size=16)
         for action, text, x, y, width in [
             ("import_A", "Import list A [O]", 12, 36, 236), ("import_B", "Import list B [P]", 272, 36, 236),
-            ("mode", "Label [Tab]" if mode == "label" else "Segment [Tab]", 12, 100, 128),
-            ("calibration", "Calibration [C]", 148, 100, 160),
-            ("unbind", "Unbind", 316, 100, 88), ("undo", "Undo [U]", 412, 100, 96),
+            ("dimensions", "Tray dimensions (mm)", 12, 100, 496),
+            ("mode", "Label [Tab]" if mode == "label" else "Segment [Tab]", 12, 138, 128),
+            ("calibration", "Calibration [C]", 148, 138, 160),
+            ("unbind", "Unbind", 316, 138, 88), ("undo", "Undo [U]", 412, 138, 96),
         ]:
             rect = (x, y, x + width, y + 30)
             disabled = locked
@@ -53,21 +54,21 @@ class UnitPanel:
             draw_text(canvas, text, (x + 9, y + 21), (120, 120, 120) if disabled else (230, 230, 230), size=13)
             self.buttons.append((rect, action))
         label = roster.bindings.get(active_id, "unlabelled") if roster else "unlabelled"
-        draw_text(canvas, f"Active mask {active_id}: {label}", (12, 156), (100, 230, 150), size=16)
+        draw_text(canvas, f"Active mask {active_id}: {label}", (12, 194), (100, 230, 150), size=16)
         labelled = sum(object_id in roster.bindings for object_id in known_ids) if roster else 0
-        draw_text(canvas, f"Labelled masks: {labelled}/{len(known_ids)}", (12, 180), size=13)
-        draw_text(canvas, "Click mask + type, or drag type to mask.", (12, 203), size=12)
-        top, row_height = 250, 58
+        draw_text(canvas, f"Labelled masks: {labelled}/{len(known_ids)}", (12, 218), size=13)
+        draw_text(canvas, "Click mask + type, or drag type to mask.", (12, 241), size=12)
+        top, row_height = 288, 58
         self.visible_count = max(1, (height - top - 30) // row_height)
         cv2.line(canvas, (self.COLUMN_WIDTH, 34), (self.COLUMN_WIDTH, 92), (65, 65, 65), 1)
-        cv2.line(canvas, (self.COLUMN_WIDTH, 219), (self.COLUMN_WIDTH, height - 8), (65, 65, 65), 1)
+        cv2.line(canvas, (self.COLUMN_WIDTH, 257), (self.COLUMN_WIDTH, height - 8), (65, 65, 65), 1)
         for list_id, x, accent in (("A", 0, (210, 165, 95)), ("B", self.COLUMN_WIDTH, (95, 165, 225))):
             ids = self._types(roster, list_id) if roster else []
             info = roster.payload.get("lists", {}).get(list_id, {}) if roster else {}
             source = info.get("source") or (roster.source if roster and list_id == "A" else None)
             caption = Path(source).name if source else "Choose a PDF or type JSON"
             draw_text(canvas, self._short(caption, 35), (x + 12, 86), (165, 165, 165), size=11)
-            draw_text(canvas, f"List {list_id} / {len(ids)} types", (x + 12, 233), accent, size=15)
+            draw_text(canvas, f"List {list_id} / {len(ids)} types", (x + 12, 271), accent, size=15)
             if not ids:
                 draw_text(canvas, f"Import list {list_id} to add types.", (x + 12, top + 25), (165, 165, 165), size=12)
                 continue

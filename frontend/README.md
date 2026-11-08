@@ -19,7 +19,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 尺寸页显示 `Length (in)` 和 `Width (in)` 两个输入栏，默认 72、48，分别对应 TL→TR 的横向长度和 TL→BL 的纵向宽度。点击输入栏或按 Tab 切换，输入数字会替换被选中的默认值，支持小数、退格、Ctrl+A 和 Enter；空值、零和非有限值不能继续。`Back to corners [B]` 返回四角检查，手动标记的 Undo 仍可用。`--board-size-in` 可预填其他英寸尺寸，外部 `--calibration` 则使用其毫米宽深换算后预填；两参数不能同时使用。
 
-确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册、播放、SAM、mask、托盘和 reference 都使用拉正图像坐标；每一版标定期间沿用同一变换和尺寸，镜头变化后需显式重新标定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
+确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册显示、SAM 输入、mask 和 reference 裁剪使用拉正图像坐标；托盘、地形及正面另保存原视频像素锚点，毫米和显示坐标为带标定版本的派生值；每一版标定期间沿用同一变换和尺寸，镜头变化后需显式重新标定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
 
 原始桌角和确认的英寸／毫米尺寸保存在最终 `prompts.json.table_boundary`，角点坐标空间为 `source_image_pixels`。注册元数据标明 `rectified_table_pixels`，保存原视频尺寸、拉正尺寸及正反矩阵；同样的信息会随每个 reference 保存。手动点不受图像四象限限制，强透视或接近菱形时仍需核对角名。
 
@@ -31,11 +31,13 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 2. 默认是分割模式：左键添加正点、右键添加排除点，`N` 新建对象。可以先分割所有目标，不指定任何 type。
 3. 按 `Tab` 或侧栏模式按钮切换到标注模式：点击 mask 再点击某方 type，也可以直接把 type 拖到 mask 上。List A 的 Type 1 对应内部类型 A1，实例依次生成 A1.1、A1.2；List B 的 Type 1 则生成 B1.1 等。按下 type 时不绑定，释放到目标才生效；拖到空白处取消。已绑定的 mask 可以重复选中并改绑，同 type 保留编号，换 type 释放旧编号而不重排其他单位。选中目标显示白色轮廓。
 4. `S` 完成注册，或按空格完成并播放：统一保存一次最终 reference，锁定点及类型修改，然后传播 mask。
-5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、显示冻结／返回实时及规则工具。Space 冻结／恢复显示，视频源和追踪继续前进；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，实况页的 `Esc` 关闭窗口，回放页的 `Esc` 返回实况。冻结不会重新允许编辑 SAM 提示或类型。
+5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、回放、重新标定和规则工具。播放期画面与源时钟持续运行，Space／Q 清除工具并回到最新实况，不提供 Hold／显示暂停；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，实况页的 `Esc` 关闭窗口，回放页的 `Esc` 返回实况。开始播放后始终锁定 SAM 提示、type 和尺寸编辑。
 
 首次播放前可用 `Ctrl+Z`／`U` 撤回点提示，`Unbind`／退格键仅解除类型绑定。`Tab` 回到分割模式可继续修点，`N` 会自动进入分割模式以添加新 mask。标注模式下点击只选 mask，不添加 SAM 提示；改绑只更新单位信息与尺寸相关托盘候选，不重新分割。选择类型或切换标注模式时退出当前规则查询，避免查询拦截拖放。`B` 保留为重复绑定当前 type 的快捷键，正常点击／拖放无需它。首次播放后导入和类型编辑一并锁定；R 重置注册保留两份名单。
 
-PDF 没有托盘毫米尺寸时，导入后 TRAY 会提示 `NO SIZES`；需另行提供真实尺寸或使用补有 `dimension` 的单方 JSON。不会把旧 ABC 估算尺寸自动套给真实兵种。
+点击注册侧栏的 `Tray dimensions (mm)`，在独立窗口中批量填写尺寸：List A／List B 各一列，每个 type 显示编号、兵种／编制，以及 `Width (mm)`／`Depth (mm)`。宽指正面边长，深指前后长度；同 type 的实例共用尺寸。已有尺寸预填，两列分别滚动；两格都空表示未知，只填一格、非正数或非有限数会阻止保存。
+
+`Save` 整表验证后更新内存目录，已有 mask 自动重新拟合；修改尺寸的实例需要再次用 F 标记正面。`Cancel`、Esc 或关闭窗口保留原值。模型准备期间也可填写；S／首次播放后锁定尺寸编辑，最终尺寸随单位目录和 reference 保存，R 保留编辑后的目录。原始 PDF／JSON 不被覆盖，重新导入某方仍以新目录为准，不自动套用旧手填尺寸。当前没有自动尺寸建议，也不把 ABC 估算值套给真实兵种。缺少已绑定单位尺寸时，TRAY 仍提示 `NO SIZES`。
 
 红绿提示点只显示当前对象；按 N 或选择另一个对象时，上一对象的标记隐藏，点提示数据仍保留。右侧不再提供上一／下一 mask 按钮，注册时仍可点击 mask、使用数字键或 `[`／`]` 选择目标。
 
@@ -71,7 +73,7 @@ frontend/app.py                      流程组装、阶段衔接与输入路由
 frontend/runtime/                    视频源、串行任务、观测接纳与历史
 frontend/registration/               首帧提示草稿、军表、绑定及 reference 发布
 frontend/calibration/                首次桌面标定与 B08 事务、四角和尺寸页面
-frontend/live/                       LIVE／HELD 显示、播放布局和只读失败名单
+frontend/live/                       持续 LIVE 显示、播放布局和只读失败名单
 frontend/replay/                     历史索引异步读取、动作切步与数字棋盘
 frontend/geometry_tools/             查询选择、后台计算与测量叠加
 frontend/scene_editing/              单位资料、初始正面和地形的受控编辑
@@ -88,13 +90,13 @@ components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过 `window.app` 持有 `VideoApplication`。应用组装各控制器与视图，保留 TABLE／REGISTER／PLAYBACK／RECALIBRATE 四阶段；`app.session.data` 是唯一的本局 `GameData`。运行层不随当前工具关闭或重启，直播控制器独立管理冻结快照。显示冻结仍处于 PLAYBACK，显式重新标定进入 RECALIBRATE；最终保存目录存在即表示注册已锁定。组件不导入前端，不使用动态属性转发或 mixin 共享全部状态。
+`VideoWindow` 通过 `window.app` 持有 `VideoApplication`。应用组装各控制器与视图，保留 TABLE／REGISTER／PLAYBACK／RECALIBRATE 四阶段；`app.session.data` 是唯一的本局 `GameData`。运行层不随当前工具关闭或重启，直播展示直接读取实时数据。显式重新标定进入 RECALIBRATE 并持续显示原始源画面，源时钟与追踪调度继续；最终保存目录存在即表示注册已锁定。组件不导入前端，不使用动态属性转发或 mixin 共享全部状态。
 
 推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；程序化驱动使用 `frontend.app.VideoApplication`。单位与 reference 接口见 [registration](../components/registration/README.md)。
 
-修改提示、撤回、编号或保存规则时先看 `registration/controller.py`；修改注册页布局和拖放时看同目录 `view.py`／`unit_panel.py`。修改直播页及失败名单时看 `live/`；修改几何查询调度和测量显示时看 `geometry_tools/`；修改属性、正面或地形输入时看 `scene_editing/`。初始标定和 B08 位于 `calibration/`，视频调度与模型队列位于 `runtime/`。只有跨流程的阶段切换、重置与输入优先级才需要改 `app.py`。
+修改提示、撤回、编号或保存规则时先看 `registration/controller.py`；修改注册页布局和拖放时看同目录 `view.py`／`unit_panel.py`，双列尺寸表单在 `dimensions.py`。修改直播页及失败名单时看 `live/`；修改几何查询调度和测量显示时看 `geometry_tools/`；修改属性、正面或地形输入时看 `scene_editing/`。初始标定和 B08 位于 `calibration/`，视频调度与模型队列位于 `runtime/`。只有跨流程的阶段切换、重置与输入优先级才需要改 `app.py`。
 
-回放由 `replay/` 独立管理历史场景与游标，共享运行层持续推进视频源、追踪和写盘。进入回放清理原有查询与 HELD 显示，返回时读取最新实况。恢复与 what-if 仍待实现。未来恢复只处理失败的已有实例并保留 ID，可复用注册控件。what-if 将提供独立布局副本，几何组件继续消费显式场景。
+回放由 `replay/` 独立管理历史场景与游标，共享运行层持续推进视频源、追踪和写盘。进入回放清理查询与编辑草稿，返回时读取最新实况。恢复与 what-if 仍待实现。未来恢复只处理失败的已有实例并保留 ID，可复用注册控件。what-if 将提供独立布局副本，几何组件继续消费显式场景。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
@@ -119,9 +121,9 @@ app.session.data
   reference_folder   已完成注册的保存目录，也是注册锁定依据
 ```
 
-`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定和该次历史写入器。后续接纳传播结果或人工修改状态时记录历史。每条历史含独立 `sequence`、`kind`、接纳／操作时的 `frame_index`／`timestamp_seconds` 和几何自身的 `observation_frame_index`／`observation_timestamp_seconds`。两者可能不同，迟到几何不会把当前人工状态写到过去，也不能当作新的几何采样。按本局 `unit_id` 索引的 `units` 保存 type、有效属性、`corners_mm`、`position_status`、追踪状态／可见性和 `state`（含 engaged／wavering／facing）。未知值保留 null，无有效托盘为 null／unavailable，available 不是准确率判断。相同源帧和内容不重复追加，同帧不同编辑按 sequence 保序。
+`data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新朝向连续性；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定和该次历史写入器。后续接纳传播结果或人工修改状态时记录历史。每条历史含独立 `sequence`、`kind`、接纳／操作时的 `frame_index`／`timestamp_seconds` 和几何自身的 `observation_frame_index`／`observation_timestamp_seconds`。两者可能不同，迟到几何不会把当前人工状态写到过去，也不能当作新的几何采样。按本局 `unit_id` 索引的 `units` 保存 type、有效属性、源坐标 `corners_source`／`center_source`、派生 `corners_mm`、`position_status`、追踪状态／可见性和 `state`（含 engaged／wavering／facing）。未知值保留 null，无有效托盘为 null／unavailable，available 不是准确率判断。相同源帧和内容不重复追加，同帧不同编辑按 sequence 保序。
 
-`app.live.presentation` 返回实时 `GameData` 或 `data.snapshot()` 生成的独立分析快照，后者不复制历史、整个标定版本列表或写入器。冻结时后台继续写历史；Clear query／Return live 切回实时实例。R 清空当前观测、绑定及短缓存，保留类型目录、桌面标定、原有地形及旧数据库；旧待写批次继续重试。矩形历史包含 `calibration_version`，对应最终坐标变换和尺寸保存在数据库与 `data.calibrations` 中，旧历史不随重新标定改写。
+`app.live.presentation` 始终返回实时 `GameData`；查询提交时只复制其同帧场景与来源信息，历史回放使用自身固定读取边界。Space／Q 清除工具并回到最新实况。R 清空当前观测、绑定及短缓存，保留类型目录、桌面标定、原有地形及旧数据库；旧待写批次继续重试。矩形历史包含 `calibration_version`，对应最终坐标变换和尺寸保存在数据库与 `data.calibrations` 中，旧历史不随重新标定改写。
 
 ## 短长历史存储
 
@@ -153,7 +155,9 @@ MOTION_SETTLE_SECONDS = 5.0
 
 平移看托盘中心，旋转看无向托盘轴。相对参考姿态的变化超出容差时开始／继续对应事件，之后新有效几何采样在 5 秒内都未再超出容差，才标为 `completed`。例如最后显著变化在 10 秒、15 秒确认停稳，终点保留 10 秒观测，另存 15 秒确认来源。起点是触发前一有效观测的估计；同帧刷新、人工改状态和推理等候不推进计时。
 
-`ongoing` 为尚未确认停稳，`interrupted` 为位置缺失、几何失败、标定变化、模型错误、R 或关闭造成的记录中断，不算已完成一步。恢复后重新建立起点，不补缺口运动；停稳后继续移动则生成新事件。事件及相关局部记录同事务写盘，沿用写盘失败提示、保留内存和重试；新库为 v2，已有 v1 局部历史仍可读，继续写入时加表迁移。
+前后源姿态和稳定性锚点均投影到同一当前毫米标定比较，避免把 Homography 的变化当作运动；源画布和变换兼容时，重新标定本身不中断。事件起终点各存原版本，事件级版本及截图属于几何终点。
+
+`ongoing` 为尚未确认停稳，`interrupted` 为真实位置缺失、几何失败、源坐标不兼容、模型错误、R 或关闭造成的记录中断，不算已完成一步。恢复后重新建立起点，不补缺口运动；停稳后继续移动则生成新事件。事件及相关局部记录同事务写盘，沿用写盘失败提示、保留内存和重试；新库为 v2，已有 v1 局部历史仍可读，继续写入时加表迁移。
 
 ```python
 from components.history import read_motion_events, read_event_history
@@ -163,13 +167,13 @@ segment = read_event_history(history_path, events[0]["event_id"]) if events else
 # segment["event"] 是事件，segment["records"] 是对应的原始单位局部记录。
 ```
 
-事件区间筛选使用**几何观测源时间**，返回与闭区间相交的事件。上一节局部记录的时间筛选使用接纳／操作时间。片段通过序号关联，包含停稳确认或同标定下的中断证据，并排除新标定坐标。并行事件可以引用同一批记录。这些磁盘接口只见已提交结果。
+事件区间筛选使用**几何观测源时间**，返回与闭区间相交的事件。上一节局部记录的时间筛选使用接纳／操作时间。片段通过序号关联，包含停稳确认及中断证据；源坐标事件允许跨标定，每条局部记录保留原版本，旧事件仍按原单一版本边界读取。并行事件可以引用同一批记录。这些磁盘接口只见已提交结果。
 
 ## 历史棋盘回放
 
-播放页点击 `Replay` 打开本次注册的历史。回放占主画面，以毫米平面中的矩形和实例 ID 表示单位。后台的视频源、追踪和历史记录继续运行。点击 `Back to Live` 或按 `Esc` 返回最新实况。
+播放页点击 `Replay` 打开本次注册的历史，默认定位最后一个已完成动作；没有已完成动作时为初始 Step 0。关闭重开会重新定位到当时的末步。回放占主画面，以毫米平面中的矩形和实例 ID 表示单位。后台的视频源、追踪和历史记录继续运行。点击 `Back to Live` 或按 `Esc` 返回最新实况。
 
-每步背景使用该动作终点的 Homography 后源输入截图，矩形和 ID 叠在对应标定的画面上。初始 Step 0 也保存截图，同一终点的移动／旋转共用图片。截图后台保存到本次注册的 `replay_frames/v版本_s序号.jpg`。停稳确认前暂存活动终点帧，完成后写盘。旧历史没有截图或图片无法读取时，显示基础棋盘和 `Step image unavailable`。
+每步背景使用该动作终点的 Homography 后源输入截图，矩形和 ID 叠在对应标定的画面上。初始 Step 0 也保存截图，同一终点的移动／旋转共用图片。截图后台保存到本次注册的 `replay_frames/v版本_s序号.jpg`。停稳确认前暂存活动终点帧，完成后写盘。旧历史因标定切换中断时，后台按固定读取边界只读重建派生动作，原数据库不改写；优先采用历史阈值，真实缺失仍中断。其新得到的步骤缺少截图时，用独立读取器从原视频帧及当时 Homography 还原，不移动直播读取器；视频或截图无法读取时，显示基础棋盘和 `Step image unavailable`。新格式记录直接使用已存事件，不重扫整场历史。
 
 - 初始注册为 Step 0。每个已完成 Move 或 Rotate 各占一步，按动作结束的几何源时间排序。同一结束时间先列 Move，再列 Rotate，并保留各事件的独立身份。
 - `Previous`／`Next` 按钮、`←`／`→` 或 `A`／`D` 切换步骤。回放中的 D 用于下一步，实况中的 D 仍用于测距。首尾会停在有效步骤范围内。
@@ -193,7 +197,7 @@ segment = read_event_history(history_path, events[0]["event_id"]) if events else
 
 `app.session.data.tracking[unit_id]` 保存 `visibility`（最近一次是否有非空 mask）、`status`（tracking／pending／failed）、`disappeared_time`、最近观测帧／时间／标定版本及 `last_accepted_position`。最后位置有自己的源帧与版本；它表示按当前业务假设曾被接纳，不是测得的身份置信度。显式 `routed=True`／`removed=True` 的属性令记录不在场并排除失败名单；正式移除编辑入口尚未实现。
 
-超时才在播放页出现 A／B 双列，只列失败实例，显示 ID、type、Damage 摘要及最后位置时间，支持分别滚动；没有 Damage 时显示 `?`。名单与当前 LIVE／HELD 观测一致。失败后重新出现的 mask 标为 `[Estimated]`，仍保持失败，不进入当前规则位置、朝向更新或有效位置历史。已有 mask 但拟合失败只导致当前几何不可用，不进入这份失踪名单；旧位置不会自动填回。
+超时才在播放页出现 A／B 双列，只列失败实例，显示 ID、type、Damage 摘要及最后位置时间，支持分别滚动；没有 Damage 时显示 `?`。名单跟随最新接纳观测。失败后重新出现的 mask 标为 `[Estimated]`，仍保持失败，不进入当前规则位置、朝向更新或有效位置历史。已有 mask 但拟合失败只导致当前几何不可用，不进入这份失踪名单；旧位置不会自动填回。
 
 本轮名单是只读信息入口；Correct / No、拖放绑定、自动恢复和只针对缺失实例的补标记尚未实现。R 开始新注册会清空状态；B08 保留原 ID 及失败锁定。恢复与桌面重新标定是独立流程，不通过解除首帧全局编辑锁来恢复单位。需求基准及未决问题见 [待澄清列表](../待澄清列表.md)。
 
@@ -201,14 +205,16 @@ segment = read_event_history(history_path, events[0]["event_id"]) if events else
 
 播放页点击 `Recalibrate [K]` 或按 K：
 
-1. 暂停本地视频源，显示当前源帧的原图；等待在途追踪，必要时对该帧补一次传播。这里明确暂停输入，区别于 Space／规则查询的显示冻结。
-2. 复用桌角确认、任意顺序手工标记和 Undo，确认当前实际长宽。Esc／`Cancel / Return` 返回之前的标定和显示状态；正在建立新会话时需等结果后再取消。
-3. Continue 将当前 mask 映射到新拉正图，保留原 object ID 和单位绑定，以新的初始 mask 建立独立追踪会话。无需重新加载权重，点及 type 仍锁定；新托盘依据实际尺寸重新拟合。
-4. 初始化成功后整体切换，从暂停帧重新计时继续播放。失败时不替换原会话／标定，可重试或取消。规则查询及旧显示缓存清除；地形按桌面坐标迁移，正面重新关联矩形轴并标为估计。
+1. 按固定相机理想假设处理，直接显示持续播放的原始源画面；源时钟和旧标定下追踪继续。不执行相机运动检测，不因纹理不足拒绝进入或自动清空角点。打开时取消其他工具的未保存草稿，支持 k／K 和按钮。
+2. Continue 等待最近有效观测及其同帧原始源图，将 mask 映射到新拉正图，保留原 object ID 和单位绑定，以原已加载权重建立独立新会话；新托盘依据实际尺寸重新拟合。
+3. 新会话成功后切换标定，显示使用最新源帧，源时钟不重启。旧会话在成功前一直保留；准备新会话占用原串行模型队列，可能增加观测延迟，画面仍持续播放。
+4. Esc／`Cancel / Return` 随时取消，包括初始化过程中；取消或被新一轮标定替代的结果不接纳。失败保留旧会话／标定，并持续显示失败原因，允许重试。地形和正面从原视频像素锚点投影到新标定；正面重新关联矩形轴并标为估计。
+
+相机稳定是当前假设，运动检测及其专用配置已移除；桌角自动检测与手动选四角仍可使用。片尾主动发起 B08 时可请求迁移所需的同帧观测，不自动重启视频，也不加入通用片尾补算。
 
 原 reference 保留初始图像与坐标来源，不重复导出。每次成功建立新标定递增版本，R 从最近一次标定帧重新注册，避免将新变换套到旧开局画面。原视频区间的结束位置保持。
 
-迁移只使用当前可用 mask；完全丢失或移出旧画面有效范围的单位保留资料及历史，但不会凭旧位置补出新 mask，界面显示 `No tracking masks`。全部单位都无可用 mask 时拒绝应用，可取消后选择较清晰的帧重试。这不是 ID 恢复；仍需检查 mask 是否对应正确单位。地形迁移假设桌面内容固定，新旧标定的物理桌角对应关系不变，镜头旋转导致角名对应改变时不能直接沿用旧标注。
+迁移只使用当前可用 mask；完全丢失或移出旧画面有效范围的单位保留资料及历史，但不会凭旧位置补出新 mask，界面显示 `No tracking masks`。全部单位都无可用 mask 时拒绝应用，可取消后选择较清晰的帧重试。这不是 ID 恢复；仍需检查 mask 是否对应正确单位。源坐标接续沿用相机与桌面内容固定的理想假设；实际移动相机不属于单纯重选四角，不能把不同视角的原像素当作同一物理位置。
 
 ## 游戏信息与规则工具（首版）
 
@@ -237,7 +243,9 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 | `Double [J]` | 点击一个单位，估计 At the Double 的可达姿态 |
 | `Q` | 清除规则查询和选择，返回原有交互 |
 
-选择规则查询时冻结显示，背景、mask、托盘和规则输入取自同一观测；视频源时钟和追踪继续前进。Space／Hold view 也只冻结显示。Clear query [Q] 或 Return live [Space] 清除分析快照并回到最新画面；不会恢复历史提示或解除注册锁。规则计算使用独立后台线程，并显示 snapshot age；旧查询完成后不能覆盖已清除的结果。蓝色点表示采样到的可达**中心位置**，每个姿态的路径及朝向由组件返回；没有实心填充样本凸包，也没有宣称采样以外不可达。
+选择规则查询时画面继续播放，选中的实例随最新有效观测重新计算；一次查询中的托盘和规则输入仍取自同帧场景。结果显示 `Observed` 源时间与年龄，正在等待新结果时标为 `Updating`，过期几何图层暂不叠加。Space／Q 清除工具并回到最新实况，不解除注册锁。规则计算使用独立后台线程并合并待算观测，旧代次结果不能覆盖已清除或换标定后的结果。蓝色点表示采样到的可达**中心位置**，每个姿态的路径及朝向由组件返回；没有实心填充样本凸包，也没有宣称采样以外不可达。
+
+Unit rules 和闭合地形后的资料窗口由主循环轮询，填写、校验报错和保存期间源播放、追踪及历史继续。Cancel／Esc／关闭窗口放弃草稿，R、切换标定、进入回放或关闭程序会取消尚未应用的编辑；保存针对原实例，迟到结果不能写给另一个绑定。
 
 LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。原型只在目标完全不在前方弧时直接返回 `Blocked`；场景存在未拟合单位时不会将该不完整场景的射线升级为确定清晰。Hill、地形内外及 Height 等仅按已登记区域计算，未登记障碍仍可能改变结果。
 
@@ -250,6 +258,6 @@ LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。�
 
 `--tracker sam3|cutie|edgetam` 选择注册后的传播模型，默认 `edgetam`（`frontend/config.py` 的 `DEFAULT_TRACKER`）。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
 
-2026-11-06 的新目标是所有播放后流程不冻结画面、不停源，包括几何工具与 B08；尚待统一设计和实现。本页的 HELD／Space／查询快照及 B08 停源说明仍描述当前代码，不是新目标的验收结论。需求与交互缺口见根目录 [待澄清列表](../待澄清列表.md)。
+2026-11-08 已完成现有播放后入口的持续显示／不停源改造。首帧注册仍按原约定编辑并一次保存；恢复与 what-if 尚未实现，其连续点选、候选审核及布局问题仍见根目录 [待澄清列表](../待澄清列表.md)。
 
 桌角自动检测失败会保留橙色候选边、缺边原因及 Retry／Manual 按钮；不会直接跳到空白手动页，也不会把无效候选当成成功。手动页提供 Auto 重试，手动输入继续优先于迟到的自动结果。

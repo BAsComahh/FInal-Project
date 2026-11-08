@@ -198,13 +198,15 @@ class TaskWorker:
                 stream.write(json.dumps(record) + "\n")
 
     def submit(self, kind, *, frame=None, metadata=None, prompt=None, generation=0, clicks=None, prediction=None,
-               tray_context=None):
+               tray_context=None, raw_frame=None, calibration_token=None):
         if self.busy:
             raise RuntimeError("A SAM3 request is already in flight")
         self.request = {"kind": kind, "frame": frame.copy() if frame is not None else None,
                         "metadata": dict(metadata) if metadata is not None else None,
                         "prompt": prompt, "generation": generation, "clicks": deepcopy(clicks),
                         "prediction": prediction,
+                        "raw_frame": raw_frame.copy() if raw_frame is not None else None,
+                        "calibration_token": calibration_token,
                         "tray_context": deepcopy(self.tray_context if tray_context is None else tray_context)}
         self.request["submitted_at"] = perf_counter()
         self.future = self.executor.submit(self._recorded_run if self.timing_dir is not None else self._run, self.request)

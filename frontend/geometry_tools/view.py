@@ -31,8 +31,11 @@ class GeometryView:
             else:
                 text = f"{self.geometry.mode}: {status}. {self.geometry.result.get('reason', '')}"
             if self.geometry.result_request is not None:
+                observed = self.geometry.result_request["metadata"]["timestamp_seconds"]
                 age = max(0, source.frame_index - self.geometry.result_request["metadata"]["frame_index"]) / source.fps
-                text += f" | snapshot age {age:.2f}s"
+                text = f"Observed {observed:.2f}s / age {age:.2f}s | " + text
+                if not self.geometry.result_current(presentation):
+                    text = "Updating | " + text
             if self.geometry.result.get("warnings"):
                 text += " | " + "; ".join(self.geometry.result["warnings"][:1])
         roster = presentation.units
@@ -53,6 +56,8 @@ class GeometryView:
                     cv2.polylines(preview, [points], True, (245, 245, 245), 2, cv2.LINE_AA)
         self.scene_view.draw_inputs(preview, view)
         if self.geometry.result is None or self.geometry.result_request is None or self.geometry.mode is None:
+            return
+        if not self.geometry.result_current(view):
             return
         if self.geometry.overlay is None or self.geometry.overlay.shape != preview.shape:
             self.geometry.overlay = np.zeros_like(preview)

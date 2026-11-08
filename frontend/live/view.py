@@ -28,7 +28,7 @@ class LiveView:
         width, height = self.preview_size
         missing = self.missing_panel.failed_units(view)
         show_status = session.model_failed or session.pending_play or bool(missing)
-        button_columns = 4 if width >= 640 else 2
+        button_columns = 3 if width >= 640 else 2
         extra_height = 36 if button_columns == 2 else 0
         panel_height = max(332 if missing else 0, height + (272 if show_status else 232) + extra_height)
         panel_width = width + (self.missing_panel.WIDTH if missing else 0)
@@ -38,8 +38,7 @@ class LiveView:
             panel[:, width:] = self.missing_panel.render(panel_height, view)
         self.display.controls(panel, height + 8, preview_size, self.tray_caption())
         self.view_buttons = []
-        labels = (("view", "Return live [Space]" if self.live.snapshot is not None else "Hold view [Space]"),
-                  ("clear", "Clear query [Q]"), ("recalibrate", "Recalibrate [K]"), ("replay", "Replay"))
+        labels = (("clear", "Clear query [Q]"), ("recalibrate", "Recalibrate [K]"), ("replay", "Replay"))
         for i, (action, label) in enumerate(labels):
             button_width = min(190, (width - 10 * (button_columns + 1)) // button_columns)
             x, y = 10 + (i % button_columns) * (button_width + 10), height + 42 + (i // button_columns) * 36
@@ -47,7 +46,7 @@ class LiveView:
             cv2.rectangle(panel, rect[:2], rect[2:], (65, 65, 65), -1)
             draw_text(panel, label, (x + 6, y + 20), size=max(10, min(13, button_width // 14)))
             self.view_buttons.append((rect, action))
-        state = "HELD" if self.live.snapshot is not None else "LIVE"
+        state = "LIVE"
         stamp = (view.current.prediction_metadata or {}).get("timestamp_seconds")
         observed = "none" if stamp is None else f"{stamp:.2f}s"
         draw_text(panel, f"{session.worker.tracker_name} | View {state} | live {session.source.frame_index / session.source.fps:.2f}s | masks {observed} | calibration v{session.data.board.calibration_version}",

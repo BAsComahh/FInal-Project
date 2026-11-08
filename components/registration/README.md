@@ -25,6 +25,8 @@ folder = save_registration(frame, overlay, references, metadata, "outputs/sam3_r
 
 尺寸值仅展示格式，需换成本局实测值。同 type 尺寸一致，属性随 reference 保存，界面只展示类型与编号。尺寸可选；毫米托盘拟合要求尺寸和相应标定均存在。
 
+`UnitRoster.with_dimensions({type_id: {"width_mm": 100, "depth_mm": 80}})` 返回经过完整校验的新目录，保留实例 ID、属性、绑定、计数与来源；值为 `None` 时移除该 type 的尺寸，未知 type 或无效尺寸会拒绝整次修改。原目录不被修改，`snapshot()` 与实例 `annotation()` 均读取新尺寸。注册页的 `Tray dimensions (mm)` 提供 A／B 双列表单，原始输入文件不被覆盖，草稿尺寸在最终注册时统一保存。
+
 ## 双军表与分方编号
 
 `UnitRoster.with_list("A" 或 "B", payload, source=...)` 返回替换该方的新 roster，在修改原对象前完成验证。该方记录重新编为 A1、A2…／B1、B2…，含 `list_id`、`type_number`、`source_type_id`，属性 `side` 按所选按钮写为 A／B。多方合并 JSON 会被拒绝作为单方导入。`payload.lists` 保存两方各自的来源及原目录元数据。
@@ -90,6 +92,8 @@ frame_<标识>/
 ```
 
 视频前端的 source 使用 `rectified_table_pixels`，保留原视频帧号／时间、原图大小及正反 Homography；`table_boundary` 中的桌角使用 `source_image_pixels`。实例 ID 仅在本局有效，不能把不同比赛的 A1 当作同一对象。
+
+注册提示同时保留模型输入用的 `point` 与原视频锚点 `point_source`。托盘／历史使用 `corners_source`／`center_source`，地形为 `polygon_source`，正面为 `source_ray`；规则场景统一经当前 `source_to_plane` 投影到毫米。reference 的 mask、裁剪边框和输入点仍属于其配套拉正帧，不将这些图像局部坐标直接当作原视频像素。注册期重载标定后的托盘重算保留原观测帧／时间，并更新其坐标版本。
 
 `rule_state.py` 维护人工正面和地形记录，使用已拟合的毫米托盘构建规则场景；每实例属性覆盖 type 默认值。规则字段为 `speed_in`、`height`、`side`、`unit_kind`、`special_rules`、`engaged` 和 `wavering`，缺失值保留未知，不从旧 `movement` 字段猜测单位。规则 Height 不是模型物理高度。后续矩形正面属于连续性估计，不是方向识别或 ID 恢复。规则引擎与支持范围见 [game_rules](../game_rules/README.md)。
 

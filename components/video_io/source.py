@@ -20,6 +20,7 @@ class VideoSource:
             raise ValueError(f"Cannot read video timeline: {self.path}")
         self.duration = self.frame_count / self.fps
         self.frame_index = -1
+        self.frame = None
         self.provenance = {}
         sidecar = self.path.with_suffix(".source.json")
         if sidecar.is_file():
@@ -48,6 +49,7 @@ class VideoSource:
         if not success:
             raise ValueError(f"Cannot decode video frame {index}")
         self.frame_index = index
+        self.frame = frame
         return frame
 
     def metadata(self):

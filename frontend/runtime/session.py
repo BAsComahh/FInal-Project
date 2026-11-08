@@ -54,6 +54,7 @@ class MatchSession:
         self.startup_ready = False
         self.model_failed = self.closed = self.playing = False
         self.pending_play = False
+        self.prediction_raw_frame = None
         self.next_inference_time = 0.0
         self.last_submitted_frame = -1
         self.dirty = True
@@ -99,10 +100,10 @@ class MatchSession:
             return frame
         return cv2.warpPerspective(frame, self.data.board.homography["matrix"], self.data.board.homography["output_size"])
 
-    def frame_metadata(self, *, board=None, frame=None):
+    def frame_metadata(self, *, board=None, frame=None, source_metadata=None):
         board = self.data.board if board is None else board
         frame = self.data.current.frame if frame is None else frame
-        metadata = self.source.metadata()
+        metadata = self.source.metadata() if source_metadata is None else dict(source_metadata)
         if board.homography is not None:
             metadata.update(
                 coordinate_space="rectified_table_pixels", image_size=list(frame.shape[1::-1]),
@@ -161,15 +162,7 @@ class MatchSession:
         now = perf_counter() if now is None else now
         if self.worker.busy or self.closed:
             return
-        if calibration.context is not None:
-            context = calibration.context
-            metadata = self.data.current.prediction_metadata
-            if (context["draft"] is None and not self.model_failed and metadata is not None
-                    and metadata["frame_index"] < context["frame_index"]):
-                self.worker.submit("propagate", frame=self._warp_frame(context["frame"]),
-                                   metadata=self.frame_metadata(), generation=self.generation)
-                self.last_submitted_frame = context["frame_index"]
-                self.next_inference_time = now + 1 / self.inference_fps
+        if calibration.context is not None and calibration.submit_pending():
             return
         if self.needs_reset:
             self.needs_reset = False
@@ -182,17 +175,20 @@ class MatchSession:
             self.worker.submit("prepare", frame=self.data.current.frame, metadata=self.frame_metadata(), generation=self.generation)
         elif (request := registration.take_pending_request()) is not None:
             kind, values = request
-            self.worker.submit(kind, **values, generation=self.generation)
+            self.worker.submit(kind, **values, generation=self.generation, raw_frame=self.source.frame)
         elif self.pending_trays and self.data.current.prediction is not None:
             self.pending_trays = False
-            self.worker.submit("trays", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
-                               prediction=self.data.current.prediction, generation=self.generation)
+            self.worker.submit("trays", frame=self.data.current.prediction_frame,
+                               metadata=self.frame_metadata(frame=self.data.current.prediction_frame,
+                                                            source_metadata=self.data.current.prediction_metadata),
+                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
         elif self.pending_play and not self.worker.tracker_initialized and not self.model_failed:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
-                               prediction=self.data.current.prediction, generation=self.generation)
+                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
         elif (self.playing and self.data.current.prediction is not None and not self.model_failed and not registration.updating_points
               and now >= self.next_inference_time and self.source.frame_index > self.last_submitted_frame):
-            self.worker.submit("propagate", frame=self.data.current.frame, metadata=self.frame_metadata(), generation=self.generation)
+            self.worker.submit("propagate", frame=self.data.current.frame, metadata=self.frame_metadata(),
+                               generation=self.generation, raw_frame=self.source.frame)
             self.last_submitted_frame = self.source.frame_index
             self.next_inference_time = now + 1 / self.inference_fps
 
@@ -205,22 +201,20 @@ class MatchSession:
             request, prediction, error = completed
             if request["generation"] == self.generation:
                 registration.accept_prompt_result(request, prediction)
-                if error is not None and request["kind"] == "recalibrate":
-                    calibration.context["draft"] = None
-                    self.note = f"Recalibration failed: {error}. Retry or Esc to cancel."
-                elif error is not None:
+                if request["kind"] == "recalibrate" and not calibration.accept_result(request, prediction, error):
+                    prediction = error = None
+                if error is not None:
                     self.data.finish_motion("model_error", self.source.metadata())
                     self.model_failed = True
                     self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
-                    if request["kind"] == "recalibrate":
-                        calibration.commit_recalibration(request)
                     prediction["accepted_at"] = perf_counter()
                     if self.pending_trays:
                         prediction = {**prediction, "trays": {}, "tray_errors": {}}
                     self.data.accept_observation(
                         prediction, request["frame"], request["metadata"],
                         disappearance_seconds=self.disappearance_seconds if self.registration_locked else None)
+                    self.prediction_raw_frame = request.get("raw_frame")
                     if self.registration_locked and request["kind"] in ("propagate", "recalibrate"):
                         self.data.record_history(
                             kind="recalibration" if request["kind"] == "recalibrate" else "observation",
@@ -291,6 +285,7 @@ class MatchSession:
         self.startup_ready = False
         self.data.current.frame = self._warp_frame(self.source.read_frame(self.registration_start_frame))
         self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
+        self.prediction_raw_frame = None
         self.last_submitted_frame = -1
         self.next_inference_time = 0
         self.model_failed = False

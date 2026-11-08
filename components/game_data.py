@@ -5,8 +5,11 @@ from dataclasses import dataclass, field
 from math import floor
 from pathlib import Path
 
+import numpy as np
+from components.homography import transform_points
+
 from components.history import HistoryStore
-from components.motion_history import MotionRecorder
+from components.motion_history import MotionRecorder, SOURCE_COORDINATE_BASIS
 from components.registration.units import UnitRoster
 from components.registration.rule_state import RuleState
 from components.tracking.status import update_tracking
@@ -61,11 +64,20 @@ class GameData:
             if previous is not None and (metadata["frame_index"] < previous["frame_index"]
                                          or metadata.get("calibration_version", 0) < previous.get("calibration_version", 0)):
                 return False
+        if self.board.source_to_plane is not None:
+            inverse = np.linalg.inv(self.board.source_to_plane)
+            trays = {}
+            for object_id, tray in prediction.get("trays", {}).items():
+                corners = np.asarray(tray["corners_plane"], dtype=float)
+                trays[object_id] = {**tray, "corners_source": transform_points(corners, inverse).tolist(),
+                                    "center_source": transform_points(corners.mean(axis=0), inverse).tolist()}
+            prediction = {**prediction, "trays": trays}
+        if disappearance_seconds is not None:
             prediction = update_tracking(self.tracking, self.units, prediction, metadata, disappearance_seconds)
         self.current.prediction = prediction
         self.current.prediction_frame = frame
         self.current.prediction_metadata = metadata
-        self.rules.observe(prediction, metadata["frame_index"])
+        self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane)
         return True
 
     def snapshot(self):
@@ -87,19 +99,22 @@ class GameData:
         """Start one persistent registration; analysis snapshots never own a writer."""
         if self.history_store is not None:
             raise RuntimeError("Close the previous history before starting another registration")
+        if self.motion_recorder is None:
+            self.motion_recorder = MotionRecorder()
         self.history_store = HistoryStore(Path(folder) / "history.sqlite3", {
             "source": _history_source(source), "reference_folder": str(folder),
             "units": self.units.snapshot() if self.units is not None else None,
             "rules": self.rules.snapshot(),
             "time_basis": "acceptance/edit clip_source_seconds; geometry retains its own observation source time",
+            "spatial_coordinate_basis": SOURCE_COORDINATE_BASIS,
+            "motion_parameters": {"position_tolerance_mm": self.motion_recorder.position_tolerance_mm,
+                                  "rotation_tolerance_deg": self.motion_recorder.rotation_tolerance_deg,
+                                  "settle_seconds": self.motion_recorder.settle_seconds},
         })
         self._history_sequence = 0
         self._history_latest_time = 0.0
         self.global_history.clear()
-        if self.motion_recorder is None:
-            self.motion_recorder = MotionRecorder()
-        else:
-            self.motion_recorder.reset()
+        self.motion_recorder.reset()
 
     def _calibration_records(self):
         records = []
@@ -142,6 +157,8 @@ class GameData:
             units[unit_id] = {
                 "type_id": unit["type_id"], "attributes": deepcopy(profile),
                 "corners_mm": deepcopy(tray["corners_plane"]) if tray is not None else None,
+                "corners_source": deepcopy(tray.get("corners_source")) if tray is not None else None,
+                "center_source": deepcopy(tray.get("center_source")) if tray is not None else None,
                 "position_status": "available" if tray is not None else "unavailable",
                 "tracking_status": tracking.status if tracking else None,
                 "visibility": tracking.visibility if tracking else None,
@@ -167,7 +184,7 @@ class GameData:
         entry["sequence"] = self._history_sequence
         if self.motion_recorder is not None:
             events = (self.motion_recorder.interrupt_all(entry, interruption) if interruption is not None
-                      else self.motion_recorder.observe(entry))
+                      else self.motion_recorder.observe(entry, source_to_plane=self.board.source_to_plane))
             entry["motion_events"] = events
             entry["motion_event_ids"] = [event["event_id"] for event in events]
             self.global_history.update({event["event_id"]: event for event in events})

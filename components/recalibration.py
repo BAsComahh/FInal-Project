@@ -37,19 +37,21 @@ def prepare_recalibration(data, source_frame, corners, boundary, board_size_mm):
         raise ValueError("No usable registered masks at this frame. Cancel and retry on a clearer frame.")
 
     rules = deepcopy(data.rules)
-    size_scale = np.diag([*(np.asarray(board.board_size_mm) / old.board_size_mm), 1.])
-    terrain_mapping = np.linalg.inv(board.image_to_plane) @ size_scale @ old.image_to_plane
     for item in rules.terrain:
-        item["polygon_image"] = transform_points(item["polygon_image"], terrain_mapping).tolist()
+        if item.get("polygon_source") is None:
+            item["polygon_source"] = transform_points(item["polygon_image"], old.homography["inverse_matrix"]).tolist()
+        item["polygon_image"] = transform_points(item["polygon_source"], board.homography["matrix"]).tolist()
 
-    direction_mapping = board.image_to_plane @ image_mapping @ np.linalg.inv(old.image_to_plane)
     for object_id, front in rules.fronts.items():
         angle = np.radians(front["angle_deg"])
         direction = np.array([np.cos(angle), np.sin(angle)])
         tray = prediction.get("trays", {}).get(object_id)
-        if tray is not None:
+        if front.get("source_ray") is None and tray is not None:
             center = np.asarray(tray["center_plane"])
-            ray = transform_points([center, center + direction], direction_mapping)
+            plane_to_source = old.homography["inverse_matrix"] @ np.linalg.inv(old.image_to_plane)
+            front["source_ray"] = transform_points([center, center + direction], plane_to_source).tolist()
+        if front.get("source_ray") is not None:
+            ray = transform_points(front["source_ray"], board.source_to_plane)
             direction = ray[1] - ray[0]
         else:
             direction *= np.asarray(board.board_size_mm) / old.board_size_mm

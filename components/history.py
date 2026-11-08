@@ -268,7 +268,8 @@ def read_event_history(path, event_id):
     Samples are referenced by sequence, so delayed geometry, manual edits and
     parallel event ranges retain their original records without duplicating data.
     The final sample may be an interruption rather than valid motion evidence.
-    A new calibration's geometry is excluded from the old event's segment.
+    Source-based events may span calibrations; legacy events retain their
+    original single-calibration evidence boundary.
     """
     if not isinstance(event_id, str) or not event_id.strip():
         raise ValueError("event_id must be a non-empty string")
@@ -280,9 +281,13 @@ def read_event_history(path, event_id):
             raise KeyError(f"Event not found: {event_id}")
         event = json.loads(row[0])
         unit_id = event["unit_id"]
+        values = [unit_id, event["start"]["sequence"], event["updated_sequence"]]
+        version_filter = ""
+        if event.get("coordinate_basis") != "source_image_pixels":
+            version_filter = " AND o.calibration_version=?"
+            values.append(event["calibration_version"])
         rows = connection.execute("""SELECT o.payload, u.payload FROM unit_history u
-            JOIN observations o USING (sequence) WHERE u.unit_id=? AND u.sequence BETWEEN ? AND ?
-            AND o.calibration_version=? ORDER BY u.sequence""",
-            (unit_id, event["start"]["sequence"], event["updated_sequence"], event["calibration_version"]))
+            JOIN observations o USING (sequence) WHERE u.unit_id=? AND u.sequence BETWEEN ? AND ?"""
+            + version_filter + " ORDER BY u.sequence", values)
         records = [{**json.loads(header), "units": {unit_id: json.loads(unit)}} for header, unit in rows]
     return {"event": event, "records": records}
