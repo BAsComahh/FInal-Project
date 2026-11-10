@@ -62,3 +62,21 @@ with Image.open("target.png") as image:
 ```
 
 `--model` 可指定其他 DINOv2 骨干或本地模型目录，`--device` 指定设备，`--batch-size` 默认 8。默认只使用本地缓存；首次使用其他模型时加 `--download` 允许官方加载接口下载权重。默认自动选择显存最大的 GPU，FP32 推理；沿用现有 `sam3-demo` 依赖，无需另装 DINOv2 仓库或重新配置环境。
+
+## 自动恢复的离线验证
+
+`evaluate_recovery` 复用 SAM 文本分割和本组件的 CLS 编码，仅输出诊断，不接入直播或接纳身份。
+
+纯 NumPy 排名接口为 `components.dinov2.rank_candidates(unit_ids, reference_features, candidate_features)`，输入前先选择缺失实例的参考行；返回完整余弦矩阵、各实例的候选顺序／分差及同一最高排名的竞争，所有 `assigned_candidate_id` 保持 None。实现见 [matching.py](matching.py)，坐标转换复用既有 Homography 组件；命令行负责取帧、计时和导出。
+
+例如在项目根目录运行：
+
+```powershell
+conda run --no-capture-output -n sam3-demo python -m tools.evaluate_recovery outputs/sam3_registration/frame_458b250a48ea --times 0 30 60 90 120 150 180 210 240 270 299 --missing A1 --missing A1 B1 --missing A1 A2 A6 --device cuda:1
+```
+
+`cuda:1` 是本轮已核对的 AMD Radeon RX 7900 XT；换机器或改变可见设备后须重新核对物理名称。省略 `--times` 时在注册帧至片尾均匀采样十一帧；`--missing` 可重复以比较多个缺失组合，默认只建一个包含所有已注册非空实例的组合。所有组合共用同帧候选，但每组只与其指定的参考计算相似度。默认 `--prompt miniature --threshold 0.3`；这里是 SAM 候选检测门槛，不是身份置信度阈值。
+
+每次在 `outputs/recovery_evaluation/run_*` 创建新目录：`overview.png` 是候选总览，每帧目录有候选图、前三名参考对照图、全部候选的 `scores.csv`、mask／切图及特征。`results.json` 保留完整余弦矩阵、排名／分差、最高排名的竞争、源帧／标定来源、分段耗时和物理 GPU 名称。`review.json` 是独立的人工审核模板，默认全部 unknown，修改它不会改写原始模型结果。没有身份接受阈值，任何排名都不自动接回。
+
+距离使用候选 mask 中心，经逆 Homography 回到原视频；仅在存在毫米标定时按同一毫米映射比较，不是托盘移动量。本轮旧注册只有拉正映射，毫米距离保持 null。最后已知位置固定为注册帧，模拟从注册后开始缺失，不能当作实时最近位置。旧记录缺少标定版本时保持 null，并以原注册元数据指纹注明来源。正常单位尚未从候选中排除，因此也是干扰样本。旧示例 type 标签不作为真实兵种真值，不得把传播结果当作身份标注。初始 reference、已有 NPZ 和历史均只读。

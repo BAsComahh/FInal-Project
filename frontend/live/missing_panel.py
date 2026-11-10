@@ -1,4 +1,4 @@
-"""Read-only A/B instance lists; recovery actions await a separate workflow."""
+"""A/B human requests after a single automatic search; internal Missing remains separate."""
 
 import cv2
 import numpy as np
@@ -13,10 +13,15 @@ class MissingUnitPanel:
 
     def __init__(self):
         self.offset = {"A": 0, "B": 0}
+        self.rows = []
 
     @staticmethod
     def failed_units(data):
-        return [unit_id for unit_id, state in data.tracking.items() if state.active and state.status == "failed"]
+        return [unit_id for unit_id, state in data.tracking.items() if state.active and state.status == "failed"
+                and state.recovery_phase not in ("queued", "searching")]
+
+    def unit_at(self, x, y):
+        return next((uid for rect, uid in self.rows if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]), None)
 
     def scroll(self, x, steps):
         if 0 <= x < self.WIDTH:
@@ -24,8 +29,9 @@ class MissingUnitPanel:
 
     def render(self, height, data):
         canvas = np.full((height, self.WIDTH, 3), 38, np.uint8)
-        draw_text(canvas, "Tracking failed - existing instances", (12, 24), size=16)
-        draw_text(canvas, "Returned masks are Estimated; recovery is pending.", (12, 45), size=12)
+        self.rows = []
+        draw_text(canvas, "Recovery needs human input", (12, 24), size=16)
+        draw_text(canvas, "Click an ID to review a candidate or add points.", (12, 45), size=12)
         stamp = (data.current.prediction_metadata or {}).get("timestamp_seconds")
         draw_text(canvas, f"Observation: {stamp:.2f}s" if stamp is not None else "Observation: unknown", (12, 65), size=12)
         failed = self.failed_units(data)
@@ -45,12 +51,13 @@ class MissingUnitPanel:
                 profile = {**unit_type.get("attributes", {}), **unit["attributes"]}
                 state = data.tracking[unit_id]
                 cv2.rectangle(canvas, (x + 8, y), (x + self.COLUMN_WIDTH - 8, y + 91), (55, 48, 40), -1)
+                self.rows.append(((x + 8, y, x + self.COLUMN_WIDTH - 8, y + 91), unit_id))
                 draw_text(canvas, UnitPanel._short(f"{unit_id} | Type {unit['type_id']}", 34), (x + 14, y + 18), size=14)
                 name = unit_type.get("unit_name", unit_type.get("name", unit["type_id"]))
                 draw_text(canvas, UnitPanel._short(name, 38), (x + 14, y + 36), size=11)
                 damage = profile.get("damage")
                 draw_text(canvas, f"Damage: {damage if damage is not None else '?'}", (x + 14, y + 53), size=12)
-                text = "Estimated mask - ID unconfirmed" if state.visibility else "No tracking mask"
+                text = "Candidate available for review" if state.recovery_phase == "review" else "Manual mask input needed"
                 draw_text(canvas, text, (x + 14, y + 70), (110, 190, 245), size=11)
                 last = state.last_accepted_position
                 text = f"Last position: {last['timestamp_seconds']:.2f}s | v{last['calibration_version']}" if last else "Last position: unavailable"

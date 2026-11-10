@@ -15,6 +15,8 @@ class UnitTracking:
     calibration_version: int = -1
     active: bool = True
     last_accepted_position: dict | None = None
+    recovery_phase: str | None = None
+    recovery_note: str | None = None
 
 
 def validate_disappearance_seconds(value):

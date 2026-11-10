@@ -71,6 +71,7 @@ class CalibrationController:
         if self.session.model_failed:
             raise ValueError("Resolve the tracking error before recalibrating.")
         raw = self.session.source.frame
+        self.session.automatic_recovery.invalidate("Recalibration invalidated the recovery candidate")
         self.context = {"frame_index": self.session.source.frame_index,
                         "token": object(), "draft": None, "pending": None, "error": None}
         self.session.note = "Live recalibration. Select the table corners. Esc cancels."

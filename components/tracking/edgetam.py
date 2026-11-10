@@ -64,8 +64,9 @@ class EdgeTamTracker:
                 sys.path.insert(0, str(dependencies))
             try:
                 import torch
-                from transformers import EdgeTamVideoConfig, EdgeTamVideoModel, Sam2VideoProcessor
+                from transformers import EdgeTamVideoConfig, Sam2VideoProcessor
                 from components.sam3.video.loading import weight_loading_progress
+                from .edgetam_compat import video_model_class
             except ImportError as error:
                 raise RuntimeError(
                     f"EdgeTAM dependencies are unavailable ({error}). Use the project's "
@@ -94,7 +95,7 @@ class EdgeTamTracker:
             self.load_progress = ("Loading EdgeTAM weights", None, None)
             try:
                 with weight_loading_progress(report):
-                    model, info = self._from_pretrained(EdgeTamVideoModel, config=config, output_loading_info=True)
+                    model, info = self._from_pretrained(video_model_class(), config=config, output_loading_info=True)
             except ImportError as error:
                 raise RuntimeError(
                     f"EdgeTAM's backbone dependency is unavailable ({error}). Install "
@@ -124,6 +125,7 @@ class EdgeTamTracker:
         self.index = -1
         self.source_frame = None
         self._image_shape = None
+        self._last_frame = None
 
     @staticmethod
     def _validate_frame(frame):
@@ -203,7 +205,58 @@ class EdgeTamTracker:
             prediction = self._infer(frame, session, object_ids, 0, source_frame)
         self.session, self.object_ids = session, object_ids
         self.index, self.source_frame, self._image_shape = 0, source_frame, frame.shape[:2]
+        self._last_frame = frame.copy()
         return prediction
+
+    def _edit_frame(self, frame, source_frame):
+        if self.session is None:
+            raise ValueError("Initialize EdgeTAM before editing a tracked object")
+        self._validate_frame(frame)
+        if frame.shape[:2] != self._image_shape:
+            raise ValueError("Recovery frame size does not match its tracking session")
+        source_frame = self._source_index(source_frame, self.source_frame)
+        if source_frame < self.source_frame:
+            raise ValueError("Recovery cannot apply prompts to an older source frame")
+        if source_frame == self.source_frame and not np.array_equal(frame, self._last_frame):
+            raise ValueError("A source frame number cannot refer to a different image")
+        return source_frame, self.index + int(source_frame > self.source_frame)
+
+    def correct_points(self, frame, points, labels, *, source_frame=None):
+        """Refine one disposable candidate using frame-bound official prompts."""
+        source_frame, _ = self._edit_frame(frame, source_frame)
+        points, labels = np.asarray(points, dtype=float), list(labels)
+        if (len(self.object_ids) != 1 or points.ndim != 2 or points.shape[1] != 2
+                or not len(points) or len(points) != len(labels) or not np.isfinite(points).all()
+                or any(label not in (0, 1) for label in labels)
+                or (points < 0).any() or (points >= np.asarray(frame.shape[1::-1])).any()):
+            raise ValueError("Candidate prompts require valid points and positive/negative labels")
+        if source_frame > self.source_frame:
+            self.propagate(frame, source_frame=source_frame)
+        self.processor.add_inputs_to_inference_session(
+            inference_session=self.session, frame_idx=self.index, obj_ids=self.object_ids[0],
+            input_points=[[points.tolist()]], input_labels=[[labels]],
+            original_size=frame.shape[:2], clear_old_inputs=False,
+        )
+        return self._infer(frame, self.session, self.object_ids, self.index, source_frame)
+
+    def update_mask(self, frame, object_id, mask, *, source_frame=None):
+        """Update an existing object without resetting other objects' memory."""
+        source_frame, index = self._edit_frame(frame, source_frame)
+        if (isinstance(object_id, (bool, np.bool_)) or not isinstance(object_id, Integral)
+                or object_id not in self.object_ids or not isinstance(mask, np.ndarray)
+                or mask.dtype != np.bool_ or mask.shape != frame.shape[:2] or not mask.any()):
+            raise ValueError("Recovery requires a nonempty mask for an existing object")
+        try:
+            self.processor.add_inputs_to_inference_session(
+                inference_session=self.session, frame_idx=index, obj_ids=[object_id],
+                input_masks=[mask], original_size=frame.shape[:2],
+            )
+            return self._infer(frame, self.session, self.object_ids, index, source_frame)
+        finally:
+            # A failed forward may already have consumed this frame/cache index.
+            # Reserve it; never reset unrelated objects or reuse it for a new image.
+            self.index, self.source_frame = index, source_frame
+            self._last_frame = frame.copy()
 
     def propagate(self, frame, *, source_frame=None):
         """Consume one later frame with persistent memory and no lookahead."""
@@ -224,4 +277,5 @@ class EdgeTamTracker:
             raise
         self.index += 1
         self.source_frame = source_frame
+        self._last_frame = frame.copy()
         return prediction

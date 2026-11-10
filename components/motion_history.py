@@ -163,8 +163,13 @@ class MotionRecorder:
             updates.extend(self._interrupt(unit_id, entry, reason))
         return updates
 
+    def interrupt_unit(self, unit_id, entry, reason):
+        updates = self._interrupt(unit_id, entry, reason)
+        self._seen.pop(unit_id, None)
+        return updates
+
     def observe(self, entry, *, source_to_plane=None):
-        if entry["kind"] not in ("registration", "observation", "recalibration"):
+        if entry["kind"] not in ("registration", "observation", "recalibration", "manual_recovery", "reviewed_recovery", "automatic_recovery"):
             return []
         stamp, frame = entry["observation_timestamp_seconds"], entry["observation_frame_index"]
         if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not isfinite(stamp) or stamp < 0:

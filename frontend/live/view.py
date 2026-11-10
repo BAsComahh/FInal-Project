@@ -27,9 +27,20 @@ class LiveView:
             draw_loading_progress(preview, session.load_progress)
         width, height = self.preview_size
         missing = self.missing_panel.failed_units(view)
-        show_status = session.model_failed or session.pending_play or bool(missing)
+        recovery_note = session.note.startswith(("Manual recovery", "Recovery:"))
+        facing_error = session.worker.facing.error if session.worker.facing is not None else None
+        faces = (view.current.prediction or {}).get("facing_results", {})
+        facing_note = ""
+        for phase in ("failed", "pending"):
+            ids = [obj for obj, row in faces.items() if row.get("recovery_phase") == phase]
+            if ids:
+                labels = [(view.units.bindings.get(obj, f"Mask {obj}") if view.units else f"Mask {obj}") for obj in ids]
+                estimated = sum(obj in view.rules.fronts for obj in ids)
+                facing_note = f"Facing recovery {phase}: {', '.join(labels)}. Estimated {estimated}; unknown {len(ids)-estimated}."
+                break
+        show_status = session.model_failed or session.pending_play or bool(missing) or recovery_note or bool(facing_error) or bool(facing_note)
         button_columns = 3 if width >= 640 else 2
-        extra_height = 36 if button_columns == 2 else 0
+        extra_height = 36
         panel_height = max(332 if missing else 0, height + (272 if show_status else 232) + extra_height)
         panel_width = width + (self.missing_panel.WIDTH if missing else 0)
         panel = np.full((panel_height, panel_width, 3), 30, dtype=np.uint8)
@@ -38,7 +49,8 @@ class LiveView:
             panel[:, width:] = self.missing_panel.render(panel_height, view)
         self.display.controls(panel, height + 8, preview_size, self.tray_caption())
         self.view_buttons = []
-        labels = (("clear", "Clear query [Q]"), ("recalibrate", "Recalibrate [K]"), ("replay", "Replay"))
+        labels = (("clear", "Clear query [Q]"), ("recalibrate", "Recalibrate [K]"), ("replay", "Replay"),
+                  ("recover", "Recover units"))
         for i, (action, label) in enumerate(labels):
             button_width = min(190, (width - 10 * (button_columns + 1)) // button_columns)
             x, y = 10 + (i % button_columns) * (button_width + 10), height + 42 + (i // button_columns) * 36
@@ -49,11 +61,19 @@ class LiveView:
         state = "LIVE"
         stamp = (view.current.prediction_metadata or {}).get("timestamp_seconds")
         observed = "none" if stamp is None else f"{stamp:.2f}s"
-        draw_text(panel, f"{session.worker.tracker_name} | View {state} | live {session.source.frame_index / session.source.fps:.2f}s | masks {observed} | calibration v{session.data.board.calibration_version}",
-                  (10, height + 84 + extra_height), size=12)
+        unavailable = set((view.current.prediction or {}).get("unavailable_ids", ())) | set((view.current.prediction or {}).get("inactive_ids", ()))
+        eligible = set(faces) - unavailable
+        facing_caption = f" | facing {len(eligible & view.rules.fronts.keys())}/{len(eligible)}" if faces else ""
+        live_time = session.source.frame_index / session.source.fps
+        version = session.data.board.calibration_version
+        caption = (f"{session.worker.tracker_name} | View {state} | live {live_time:.2f}s | masks {observed} | calibration v{version}{facing_caption}"
+                   if width >= 640 else f"LIVE {live_time:.1f}s | seen {observed} | v{version}{facing_caption}")
+        draw_text(panel, caption, (10, height + 84 + extra_height), size=12)
         self.geometry_view.controls(panel, preview_size, height + 92 + extra_height, view, self.session.source)
         if show_status:
-            status = (session.note if session.model_failed or session.pending_play else
+            status = (session.note if session.model_failed or session.pending_play or recovery_note else
+                      "Facing unavailable: " + facing_error if facing_error else
+                      facing_note if facing_note else
                       "Tracking failed: " + ", ".join(missing) + ". Returned masks remain Estimated.")
             limit = max(24, width // 7)
             for row in range(2):

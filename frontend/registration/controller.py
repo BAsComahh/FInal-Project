@@ -288,6 +288,7 @@ class RegistrationController:
         folder = save_registration(self.data.current.prediction_frame, overlay, references, metadata,
                                    self.session.output_dir, roster=self.data.units)
         self.data.reference_folder = folder
+        self.session.capture_facing_references()
         self.data.start_history(folder, metadata)
         self.data.accept_observation(self.data.current.prediction, self.data.current.prediction_frame,
                                      self.data.current.prediction_metadata, disappearance_seconds=self.session.disappearance_seconds)

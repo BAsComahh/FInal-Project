@@ -16,6 +16,8 @@ from .live.controller import LiveController
 from .live.view import LiveView
 from .replay.controller import ReplayController
 from .replay.view import ReplayView
+from .recovery.controller import RecoveryController
+from .recovery.view import RecoveryView
 from .geometry_tools.controller import GeometryController
 from .geometry_tools.view import GeometryView
 from .scene_editing.controller import SceneEditor
@@ -41,6 +43,7 @@ class VideoApplication:
         self.session = MatchSession(video, data, **options)
         self.registration = RegistrationController(self.session)
         self.live = LiveController(self.session)
+        self.recovery = RecoveryController(self.session)
         self.replay = ReplayController(self.session)
         self.replay_view = ReplayView(self.replay)
         self.calibration = CalibrationController(self.session, self.live)
@@ -49,6 +52,7 @@ class VideoApplication:
         self.scene_view = SceneEditingView(self.editor)
         self.geometry_view = GeometryView(self.geometry, self.editor, self.scene_view)
         self.display = PresentationLayers()
+        self.recovery_view = RecoveryView(self.recovery, self.display)
         self.registration_view = RegistrationView(self.registration, self.session, self.live, self.geometry_view, self.display, self.viewport)
         self.live_view = LiveView(self.session, self.live, self.geometry_view, self.display)
         self.table_setup = CalibrationView(self.session.initial_frame, board_size_in=np.asarray(data.board.board_size_mm) / 25.4)
@@ -62,6 +66,7 @@ class VideoApplication:
         return self.viewport.size(frame)
 
     def _reset_tools(self):
+        self.recovery.cancel()
         self.geometry.clear()
         self.editor.clear()
 
@@ -75,7 +80,11 @@ class VideoApplication:
         elif self.stage in (Stage.TABLE, Stage.RECALIBRATE):
             image = self.table_setup.render_status(self.preview_size, self.session, self.calibration.context)
         elif self.stage is Stage.PLAYBACK:
-            image = self.live_view.render(self.preview_size)
+            if self.recovery.active:
+                self.session.publish_frame()
+                image = self.recovery_view.render(self.preview_size)
+            else:
+                image = self.live_view.render(self.preview_size)
         else:
             image = self.registration_view.render(self.preview_size)
         if self.session.history_warning:
@@ -166,6 +175,15 @@ class VideoApplication:
         self.live.return_live()
         self.dirty = True
 
+    def _open_recovery(self, unit_id=None):
+        try:
+            self._reset_tools()
+            self.recovery_view.drag_id = self.recovery_view.drag_position = None
+            self.recovery.open(unit_id)
+        except ValueError as error:
+            self.session.note = f"Manual recovery: {error}"
+        self.dirty = True
+
     def _replay_action(self, action):
         if action in ("open", "live"):
             self._reset_tools()
@@ -247,6 +265,13 @@ class VideoApplication:
             self._activate_table_view()
             self.dirty = True
             return
+        if self.recovery.active:
+            try:
+                self.recovery_view.on_mouse(event, x, y, flags)
+            except (ValueError, RuntimeError, cv2.error) as error:
+                self.recovery.note = str(error)
+            self.dirty = True
+            return
         if event == cv2.EVENT_LBUTTONDOWN:
             for rect, key in self.display.layer_buttons:
                 if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
@@ -264,6 +289,8 @@ class VideoApplication:
                         self._clear_query()
                     elif action == "replay":
                         self._replay_action("open")
+                    elif action == "recover":
+                        self._open_recovery()
                     else:
                         self._toggle_play()
                     return
@@ -291,6 +318,11 @@ class VideoApplication:
                         self.dirty = True
                 return
         if self.stage is Stage.PLAYBACK:
+            if x >= width and event == cv2.EVENT_LBUTTONDOWN:
+                uid = self.live_view.missing_panel.unit_at(x - width, y)
+                if uid is not None and uid in self.live_view.missing_panel.failed_units(self.session.data):
+                    self._open_recovery(uid)
+                    return
             if x >= width and event == cv2.EVENT_MOUSEWHEEL:
                 self.live_view.missing_panel.scroll(x - width, -3 if (flags >> 16) > 0 else 3)
                 self.dirty = True
@@ -305,6 +337,10 @@ class VideoApplication:
 
     def _on_key(self, key):
         if self.session.closed:
+            return
+        if self.recovery.active and key in (27, ord("q"), 32):
+            if not self.recovery.committing:
+                self._clear_query()
             return
         if self.replay.active:
             if key == 27:
@@ -408,6 +444,7 @@ class VideoApplication:
             self.dirty = True
 
     def _rule_action(self, action):
+        self.recovery.cancel()
         try:
             if action in ("distance", "los", "double", "move"):
                 self.geometry.query(action)
@@ -441,6 +478,7 @@ class VideoApplication:
         self.session.schedule(self.registration, self.calibration)
 
     def close(self):
+        self.recovery.cancel()
         self.replay.close()
         self.editor.clear()
         self.live.return_live()

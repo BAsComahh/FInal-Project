@@ -36,4 +36,6 @@ class SceneEditingView:
                 angle = np.radians(front["angle_deg"])
                 points = transform_points([center, center + length * np.array([np.cos(angle), np.sin(angle)])], inverse) * scale
                 a, b = np.rint(points).astype(int)
-                cv2.arrowedLine(preview, tuple(a), tuple(b), (100, 245, 140), 2, cv2.LINE_AA, tipLength=.3)
+                pending = front.get("appearance", {}).get("recovery_phase") in ("pending", "failed")
+                color = (70, 190, 245) if pending else (100, 245, 140)
+                cv2.arrowedLine(preview, tuple(a), tuple(b), color, 2, cv2.LINE_AA, tipLength=.3)

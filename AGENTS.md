@@ -21,6 +21,7 @@ treat them as disposable handoff notes just because a task is complete.
 | `TODO.md` | Implementation status, remaining tasks and known issues; not a source of new approved requirements. |
 | `待澄清列表.md` | Confirmed tracking-failure/recovery requirements, terminology and unresolved decisions; proposed answers remain unapproved. |
 | `追踪优化调研与执行计划.md` | Scoped tracking research, candidate approaches and experiment plans; dated findings and proposals must be checked against current code and later decisions. |
+| `前端解耦重构计划.md` | D35 / I14 execution plan, interface boundaries, code-simplification requirements and acceptance checks; planned work is not completed functionality. |
 | `待人工确认.md` | Local verification checklist. Git-ignored; do not stage or commit it. |
 
 Before substantial implementation, read this file and the relevant sections
@@ -41,14 +42,34 @@ do not silently replace a recorded decision with a conversational assumption.
 Frontend workflow ownership and navigation are documented in
 `frontend/README.md`. Keep the shared runtime independent of the displayed
 tool; initial registration, board recalibration, scene editing and geometry
-queries have separate controllers. Recovery and what-if are still
-unimplemented; do not add placeholder flows or reopen registration for them.
+queries have separate controllers. Manual recovery now has its own controller
+for the EdgeTAM backend. Single-search automatic recovery and candidate review
+are integrated for EdgeTAM; what-if remains unimplemented.
+Do not reopen initial registration or add placeholder flows.
 Replay is authorized on 2026-11-07 as a separate read-only workflow: completed
 movement and rotation each form a step, ordered by their geometry end time.
 It replaces the visible live view while source playback, tracking and history
 recording continue; returning live must show the latest data.
 Opening replay selects the latest completed step; Refresh preserves the
 currently selected event, including Step 0 (confirmed 2026-11-08).
+
+The 2026-11-10 D33 UI target is design-first: retain the existing operator
+workflows and video-centered structure, redesign the interactions, and add a
+separate clean audience window that automatically follows Live/Replay/What-if.
+There is no manual publish/take step for mode changes. This remains a design
+target (I13), not an implemented second window or what-if workflow. Review the
+interaction sketches before choosing a UI framework or rebuilding the UI;
+auxiliary-tool drafts and audience overlay policies still need design review.
+
+The later 2026-11-10 D35 decision separates the application runtime before the
+new UI. Follow `前端解耦重构计划.md` (I14): keep the existing UI as the first
+client of a headless application boundary, preserve one authoritative match
+state and serialize model operations. Simplify duplicate state, forwarding
+shells and speculative defensive branches; retain frame alignment, identity,
+cancellation/generation, isolated recovery and history-write protections.
+The current instruction authorizes writing the plan and committing a checkpoint;
+the user will start the refactor. Do not automatically begin implementation,
+create new test files, or infer authorization for a later commit or push.
 
 The later 2026-11-08 coordinate decision uses original video pixels as the
 canonical spatial record. Keep source anchors, frame/size and calibration
@@ -67,10 +88,47 @@ forms without blocking the main loop. B08 keeps playback active and assumes
 a stable camera under the user's later 2026-11-08 decision; do not add camera
 motion detection or automatic corner invalidation. New tracking is committed
 only after isolated initialization succeeds;
-cancelled results cannot replace the old session. Recovery remains pending;
-resolve its relevant CL questions before implementing it.
+cancelled results cannot replace the old session. The 2026-11-09 manual recovery
+uses a SAM seed and an isolated Edge candidate, then a drag of the existing ID
+confirms a targeted mask update. Original tracking/history/rules continue until
+the drop; cancelling a draft leaves the original state unchanged. Only an
+already-failed unit remains failed on cancellation. Clear/retry replaces temporal
+prompt undo. Success clears only the target's old facing and interrupts only its
+unfinished motion; a separate D32 appearance estimate may select its new front.
+Confirmed update failures must not reset unrelated objects.
+Automatic recovery searches once per newly failed instance. Only current Missing
+references participate in identity conflicts; already unresolved IDs are not
+silently retried. User-selected experimental defaults are cosine >= 0.85 and
+runner-up margin >= 0.10, with no instance conflict or normal-mask overlap.
+These are trial settings, not calibrated identity probabilities. A single
+candidate without a measurable margin stays for review. Processing instances
+remain internally failed but hidden from the human list; unsuccessful searches
+appear in A/B. Correct confirms the current isolated candidate; No explicitly
+starts one new search. Cross-frame rejected-candidate exclusion remains open.
+Candidate propagation never writes valid history before acceptance. Recovery
+errors must not reset unrelated objects or set global model_failed. B08, R and
+close invalidate pending automatic results.
 EdgeTAM is now the default propagation backend, initialized from SAM3's
 registered masks; explicit SAM3 and Cutie selection remain available.
+
+The 2026-11-10 D32 trial uses DVMNet only to select a current tray front edge;
+the rectangle supplies the exact angle. Both initial-F reference and current
+query use source-frame masks with mean RGB background. References freeze only
+after successful registration; no initial F means no inferred front. The
+image-plane projection and configurable 20-degree candidate-error margin are
+experimental, not calibrated confidence. Normal updates now use rectangle
+continuity plus a cheap foreground check; DVMNet runs only for suspicious or
+missing facing, and after accepted mask recovery. Direction-only suspicion
+and failed recovery retain the previous Estimated front with pending/failed
+provenance; actual tracking loss still invalidates old facing under D22.
+Retries require changed appearance and a configurable minimum source-time gap.
+Detector templates are runtime-only; commit proposed detector state only after
+the corresponding observation is accepted. Facing-only recovery must not
+replace masks/IDs or interrupt valid position actions. Model errors must not
+fail tracking globally. R clears
+references; B08 retains compatible source references. H03 still detects
+undirected tray-axis rotation, not directed 180-degree facing changes.
+External pinned assets stay in ignored cache, prepared by tools.setup_facing.
 
 ## SAM-related work
 
@@ -103,7 +161,8 @@ The scoped recovery workflow confirmed on 2026-11-02 is separate from initial
 registration: reuse its UI only for failed existing instances, retain their
 IDs and attributes, and preserve unaffected units. It does not reopen global
 point/type editing, create replacement instance IDs, or change the table
-Homography. Recovery session integration is still pending, not implemented.
+Homography. This manual session integration is implemented for EdgeTAM; other propagation
+backends retain their existing workflows.
 The 2026-11-06 manual-intervention requirement also allows the operator to
 mark a tracked instance as a detection error and request scoped manual
 recovery directly. It does not allow silently taking another assigned unit's

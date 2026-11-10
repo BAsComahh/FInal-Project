@@ -12,7 +12,7 @@ from components.history import HistoryStore
 from components.motion_history import MotionRecorder, SOURCE_COORDINATE_BASIS
 from components.registration.units import UnitRoster
 from components.registration.rule_state import RuleState
-from components.tracking.status import update_tracking
+from components.tracking.status import UnitTracking, update_tracking
 
 
 def _history_source(metadata):
@@ -77,7 +77,9 @@ class GameData:
         self.current.prediction = prediction
         self.current.prediction_frame = frame
         self.current.prediction_metadata = metadata
-        self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane)
+        self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
+                           calibration_version=metadata.get("calibration_version"),
+                           bindings=self.units.bindings if self.units is not None else None)
         return True
 
     def snapshot(self):
@@ -142,7 +144,58 @@ class GameData:
         if self.motion_recorder is not None and self.motion_recorder.has_active:
             self.record_history(kind="interruption", source=source, interruption=reason)
 
-    def record_history(self, *, kind="observation", source=None, interruption=None):
+    def accept_manual_recovery(self, prediction, frame, metadata, object_id, *, source, disappearance_seconds):
+        return self.accept_recovery(prediction, frame, metadata, object_id, source=source,
+                                    disappearance_seconds=disappearance_seconds, method="manual")
+
+    def accept_recovery(self, prediction, frame, metadata, object_id, *, source, disappearance_seconds, method="manual"):
+        """Accept one confirmed existing ID; drafts never reach this method."""
+        if method not in ("manual", "reviewed", "automatic"):
+            raise ValueError("Unknown recovery method")
+        if self.units is None or object_id not in self.units.bindings:
+            raise ValueError("Recovery target is no longer registered")
+        unit_id = self.units.bindings[object_id]
+        state = self.tracking.get(unit_id)
+        unit = self.units.units[unit_id]
+        profile = {**self.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
+        if (state is None or not state.active or profile.get("removed") is True or profile.get("routed") is True
+                or metadata.get("calibration_version") != self.board.calibration_version):
+            raise ValueError("Recovery target or calibration is no longer current")
+        if (self.current.prediction_metadata is not None
+                and metadata["frame_index"] < self.current.prediction_metadata["frame_index"]):
+            raise ValueError("Recovery observation is older than accepted tracking")
+        masks = dict(zip(prediction["object_ids"], prediction["masks"]))
+        if object_id not in masks or not masks[object_id].any():
+            raise ValueError("Confirmed recovery has no current mask")
+        state.status, state.visibility, state.disappeared_time = "tracking", True, None
+        state.recovery_phase = state.recovery_note = None
+        state.frame_index = -1  # Same-frame/EOF recovery must refresh this ID too.
+        self.rules.fronts.pop(object_id, None)
+        self.accept_observation(prediction, frame, metadata, disappearance_seconds=disappearance_seconds)
+        self.record_history(kind=f"{method}_recovery", source=source,
+                            recovery={"unit_id": unit_id, "object_id": object_id, "method": method})
+
+    def fail_manual_recovery(self, object_id, source):
+        return self.fail_recovery(object_id, source, method="manual")
+
+    def fail_recovery(self, object_id, source, *, method="manual"):
+        """A consumed but unsuccessful update invalidates only its target."""
+        unit_id = self.units.bindings.get(object_id) if self.units is not None else None
+        if unit_id is None:
+            return
+        state = self.tracking.setdefault(unit_id, UnitTracking())
+        state.status = "failed"
+        state.recovery_phase = "manual"
+        self.rules.fronts.pop(object_id, None)
+        if self.current.prediction is not None:
+            prediction = self.current.prediction
+            prediction["unavailable_ids"] = sorted(set(prediction.get("unavailable_ids", [])) | {object_id})
+            if state.visibility:
+                prediction["estimated_ids"] = sorted(set(prediction.get("estimated_ids", [])) | {object_id})
+        self.record_history(kind=f"{method}_recovery_failed", source=source,
+                            recovery={"unit_id": unit_id, "object_id": object_id, "method": method})
+
+    def record_history(self, *, kind="observation", source=None, interruption=None, recovery=None):
         """Record geometry/states; the writer separately retains active step images."""
         current = self.current
         if self.units is None or current.prediction is None or current.prediction_metadata is None:
@@ -177,14 +230,19 @@ class GameData:
                  "observation_timestamp_seconds": observation.get("timestamp_seconds"),
                  "frame_index": source["frame_index"],
                  "timestamp_seconds": source.get("timestamp_seconds"), "units": units}
+        if recovery is not None:
+            entry["recovery"] = deepcopy(recovery)
         if self.history and {key: value for key, value in self.history[-1].items()
                             if key not in ("sequence", "motion_events", "motion_event_ids")} == entry:
             return False
         self._history_sequence += 1
         entry["sequence"] = self._history_sequence
         if self.motion_recorder is not None:
-            events = (self.motion_recorder.interrupt_all(entry, interruption) if interruption is not None
-                      else self.motion_recorder.observe(entry, source_to_plane=self.board.source_to_plane))
+            events = []
+            if recovery is not None:
+                events.extend(self.motion_recorder.interrupt_unit(recovery["unit_id"], entry, kind))
+            events.extend(self.motion_recorder.interrupt_all(entry, interruption) if interruption is not None
+                          else self.motion_recorder.observe(entry, source_to_plane=self.board.source_to_plane))
             entry["motion_events"] = events
             entry["motion_event_ids"] = [event["event_id"] for event in events]
             self.global_history.update({event["event_id"]: event for event in events})

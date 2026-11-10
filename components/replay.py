@@ -266,10 +266,14 @@ def _rebuild_motion(records, original_events, calibrations, metadata):
                      for event in original_events.values() if event.get("status") == "interrupted"}
     events = {}
     for entry in records:
+        if entry.get("recovery") is not None:
+            for event in recorder.interrupt_unit(entry["recovery"]["unit_id"], entry, entry["kind"]):
+                event["reconstructed_from_source"] = True
+                events[event["event_id"]] = event
         if entry["kind"] == "interruption":
             updates = recorder.interrupt_all(entry, interruptions.get(entry["sequence"], "recording_interrupted"))
         else:
-            if entry["kind"] in ("registration", "observation", "recalibration") and entry["calibration_version"] not in calibrations:
+            if entry["kind"] in ("registration", "observation", "recalibration", "manual_recovery", "reviewed_recovery", "automatic_recovery") and entry["calibration_version"] not in calibrations:
                 raise ReplayError(f"Calibration v{entry['calibration_version']} required for motion reconstruction is missing")
             board = calibrations.get(entry["calibration_version"], {}).get("board", {})
             updates = recorder.observe(entry, source_to_plane=board.get("source_to_plane"))
