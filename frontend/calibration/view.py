@@ -278,7 +278,7 @@ class CalibrationView:
             draw_loading_progress(panel, session.load_progress)
         elif context is None:
             status = session.note if session.model_failed else (
-                "Weights ready. Confirm the table setup to continue." if session.worker.predictor.model is not None
+                "Weights ready. Confirm the table setup to continue." if session.model_loaded
                 else "Loading SAM3...")
             draw_text(panel, status[:max(28, preview_size[0] // 8)],
                       (16, panel.shape[0] - 35), size=14)

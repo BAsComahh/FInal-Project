@@ -88,7 +88,6 @@ def edit_type_dimensions(roster):
     def save():
         try:
             dimensions = parse_dimensions({key: (width.get(), depth.get()) for key, (width, depth) in variables.items()})
-            roster.with_dimensions(dimensions)
         except ValueError as error:
             messagebox.showerror("Tray dimensions", str(error), parent=root)
             return

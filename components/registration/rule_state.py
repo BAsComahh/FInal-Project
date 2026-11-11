@@ -86,10 +86,11 @@ class RuleState:
             raise ValueError("Set real board dimensions (--board-size-in W D), or load metric calibration.")
         if roster is None or prediction is None:
             raise ValueError("Register unit masks and bind their types first.")
-        units, warnings = [], []
+        units, warnings, missing = [], [], []
         inactive = set(prediction.get("inactive_ids", []))
         unavailable = set(prediction.get("unavailable_ids", [])) | (roster.bindings.keys() - set(prediction["object_ids"]))
         for object_id in unavailable - inactive:
+            missing.append(int(object_id))
             warnings.append(f"{roster.bindings[object_id]} has no accepted tracking position; the registered scene is incomplete.")
         for object_id in prediction["object_ids"]:
             if object_id in unavailable or object_id in inactive:
@@ -97,6 +98,7 @@ class RuleState:
             unit_id = roster.bindings.get(object_id)
             tray = prediction.get("trays", {}).get(object_id)
             if unit_id is None or tray is None:
+                missing.append(int(object_id))
                 warnings.append(f"Mask {object_id} has no labelled tray; the registered scene is incomplete.")
                 continue
             unit = roster.units[unit_id]
@@ -131,7 +133,7 @@ class RuleState:
                                           transform_points(item["polygon_image"], image_to_plane).tolist())}
                    for item in self.terrain]
         return {"ruleset": "kow4-mini", "board_size_mm": list(board_size_mm), "units": units, "terrain": terrain,
-                "warnings": warnings, "snapshot": deepcopy(metadata)}
+                "warnings": warnings, "geometry_complete": not missing, "missing_object_ids": missing, "snapshot": deepcopy(metadata)}
 
     def snapshot(self):
         return {"ruleset": "kow4-mini", "fronts": deepcopy(self.fronts), "terrain": deepcopy(self.terrain),

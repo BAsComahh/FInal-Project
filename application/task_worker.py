@@ -11,8 +11,8 @@ from uuid import uuid4
 
 import numpy as np
 
-from ..config import DEFAULT_TRACKER, PROJECT_ROOT, AUTO_RECOVERY_ENABLED
-from .. import config
+from .config import DEFAULT_TRACKER, PROJECT_ROOT, AUTO_RECOVERY_ENABLED
+from . import config
 from components.sam3.video import VideoPredictor
 from components.tracking import create_tracker
 
@@ -69,7 +69,7 @@ class TaskWorker:
                    "model_precision": "float32", "inference_state_device": "cpu"}
             root = PROJECT_ROOT
             run["source_hashes"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
-                "frontend/runtime/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
+                "application/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
             if self.tracker is not None:
                 name = f"components/tracking/{tracker}.py"
                 run["source_hashes"][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()

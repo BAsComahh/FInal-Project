@@ -10,23 +10,29 @@ from ..shared.viewport import Viewport
 
 
 class RecoveryView:
-    def __init__(self, controller, display):
-        self.controller, self.display = controller, display
+    def __init__(self, controller, match, display):
+        self.controller, self.match, self.display = controller, match, display
         self.buttons, self.rows = [], []
         self.offset = {"A": 0, "B": 0}
         self.drag_id = self.drag_position = None
         self.mask_key = self.small_mask = self.drawn_prediction = None
         self.preview_size = None
+        self.picking_error = False
+        self.pointer_generation = None
 
     def render(self, preview_size):
-        recovery, data = self.controller, self.controller.session.data
+        recovery, data = self.controller, self.match.snapshot()
+        recovery_state = data.recovery
         self.preview_size = preview_size
+        if self.pointer_generation != recovery_state["candidate_generation"]:
+            self.picking_error = False
+            self.pointer_generation = recovery_state["candidate_generation"]
         width, height = preview_size
-        review = recovery.review_unit_id is not None
+        review = recovery_state["review_unit_id"] is not None
         canvas_height = max(height + (240 if review else 200), 360)
         canvas = np.full((canvas_height, width + UnitPanel.WIDTH, 3), 30, np.uint8)
         preview = self.display.render(data, preview_size)
-        candidate = recovery.preview
+        candidate = recovery_state["preview"]
         key = (id(candidate), preview_size)
         if key != self.mask_key:
             self.mask_key = key
@@ -38,12 +44,14 @@ class RecoveryView:
             cv2.drawContours(preview, contours, -1, (40, 220, 255), 2)
         canvas[:height, :width] = preview
         self.drawn_prediction = data.current.prediction
+        self.drawn_size = data.current.frame.shape[1::-1]
+        self.drawn_inverse = data.board.homography["inverse_matrix"]
+        self.drawn_ref = data.source_ref
+        self.drawn_generation = recovery_state["candidate_generation"]
         draw_text(canvas, "CANDIDATE REVIEW | Existing IDs only" if review else "MANUAL RECOVERY | Existing IDs only", (12, height + 23), size=15)
         stamp = candidate["metadata"].get("timestamp_seconds") if candidate else None
         text = "Candidate observed: none" if stamp is None else f"Candidate observed: {stamp:.2f}s"
-        request = recovery.session.worker.request
-        updating = recovery.busy or (request is not None and recovery.candidate is not None
-                                    and request.get("recovery_candidate") is recovery.candidate)
+        updating = recovery_state["busy"]
         draw_text(canvas, text + (" | Updating" if updating else " | LIVE"), (12, height + 44), size=12)
         self.buttons = []
         labels = [("clear", "Clear / Retry"), ("report", "Pick tracking error"), ("cancel", "Cancel [Esc]")]
@@ -54,14 +62,14 @@ class RecoveryView:
         for i, (action, label) in enumerate(labels):
             x, y = 10 + i % columns * (button_width + 10), height + 56 + i // columns * 34
             rect = (x, y, x + button_width, y + 27)
-            cv2.rectangle(canvas, rect[:2], rect[2:], (55, 55, 55) if recovery.committing else (75, 70, 60), -1)
+            cv2.rectangle(canvas, rect[:2], rect[2:], (55, 55, 55) if recovery_state["committing"] else (75, 70, 60), -1)
             draw_text(canvas, label, (x + 5, y + 19), size=11)
             self.buttons.append((rect, action))
-        for row, line in enumerate(textwrap.wrap(recovery.note, max(30, width // 7))[:3]):
+        for row, line in enumerate(textwrap.wrap(recovery_state["note"], max(30, width // 7))[:3]):
             draw_text(canvas, line, (12, height + (170 if review else 137) + row * 18), (130, 215, 245), size=12)
 
         self.rows = []
-        labels = recovery.labels()
+        labels = recovery_state["labels"]
         draw_text(canvas, "Drag an ID onto the yellow candidate", (width + 12, 25), size=15)
         draw_text(canvas, "A drop confirms one unit and returns live.", (width + 12, 47), size=12)
         count = max(1, (canvas_height - 120) // 70)
@@ -81,7 +89,7 @@ class RecoveryView:
                 name = kind.get("unit_name", kind.get("name", unit["type_id"]))
                 draw_text(canvas, UnitPanel._short(name, 35), (x + 14, y + 38), size=11)
                 state = ("Draft correction" if uid in recovery.reported else
-                         "Reviewing candidate" if uid == recovery.review_unit_id else
+                         "Reviewing candidate" if uid == recovery_state["review_unit_id"] else
                          "Candidate available" if data.tracking[uid].recovery_phase == "review" else "Manual input needed")
                 draw_text(canvas, state, (x + 14, y + 54), (160, 190, 230), size=11)
                 self.rows.append((rect, uid))
@@ -92,12 +100,21 @@ class RecoveryView:
             draw_text(canvas, self.drag_id, self.drag_position, (80, 245, 255), size=18)
         return canvas
 
+    def show_receipt(self, receipt):
+        if receipt.status == "rejected":
+            self.controller.note = receipt.reason
+
+    def _source_point(self, x, y):
+        from components.homography import transform_points
+        point = Viewport.image_point((x, y), self.drawn_size, self.preview_size)
+        return transform_points(point, self.drawn_inverse)
+
     @staticmethod
     def _inside(rect, x, y):
         return rect[0] <= x < rect[2] and rect[1] <= y < rect[3]
 
     def _occupied(self, point, unit_id):
-        data = self.controller.session.data
+        data = self.match.snapshot()
         if self.drawn_prediction is None:
             return False
         x, y = map(int, point)
@@ -125,11 +142,11 @@ class RecoveryView:
                         elif action == "cancel":
                             recovery.cancel()
                         elif action == "correct":
-                            recovery.bind(recovery.review_unit_id)
+                            self.show_receipt(recovery.bind(recovery.review_unit_id, self.drawn_generation))
                         elif action == "reject":
                             recovery.reject()
                         else:
-                            recovery.picking_error = not recovery.picking_error
+                            self.picking_error = not self.picking_error
                             recovery.note = "Click an existing unit mask to offer its ID for correction."
                     return
             for rect, uid in self.rows:
@@ -138,27 +155,26 @@ class RecoveryView:
                     self.drag_id, self.drag_position = uid, (x, y)
                     return
             if 0 <= x < width and 0 <= y < height:
-                if recovery.picking_error:
-                    obj = Viewport.mask_at(x, y, recovery.session.data, self.preview_size)
+                if self.picking_error:
+                    obj = Viewport.mask_at(x, y, self.match.snapshot(), self.preview_size)
                     if obj is None:
                         raise ValueError("Click an existing unit mask.")
-                    recovery.report_error(obj)
+                    self.show_receipt(recovery.report_error(self.match.snapshot().units.bindings.get(obj)))
                 else:
-                    size = recovery.session.presented_frame["frame"].shape[1::-1]
-                    recovery.point(Viewport.image_point((x, y), size, self.preview_size), True)
+                    size = self.drawn_size
+                    self.show_receipt(recovery.point(self._source_point(x, y), True, self.drawn_ref))
         elif event == cv2.EVENT_RBUTTONDOWN and 0 <= x < width and 0 <= y < height:
-            size = recovery.session.presented_frame["frame"].shape[1::-1]
-            recovery.point(Viewport.image_point((x, y), size, self.preview_size), False)
+            size = self.drawn_size
+            self.show_receipt(recovery.point(self._source_point(x, y), False, self.drawn_ref))
         elif event == cv2.EVENT_MOUSEMOVE and self.drag_id is not None:
             self.drag_position = (x, y)
         elif event == cv2.EVENT_LBUTTONUP and self.drag_id is not None:
             uid, self.drag_id, self.drag_position = self.drag_id, None, None
             if (0 <= x < width and 0 <= y < height and self.small_mask is not None and self.small_mask[y, x]):
-                size = recovery.session.presented_frame["frame"].shape[1::-1]
+                size = self.drawn_size
                 point = Viewport.image_point((x, y), size, self.preview_size)
                 if self._occupied(point, uid):
                     raise ValueError("This location belongs to another tracked unit. Its identity cannot be replaced.")
-                recovery.bind(uid)
+                self.show_receipt(recovery.bind(uid, self.drawn_generation))
             else:
                 recovery.note = "Drop the ID inside the current yellow candidate."
-        recovery.session.dirty = True

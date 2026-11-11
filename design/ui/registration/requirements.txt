@@ -1,0 +1,2 @@
+# Optional preview only; install into outputs/ui_preview/deps.
+PySide6-Essentials==6.12.0

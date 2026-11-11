@@ -8,8 +8,8 @@ import numpy as np
 from components.video_io import VideoSource
 from components.tracking.status import validate_disappearance_seconds
 from components.motion_history import MotionRecorder
-from .. import config
-from ..recovery.automatic import AutomaticRecoveryController
+from . import config
+from .automatic_recovery import AutomaticRecovery
 from .task_worker import TaskWorker
 
 class MatchSession:
@@ -56,13 +56,13 @@ class MatchSession:
         self.startup_ready = False
         self.model_failed = self.closed = self.playing = False
         self.pending_play = False
+        self.playback_started = False
         self.prediction_raw_frame = None
         self.presented_frame = None
         self.recovery = None
-        self.automatic_recovery = AutomaticRecoveryController(self)
+        self.automatic_recovery = AutomaticRecovery(self)
         self.next_inference_time = 0.0
         self.last_submitted_frame = -1
-        self.dirty = True
         self.retired_histories = []
         self._history_errors = ()
         self.configure_trays()
@@ -98,7 +98,6 @@ class MatchSession:
             if not errors and self._history_errors:
                 print("History writes resumed; any remaining queued updates are draining.", flush=True)
             self._history_errors = errors
-            self.dirty = True
 
     def _warp_frame(self, frame):
         if self.data.board.homography is None:
@@ -162,14 +161,12 @@ class MatchSession:
             front["appearance_reference_id"] = reference["reference_id"]
         self.worker.facing_fronts = deepcopy(self.data.rules.fronts)
 
-    def publish_frame(self):
-        """Bind recovery input to the image actually presented by the UI."""
-        self.presented_frame = {"frame": self.data.current.frame.copy(), "raw_frame": self.source.frame.copy(),
-                                "metadata": self.frame_metadata(), "generation": self.generation}
-
     def mark_changed(self):
         self.data.current.view_revision += 1
-        self.dirty = True
+
+    def source_sample(self):
+        return {"frame": self.data.current.frame, "metadata": self.frame_metadata(),
+                "generation": self.generation, "raw_frame": self.source.frame}
 
     def tray_status(self):
         if self.data.board.image_to_plane is None:
@@ -187,13 +184,14 @@ class MatchSession:
             return "FITTING"
         return "NO FIT"
 
-    def start_stream(self):
-        self.play_start = perf_counter()
+    def start_stream(self, now=None):
+        self.play_start = perf_counter() if now is None else now
         self.play_start_frame = self.source.frame_index
         self.playing = True
         self.pending_play = False
 
-    def schedule(self, registration, calibration, now=None):
+    def schedule(self, now=None):
+        registration, calibration = self.registration, self.calibration
         now = perf_counter() if now is None else now
         self.worker.facing_fronts = deepcopy(self.data.rules.fronts)
         self.worker.facing_excluded = {obj for obj, uid in (self.data.units.bindings.items() if self.data.units else ())
@@ -202,7 +200,7 @@ class MatchSession:
         self.automatic_recovery.observe()
         if self.worker.busy or self.closed:
             return
-        if calibration.context is not None and calibration.submit_pending():
+        if calibration._context is not None and calibration.submit_pending():
             return
         if self.needs_reset:
             self.needs_reset = False
@@ -231,16 +229,14 @@ class MatchSession:
         elif self.pending_play and not self.worker.tracker_initialized and not self.model_failed:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
-        elif calibration.context is None and (request := self.automatic_recovery.take_request()) is not None:
+        elif calibration._context is None and (request := self.automatic_recovery.take_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values)
         elif (self.playing and self.data.current.prediction is not None and not self.model_failed and not registration.updating_points
               and now >= self.next_inference_time):
-            snapshot = self.presented_frame if self.recovery is not None and self.recovery.active else None
-            values = snapshot or {"frame": self.data.current.frame, "metadata": self.frame_metadata(),
-                                  "generation": self.generation, "raw_frame": self.source.frame}
+            values = self.source_sample()
             backend = self.worker.tracker if self.worker.tracker is not None else self.worker.predictor
-            consumed = getattr(backend, "source_frame", None)
+            consumed = backend.source_frame
             if values["metadata"]["frame_index"] <= max(self.last_submitted_frame, consumed if consumed is not None else -1):
                 return
             candidate = self.recovery.for_propagation() if self.recovery is not None else None
@@ -248,10 +244,10 @@ class MatchSession:
                                automatic_candidates=self.automatic_recovery.candidates())
             self.last_submitted_frame = values["metadata"]["frame_index"]
             self.next_inference_time = now + 1 / self.inference_fps
-        elif self.recovery is not None and not self.playing and self.presented_frame is not None:
+        elif self.recovery is not None and not self.playing:
             candidate = self.recovery.for_propagation()
-            if candidate is not None and self.presented_frame["metadata"]["frame_index"] > candidate.backend.source_frame:
-                self.worker.submit("recovery_advance", **self.presented_frame, recovery_candidate=candidate)
+            if candidate is not None and self.source.frame_index > candidate.backend.source_frame:
+                self.worker.submit("recovery_advance", **self.source_sample(), recovery_candidate=candidate)
 
     def _accept_recovery_result(self, request, prediction, error):
         if prediction is not None and self.pending_trays:
@@ -259,7 +255,14 @@ class MatchSession:
         if request["metadata"].get("calibration_version") != self.data.board.calibration_version:
             self.recovery.accept(request, None, ValueError("Calibration changed. Start a new recovery."))
             return
-        if request["kind"] == "recovery_commit" and (request.get("recovery_applied") or request.get("recovery_consumed")):
+        candidate = request["recovery_candidate"]
+        cancelled = candidate is not self.recovery._candidate or candidate.cancelled.is_set()
+        consumed = request.get("recovery_applied") or request.get("recovery_consumed")
+        if cancelled:
+            if request["kind"] != "recovery_commit" or not consumed:
+                return
+            error = ValueError("Confirmed update was invalidated after the backend consumed it.")
+        if request["kind"] == "recovery_commit" and consumed:
             object_id = request["recovery_object_id"]
             method = (request.get("prompt") or {}).get("method", "manual")
             if error is None:
@@ -295,7 +298,7 @@ class MatchSession:
             if request["metadata"].get("calibration_version") == self.data.board.calibration_version:
                 self.data.fail_recovery(obj, self.source.metadata(), method="automatic")
         self.automatic_recovery.accept(request, error or request.get("automatic_error"))
-        consumed = getattr(self.worker.tracker, "source_frame", None)
+        consumed = self.worker.tracker.source_frame
         if consumed is not None:
             self.last_submitted_frame = max(self.last_submitted_frame, consumed)
         self.next_inference_time = perf_counter()
@@ -306,10 +309,11 @@ class MatchSession:
                          f"Recovery: {len(request.get('automatic_applied', []))} unit(s) recovered automatically.")
         self.mark_changed()
 
-    def advance(self, registration, calibration):
+    def advance(self, now=None):
+        registration, calibration = self.registration, self.calibration
         if self.closed:
             return
-        now = perf_counter()
+        now = perf_counter() if now is None else now
         completed = self.worker.poll()
         if completed is not None:
             request, prediction, error = completed
@@ -325,7 +329,7 @@ class MatchSession:
                 self.automatic_recovery.accept_propagation(request)
                 if self.recovery is not None:
                     for candidate, result, failure in request.get("automatic_updates", []):
-                        if candidate is self.recovery.candidate:
+                        if candidate is self.recovery._candidate:
                             self.recovery.accept({**request, "recovery_candidate": candidate}, result, failure)
                 registration.accept_prompt_result(request, prediction)
                 if request["kind"] == "recalibrate" and not calibration.accept_result(request, prediction, error):
@@ -355,7 +359,7 @@ class MatchSession:
                         self.last_submitted_frame = request["metadata"]["frame_index"]
                         self.next_inference_time = now + 1 / self.inference_fps
                     elif request["kind"] == "start_tracker":
-                        self.start_stream()
+                        self.start_stream(now)
                     self.mark_changed()
                     times = prediction.get("timings_seconds", {})
                     self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
@@ -370,30 +374,26 @@ class MatchSession:
                 elif request["kind"] == "prepare":
                     self.startup_ready = True
                     self.note = f"SAM3 and first-frame features ready on {self.worker.predictor.device}. Segment targets; Tab labels."
-                self.dirty = True
         if self.playing:
             target = min(self.end_index, self.play_start_frame + int((now - self.play_start) * self.source.fps))
             if target > self.source.frame_index:
                 try:
                     self.data.current.frame = self._warp_frame(self.source.read_frame(target))
-                    self.dirty = True
                 except (OSError, ValueError, cv2.error) as error:
                     self.playing = False
                     self.note = str(error)
             if target >= self.end_index:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
-        self.schedule(registration, calibration, now)
+        self.schedule(now)
         self._poll_history()
 
         progress = self.worker.load_progress
         if progress != self.load_progress or progress is not None:
             self.load_progress = progress
-            self.dirty = True
 
     def pause_source(self):
         self.playing = False
-        self.dirty = True
 
     def reset(self):
         self.worker.facing_references.clear()
@@ -403,7 +403,7 @@ class MatchSession:
         if self.recovery is not None:
             self.recovery.cancel(force=True)
         self.presented_frame = None
-        self.playing = self.pending_play = False
+        self.playing = self.pending_play = self.playback_started = False
         self.data.finish_motion("reset", self.source.metadata())
         if self.data.history_store is not None:
             self.retired_histories.append(self.data.history_store)

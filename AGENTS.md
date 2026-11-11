@@ -67,9 +67,20 @@ client of a headless application boundary, preserve one authoritative match
 state and serialize model operations. Simplify duplicate state, forwarding
 shells and speculative defensive branches; retain frame alignment, identity,
 cancellation/generation, isolated recovery and history-write protections.
-The current instruction authorizes writing the plan and committing a checkpoint;
-the user will start the refactor. Do not automatically begin implementation,
-create new test files, or infer authorization for a later commit or push.
+The 2026-11-11 instruction explicitly starts I14 implementation in the current
+working tree from checkpoint f08876d, preserving the uncommitted prototypes and
+Qt-preview additions. The later instruction authorizes committing this phase
+checkpoint and starting the Qt main-window/real-registration milestone.
+Do not push or add test files. Keep later UI workflows outside this milestone.
+The headless boundary now lives in application/app.py; frontend is its existing
+client. Keep I14 open until its remaining acceptance checks are complete.
+
+The 2026-11-11 D36 follow-up separately authorized a minimal registration-only
+Qt preview and accepted its feasibility. Keep it isolated in
+`design/ui/registration`; it uses saved masks and sample catalogs without SAM,
+reference export or production-session changes. PySide6/Qt Quick is the UI
+technology direction. The preview itself did not start I14; the later explicit
+instruction above starts decoupling, without a full UI migration. Native desktop interaction still requires notification and a reply.
 
 The later 2026-11-08 coordinate decision uses original video pixels as the
 canonical spatial record. Keep source anchors, frame/size and calibration
@@ -197,7 +208,17 @@ writing test files. Use focused inline checks and practical runs appropriate
 to the change.
 
 The user authorized assistant-run module and practical video checks on
-2026-11-02. For GPU checks on this machine, explicitly select and verify the
+2026-11-02. The later 2026-11-11 instruction limits the default cadence:
+do not proactively run regressions or tests during implementation. Complete
+an agreed implementation milestone first, then batch its acceptance work to
+GPT-6.1 Terra with medium reasoning and an independent context. Give it
+acceptance criteria, public entry points and necessary project constraints,
+without implementation explanations or suspected fault locations. It reports
+reproduced failures with steps/evidence and concise coverage counts; the main
+agent independently locates and fixes code. Do not start per-edit retesting
+cycles; include fixes in the next agreed batch unless the user requests an
+earlier check. This does not authorize new test files or desktop interaction.
+For GPU checks on this machine, explicitly select and verify the
 AMD Radeon RX 7900 XT; another visible GPU is AMD Radeon(TM) Graphics.
 Record the physical GPU name, not just a cuda index (HIP visibility filtering
 can remap indices). Sandbox GPU kernel errors have not reproduced in approved

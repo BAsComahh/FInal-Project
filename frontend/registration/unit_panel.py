@@ -1,6 +1,7 @@
 """Cached A/B type catalog sidebar."""
 
 from pathlib import Path
+from collections.abc import Mapping
 import cv2
 import numpy as np
 from ..shared.drawing import draw_text
@@ -89,8 +90,8 @@ class UnitPanel:
                     description += " / " + row["formation"]
                 draw_text(canvas, self._short(description), (x + 16, y + 34), size=11)
                 options = row.get("attributes", {}).get("options", [])
-                detail = (", ".join(str(option.get("label", option.get("name", ""))) if isinstance(option, dict) else str(option)
-                                    for option in options) if isinstance(options, list) else str(options))
+                detail = (", ".join(str(option.get("label", option.get("name", ""))) if isinstance(option, Mapping) else str(option)
+                                    for option in options) if isinstance(options, (list, tuple)) else str(options))
                 detail = detail or f"Next: {roster.next_unit_id(type_id)}"
                 draw_text(canvas, self._short(detail, 44), (x + 16, y + 49), (165, 165, 165), size=10)
                 self.rows.append((rect, type_id))

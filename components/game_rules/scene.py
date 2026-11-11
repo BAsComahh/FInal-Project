@@ -51,6 +51,26 @@ def _identifier(value, name):
     return value
 
 
+def validate_unit_profile(unit, state, name):
+    for field in ('height', 'speed_in'):
+        unit[field] = _number(unit.get(field), name + '.' + field, nullable=True)
+    side = unit.setdefault('side', None)
+    if side is not None:
+        _identifier(side, name + '.side')
+    kind = unit.setdefault('unit_kind', None)
+    if kind not in (None, 'ordinary', 'war_engine', 'individual'):
+        raise ValueError(f"{name}.unit_kind is invalid")
+    rules = unit.setdefault('special_rules', [])
+    if not isinstance(rules, list) or any(not isinstance(r, str) or not r.strip() for r in rules):
+        raise ValueError(f"{name}.special_rules must be a list of nonempty strings")
+    if not isinstance(state, dict):
+        raise ValueError(f"{name}.state must be an object")
+    for field in ('engaged', 'wavering'):
+        value = state.setdefault(field, None)
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"{name}.state.{field} must be boolean or null")
+
+
 def validate_scene(scene):
     """Return a detached, normalized scene; null metadata stays unknown."""
     if not isinstance(scene, dict) or scene.get('ruleset') != 'kow4-mini':
@@ -69,6 +89,8 @@ def validate_scene(scene):
         if len(set(ids)) != len(ids):
             raise ValueError(f"Duplicate {key}")
     warnings = result.setdefault('warnings', [])
+    if not isinstance(result.get('geometry_complete', True), bool):
+        raise ValueError("geometry_complete must be a boolean")
     if not isinstance(warnings, list) or any(not isinstance(v, str) for v in warnings):
         raise ValueError("warnings must be a list of strings")
     for unit in result['units']:
@@ -77,24 +99,7 @@ def validate_scene(scene):
         edge = unit.setdefault('front_edge', None)
         if edge is not None and (isinstance(edge, bool) or not isinstance(edge, int) or edge not in range(4)):
             raise ValueError(f"{name}.front_edge must be 0..3 or null")
-        for field in ('height', 'speed_in'):
-            unit[field] = _number(unit.get(field), name + '.' + field, nullable=True)
-        side = unit.setdefault('side', None)
-        if side is not None:
-            _identifier(side, name + '.side')
-        kind = unit.setdefault('unit_kind', None)
-        if kind not in (None, 'ordinary', 'war_engine', 'individual'):
-            raise ValueError(f"{name}.unit_kind is invalid")
-        rules = unit.setdefault('special_rules', [])
-        if not isinstance(rules, list) or any(not isinstance(r, str) or not r.strip() for r in rules):
-            raise ValueError(f"{name}.special_rules must be a list of nonempty strings")
-        state = unit.setdefault('state', {})
-        if not isinstance(state, dict):
-            raise ValueError(f"{name}.state must be an object")
-        for field in ('engaged', 'wavering'):
-            value = state.setdefault(field, None)
-            if value is not None and not isinstance(value, bool):
-                raise ValueError(f"{name}.state.{field} must be boolean or null")
+        validate_unit_profile(unit, unit.setdefault('state', {}), name)
     for terrain in result['terrain']:
         name = terrain['terrain_id']
         terrain['polygon_mm'] = _polygon(terrain.get('polygon_mm'), name + '.polygon_mm')

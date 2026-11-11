@@ -16,6 +16,20 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；当前程序尚未据此重构，新版仅为已检查的样例原型。
 
+参考文件随仓库存档：以 [单位半环／底部抽屉](../design/ui/unit-radial-console.html) 为当前设计基线，[早期双布局比较](../design/ui/match-console-wireframes.html) 仅供查看取舍。两者是样例内联 HTML，详细适用范围见重构计划第 1.1 节。
+
+### 单窗口 Qt 注册预览（D36）
+
+独立样例位于 [design/ui/registration](../design/ui/registration/preview.py)，只读已有注册画面／mask，提供 A／B 示例类型、类型绑定及正负点／撤回；没有 SAM 推理或 reference 导出，不影响下文的正式 OpenCV 流程。用户已认可此技术方向，完整 UI 尚未迁移。
+
+```powershell
+# Optional Qt modules are isolated from the model environment.
+& 'C:\Users\vasco\miniconda3\envs\sam3-demo\python.exe' -m pip install --target outputs/ui_preview/deps -r design/ui/registration/requirements.txt
+& 'C:\Users\vasco\miniconda3\envs\sam3-demo\python.exe' design/ui/registration/preview.py
+```
+
+默认样例为本地 `outputs/sam3_registration/frame_458b250a48ea`，可传 `--reference` 指向其他包含 `frame.png`、`instances.json` 及对应 mask 的已完成注册目录。`Assign type` 下先点 mask 再点列表；`Point prompts` 下左正右负，仅显示提示点；`Undo`／Ctrl+Z 撤回草稿，`Finish preview` 只锁定预览，`Reset draft` 重来。数据始终只在内存。
+
 ## 操作流程
 
 启动时立即在后台加载模型，同时读取区间首帧并执行现有 LSD 桌面检测。第一屏在原图上突出 `TL / TR / BR / BL` 四个桌角，下方大字询问 `Are the table corners aligned?`，提供两个主要操作：
@@ -78,16 +92,27 @@ TRAY 按钮显示当前状态：`NO CALIB` 缺标定、`NO SIZES` 缺已绑定�
 frontend/__main__.py                 命令行入口
 frontend/window.py                   OpenCV 窗口生命周期与事件循环
 frontend/app.py                      流程组装、阶段衔接与输入路由
-frontend/runtime/                    视频源、串行任务、观测接纳与历史
-frontend/registration/               首帧提示草稿、军表、绑定及 reference 发布
-frontend/calibration/                首次桌面标定与 B08 事务、四角和尺寸页面
-frontend/live/                       持续 LIVE 显示、播放布局和只读失败名单
-frontend/replay/                     历史索引异步读取、动作切步与数字棋盘
-frontend/recovery/                   连续播放中的候选提示、原实例拖放及取消
-frontend/geometry_tools/             查询选择、后台计算与测量叠加
-frontend/scene_editing/              单位资料、初始正面和地形的受控编辑
-frontend/shared/                     文字、坐标换算与 mask／托盘图层缓存
-frontend/image/                      独立图片点选及注册窗口
+frontend/presentation.py             注册选择、几何工具／单位选择（不复制比赛事实）
+frontend/registration/               首帧布局、提示点适配、军表拖放和尺寸表单
+frontend/calibration/                桌角／尺寸草稿及绘制
+frontend/live/                       LIVE 画面与只读失败名单
+frontend/replay/                     历史场景绘制及键盘适配
+frontend/recovery/                   候选绘制、点选和原实例拖放
+frontend/geometry_tools/             几何工具控件和叠加缓存
+frontend/scene_editing/              表单轮询、屏幕点收集及地形／正面绘制
+frontend/shared/                    绘制、视口及图层
+application/app.py                   无窗口比赛入口、tick、快照、reset／close
+application/session.py               源时钟、结果接纳、generation、历史生命周期
+application/task_worker.py           模型加载与串行任务
+application/registration.py          点草稿、绑定、目录和一次 reference 发布
+application/calibration.py           初始标定与独立 B08 事务
+application/recovery.py              手动候选和目标确认
+application/automatic_recovery.py    单次搜索、预算和审核阶段
+application/geometry.py              同帧查询捕获、合并调度和结果版本
+application/scene_editing.py          资料／地形／初始正面修改及失效
+application/replay.py                历史索引／场景读取及游标
+application/config.py                运行参数、模型门槛和项目根路径
+application/contracts.py             FrameRef、命令回执与冻结快照
 components/video_io/source.py        视频解码、帧号和源时间
 components/game_data.py              本局共享数据、观测快照及矩形状态历史
 components/history.py                独立后台历史写盘与按单位／源时间索引读取
@@ -100,13 +125,11 @@ components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过 `window.app` 持有 `VideoApplication`。应用组装各控制器与视图，保留 TABLE／REGISTER／PLAYBACK／RECALIBRATE 四阶段；`app.session.data` 是唯一的本局 `GameData`。运行层不随当前工具关闭或重启，直播展示直接读取实时数据。显式重新标定进入 RECALIBRATE 并持续显示原始源画面，源时钟与追踪调度继续；最终保存目录存在即表示注册已锁定。组件不导入前端，不使用动态属性转发或 mixin 共享全部状态。
+`VideoWindow` 通过 `window.app` 持有现有 `VideoApplication`。它组装窗口适配器并调用同一个 `MatchApplication`；TABLE／REGISTER／PLAYBACK／RECALIBRATE 来自应用快照。唯一 GameData 属于应用内部，UI 不能取得可写业务对象、worker 或视频句柄。S 锁定与开始播放分别处理；核心 tick 不依赖 render，恢复／B08／回放期间源时钟继续。
 
-推荐启动入口保持 `python -m frontend VIDEO`，`python -m tools.sam3_registration VIDEO` 也可用。程序中创建窗口使用 `from frontend.window import VideoWindow`；程序化驱动使用 `frontend.app.VideoApplication`。单位与 reference 接口见 [registration](../components/registration/README.md)。
+入口保持 `python -m frontend VIDEO` 和 `python -m tools.sam3_registration VIDEO`。无窗口驱动使用 `from application.app import MatchApplication`，接口说明见 [application](../application/README.md)。公共业务命令返回 accepted／rejected／pending；UI 显示拒绝原因，后台错误仍在对应流程中接纳。输入／文件错误转回执，内部合同违例不伪装为空结果。
 
-修改提示、撤回、编号或保存规则时先看 `registration/controller.py`；修改注册页布局和拖放时看同目录 `view.py`／`unit_panel.py`，双列尺寸表单在 `dimensions.py`。修改直播页及失败名单时看 `live/`；修改几何查询调度和测量显示时看 `geometry_tools/`；修改属性、正面或地形输入时看 `scene_editing/`。初始标定和 B08 位于 `calibration/`，视频调度与模型队列位于 `runtime/`。只有跨流程的阶段切换、重置与输入优先级才需要改 `app.py`。
-
-回放由 `replay/` 独立管理历史场景与游标，共享运行层持续推进视频源、追踪和写盘。进入回放清理查询与编辑草稿，返回时读取最新实况。`recovery/` 提供 EdgeTAM 的单次自动恢复、候选审核及独立手动恢复，处理失败或主动纠错的已有实例；初始注册保持锁定。自动阶段由共享运行层管理，独立于当前显示工具；what-if 仍待实现，将提供独立布局副本。
+业务修改先看 application 对应流程，界面修改看 frontend 对应 view／表单及 presentation.py。应用仅组合 components，不导入 frontend／Qt／Tk 或 HighGUI；独立图片与边界诊断窗口保持原有用途。回放由 application/replay.py 管理固定边界与游标，frontend/replay 只绘制；what-if、正式 Qt 迁移与观众窗口仍未实现。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
@@ -117,7 +140,7 @@ components/boundary_detection/tray/  已有托盘拟合及批量适配
 [GameData](../components/game_data.py) 定义在一个文件中，每个工作流独立创建实例，不使用模块全局单例。新增公共业务数据在该类中增加明确字段，现有结构为：
 
 ```text
-app.session.data
+MatchApplication 内部的 GameData（不作为 UI 接口公开）
   board              原图大小、桌面毫米尺寸、桌角和 Homography
   units              UnitRoster：类型、单位实例、属性及 object_id 绑定
   rules              RuleState：人工／外观估计正面及地形
@@ -133,7 +156,7 @@ app.session.data
 
 `data.accept_observation(prediction, frame, metadata)` 接纳同一源帧的结果并更新正面估计；运行层核对任务 generation 后接纳后台结果；注册控制器在成功保存后启用失败判定和该次历史写入器。后续接纳传播结果或人工修改状态时记录历史。每条历史含独立 `sequence`、`kind`、接纳／操作时的 `frame_index`／`timestamp_seconds` 和几何自身的 `observation_frame_index`／`observation_timestamp_seconds`。两者可能不同，迟到几何不会把当前人工状态写到过去，也不能当作新的几何采样。按本局 `unit_id` 索引的 `units` 保存 type、有效属性、源坐标 `corners_source`／`center_source`、派生 `corners_mm`、`position_status`、追踪状态／可见性和 `state`（含 engaged／wavering／facing）。未知值保留 null，无有效托盘为 null／unavailable，available 不是准确率判断。相同源帧和内容不重复追加，同帧不同编辑按 sequence 保序。
 
-`app.live.presentation` 始终返回实时 `GameData`；查询提交时只复制其同帧场景与来源信息，历史回放使用自身固定读取边界。Space／Q 清除工具并回到最新实况。R 清空当前观测、绑定及短缓存，保留类型目录、桌面标定、原有地形及旧数据库；旧待写批次继续重试。矩形历史包含 `calibration_version`，对应最终坐标变换和尺寸保存在数据库与 `data.calibrations` 中，旧历史不随重新标定改写。
+`app.match.snapshot()` 发布冻结展示数据，图像／mask 共享只读引用；查询在应用内捕获同帧场景与来源信息，历史回放使用自身固定读取边界。Space／Q 清除工具并回到最新实况。R 清空当前观测、绑定及短缓存，保留类型目录、桌面标定、原有地形及旧数据库；旧待写批次继续重试。矩形历史包含 `calibration_version`，对应最终坐标变换和尺寸保存在数据库与 `data.calibrations` 中，旧历史不随重新标定改写。
 
 ## 短长历史存储
 
@@ -213,7 +236,7 @@ EdgeTAM 失败实例先进入内部 Missing；`recovery_phase=queued/searching` 
 
 点击名单中的 ID 或 `Recover units` 打开恢复窗口；有候选时显示黄色 mask，`Correct` 确认、`No / Search again` 发起一轮新的单次搜索。`Clear / Retry` 丢弃候选并进入正负点手动补标；取消保留失败状态。候选尚未被接纳时持续传播但不写有效历史，一旦消失就作废；不能用旧确认接纳新候选。No 尚未实现跨帧排除被拒目标，因此可能再次提出同一区域，规则见 [CL08](../待澄清列表.md#cl08-单次自动尝试与-no-后的候选排除)。
 
-配置位于 `frontend/config.py`：`AUTO_RECOVERY_ENABLED`（默认 True，仅 EdgeTAM）、`AUTO_RECOVERY_SIMILARITY=0.85`、`AUTO_RECOVERY_MARGIN=0.10`、`AUTO_RECOVERY_PROMPT="miniature"`、`AUTO_RECOVERY_DETECTION_THRESHOLD=0.30`。相似度与分差是用户选定的实验初值，不是概率或准确率；单个候选缺少第二名时交人工。SAM 文本模型与 DINO 在启动的串行加载阶段准备，加载失败保留普通追踪与手动路径，之后失败实例直接请求人工。搜索／确认期间源持续播放，额外推理可能增加观测年龄。
+配置位于 `application/config.py`：`AUTO_RECOVERY_ENABLED`（默认 True，仅 EdgeTAM）、`AUTO_RECOVERY_SIMILARITY=0.85`、`AUTO_RECOVERY_MARGIN=0.10`、`AUTO_RECOVERY_PROMPT="miniature"`、`AUTO_RECOVERY_DETECTION_THRESHOLD=0.30`。相似度与分差是用户选定的实验初值，不是概率或准确率；单个候选缺少第二名时交人工。SAM 文本模型与 DINO 在启动的串行加载阶段准备，加载失败保留普通追踪与手动路径，之后失败实例直接请求人工。搜索／确认期间源持续播放，额外推理可能增加观测年龄。
 
 ## 不停播的手动恢复（EdgeTAM）
 
@@ -297,7 +320,7 @@ python -m tools.setup_facing
 python -m tools.setup_facing --reuse-experiment outputs/dvmnet_experiment/20261110
 ```
 
-配置在 `frontend/config.py`；下列数值均为可调整试验参数：
+配置在 `application/config.py`；下列数值均为可调整试验参数：
 
 | 设置 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -321,7 +344,7 @@ python -m tools.setup_facing --reuse-experiment outputs/dvmnet_experiment/202611
 
 `--profile` 开启 SAM3 GPU 分段同步并导出任务计时到终端给出的 `outputs/tracking_comparison/sam_.../`；额外同步可能影响速度，和正常模式分开比较。候选后端记录包含后处理／回传的操作总时延，不伪造细分 GPU 时间。
 
-`--tracker sam3|cutie|edgetam` 选择注册后的传播模型，默认 `edgetam`（`frontend/config.py` 的 `DEFAULT_TRACKER`）。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
+`--tracker sam3|cutie|edgetam` 选择注册后的传播模型，默认 `edgetam`（`application/config.py` 的 `DEFAULT_TRACKER`）。首帧仍使用 SAM3；所选模型一起在启动时加载，首次播放交接 masks 后才启动视频源时钟。候选初始化和重置由同一工作线程串行执行。设置、权重来源和启动命令见 [tracking](../components/tracking/README.md)。LK 已移除。
 
 2026-11-08 已完成现有播放后入口的持续显示／不停源改造。首帧注册仍按原约定编辑并一次保存；手动恢复、单次自动搜索及候选审核于 2026-11-09 接入。自动门槛的准确率验证、拒绝排除及 what-if 布局问题仍见根目录 [待澄清列表](../待澄清列表.md)。
 

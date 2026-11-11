@@ -15,9 +15,9 @@ class VideoWindow:
         cv2.namedWindow(self.WINDOW, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(self.WINDOW, self.app.on_mouse)
         try:
-            while not self.app.session.closed:
+            while not self.app.state.closed:
                 self.app.advance()
-                if self.app.dirty or self.app.session.dirty:
+                if self.app.dirty:
                     cv2.imshow(self.WINDOW, self.app.render())
                 key = cv2.waitKeyEx(self.app.input_delay())
                 if key >= 0:

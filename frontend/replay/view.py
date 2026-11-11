@@ -53,7 +53,7 @@ class ReplayView:
             lines.append(f"Step {replay.selected}/{len(replay.steps) - 1}: "
                          f"{step['label']} {step['unit_id'] or ''} | end {step['end_timestamp_seconds']:.2f}s")
         else:
-            lines.append("Replay | Loading history..." if replay.index_future is not None else "Replay")
+            lines.append("Replay | Loading history..." if replay.loading else "Replay")
         if scene is not None:
             observation = scene["observation"]
             geometry = observation.get("observation_timestamp_seconds")
@@ -62,11 +62,11 @@ class ReplayView:
             lines.append(f"Geometry {stamp(geometry)} | state record {stamp(record)} | calibration v{observation['calibration_version']}")
         elif replay.steps and not replay.error:
             lines.append("Loading selected board...")
-        if replay.index is not None:
+        if replay.has_index:
             lines.append("Refresh to include newly completed actions.")
             if len(replay.steps) == 1:
                 lines.append("No completed moves or rotations yet.")
-        if replay.index_future is not None and replay.index is not None:
+        if replay.loading and replay.has_index:
             lines.append("Refreshing history; navigation remains available.")
         if replay.error:
             lines.append("Replay error: " + replay.error)

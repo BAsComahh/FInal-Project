@@ -6,7 +6,7 @@
 
 前端 `--profile` 把各任务及错误记录到新的 `outputs/tracking_comparison/sam_.../`，目录在终端显示；不保存提示点、图像或中间 reference。原 session、FP32 和 CPU state 策略保持当前基准配置。RX 7900 XT 真实权重及实际视频短测已验证接入与日志输出，尚未进行公平性能或身份准确率评测，证据范围见 [项目设计记录](../../../项目思路.md)。
 
-本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `frontend/runtime/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
+本目录只负责模型和官方视频会话接口：`predictor.py` 封装 `Sam3TrackerVideoModel`／`Sam3TrackerVideoProcessor`，`loading.py` 观察权重加载进度。后台任务调度位于 `application/task_worker.py`，单位和 reference 数据位于 [registration](../../registration/README.md)。
 
 完整视频示范从 [frontend](../../../frontend/README.md) 启动：
 

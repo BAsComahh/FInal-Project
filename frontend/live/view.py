@@ -5,21 +5,17 @@ from ..shared.drawing import draw_text, draw_loading_progress
 from .missing_panel import MissingUnitPanel
 
 class LiveView:
-    def __init__(self, session, live, geometry_view, display):
-        self.session, self.live, self.geometry_view, self.display = session, live, geometry_view, display
+    def __init__(self, match, geometry_view, display):
+        self.match, self.geometry_view, self.display = match, geometry_view, display
         self.missing_panel = MissingUnitPanel()
         self.view_buttons = []
 
     def tray_caption(self):
-        view = self.live.presentation
-        if view is not self.session.data and self.display.show_rectangles:
-            count = len((view.current.prediction or {}).get("trays", {}))
-            return f"ON ({count})" if count else "NO FIT"
-        return self.session.tray_status() if self.display.show_rectangles else "OFF"
+        return self.match.snapshot().tray_status if self.display.show_rectangles else "OFF"
 
     def render(self, preview_size):
-        session = self.session
-        view = self.live.presentation
+        session = self.match.snapshot()
+        view = self.match.snapshot()
         self.preview_size = preview_size
         preview = self.display.render(view, preview_size)
         self.geometry_view.draw(preview, view)
@@ -28,7 +24,7 @@ class LiveView:
         width, height = self.preview_size
         missing = self.missing_panel.failed_units(view)
         recovery_note = session.note.startswith(("Manual recovery", "Recovery:"))
-        facing_error = session.worker.facing.error if session.worker.facing is not None else None
+        facing_error = session.facing_error
         faces = (view.current.prediction or {}).get("facing_results", {})
         facing_note = ""
         for phase in ("failed", "pending"):
@@ -64,12 +60,12 @@ class LiveView:
         unavailable = set((view.current.prediction or {}).get("unavailable_ids", ())) | set((view.current.prediction or {}).get("inactive_ids", ()))
         eligible = set(faces) - unavailable
         facing_caption = f" | facing {len(eligible & view.rules.fronts.keys())}/{len(eligible)}" if faces else ""
-        live_time = session.source.frame_index / session.source.fps
-        version = session.data.board.calibration_version
-        caption = (f"{session.worker.tracker_name} | View {state} | live {live_time:.2f}s | masks {observed} | calibration v{version}{facing_caption}"
+        live_time = session.source_ref.frame_index / session.fps
+        version = session.board.calibration_version
+        caption = (f"{session.tracker_name} | View {state} | live {live_time:.2f}s | masks {observed} | calibration v{version}{facing_caption}"
                    if width >= 640 else f"LIVE {live_time:.1f}s | seen {observed} | v{version}{facing_caption}")
         draw_text(panel, caption, (10, height + 84 + extra_height), size=12)
-        self.geometry_view.controls(panel, preview_size, height + 92 + extra_height, view, self.session.source)
+        self.geometry_view.controls(panel, preview_size, height + 92 + extra_height, view, self.match.snapshot())
         if show_status:
             status = (session.note if session.model_failed or session.pending_play or recovery_note else
                       "Facing unavailable: " + facing_error if facing_error else

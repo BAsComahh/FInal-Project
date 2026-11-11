@@ -1,0 +1,194 @@
+<div id="unit-radial-study">
+ <div class="study-caption"><span>Operator console</span><span>Interaction study · sample data</span></div>
+ <div class="operator-window" aria-label="Unit-centered match console">
+  <header class="app-header">
+   <div class="identity"><strong>Match workspace</strong><span>List A / List B</span></div>
+   <nav class="mode-tabs" aria-label="Workspace mode"><button data-mode="Live">Live</button><button data-mode="Replay">Replay</button><button data-mode="What-if">What-if</button></nav>
+   <span class="audience-status" aria-live="polite">Audience · Live</span>
+  </header>
+  <div class="canvas" aria-label="Sample tabletop">
+   <svg class="board" role="img" aria-label="Sample board and measurement overlays"></svg>
+   <div class="unit-layer"></div>
+   <span class="canvas-mode">LIVE</span>
+   <div class="unit-hud" hidden>
+    <svg class="brief-leader" aria-hidden="true"></svg>
+    <div class="orbit-track" aria-hidden="true"></div>
+    <section class="unit-brief" aria-label="Selected unit information"></section>
+    <button class="radial-button" data-tool="Distance"><span>Distance</span><kbd>D</kbd></button>
+    <button class="radial-button" data-tool="LOS"><span>LOS</span><kbd>L</kbd></button>
+    <button class="radial-button" data-tool="Move"><span>Move</span><kbd>V</kbd></button>
+   </div>
+  </div>
+  <div class="drawer-bar"><div class="context-caption" aria-live="polite">Select a unit on the board</div><div class="bar-actions"><button data-action="recovery">Recovery <span class="review-count">1</span></button><button data-action="clear">Clear selection</button></div></div>
+  <section class="drawer" aria-label="Context results" hidden></section>
+  <footer class="source-line"><span>Live source continues</span><span>Source 24:16 · Observed 24:15.6</span></footer>
+ </div>
+ <div class="study-caption audience-caption"><span>Audience window</span><span>Follows Live / Replay / What-if</span></div>
+ <div class="audience-window"><span class="audience-mode">LIVE</span><svg class="audience-board" role="img" aria-label="Clean audience board"></svg><div class="audience-result" hidden></div></div>
+</div>
+<style>
+#unit-radial-study { color-scheme:light dark; --ui-base:light-dark(#f7f9fa,#16232b); --ui-panel:light-dark(#ffffff,#22343f); --ui-ink:light-dark(#233b49,#e4edf2); --ui-muted:light-dark(#627985,#a6bcc7); --ui-line:light-dark(#d9e3e8,#3b5360); --ui-field:light-dark(#edf2f4,#1a2b35); --ui-accent:light-dark(#246b89,#8ecae3); --ui-accent-ink:light-dark(#ffffff,#122630); --ui-a:light-dark(#2f7d9e,#89c8e5); --ui-b:light-dark(#b16b73,#e6a6af); --ui-warning:light-dark(#8e6718,#e0bd78); --ui-shadow:light-dark(0 12px 32px #243e4d1a,0 12px 32px #00000040); color:var(--ui-ink); font:14px/1.5 "Segoe UI Variable","Segoe UI",system-ui,sans-serif; }
+#unit-radial-study * { box-sizing:border-box; }
+#unit-radial-study [hidden] { display:none!important; }
+#unit-radial-study .study-caption { display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; margin:0 0 9px; font-size:12px; color:var(--ui-muted); }
+#unit-radial-study .study-caption span:first-child { color:var(--ui-ink); font-weight:600; }
+#unit-radial-study .operator-window { border:1px solid var(--ui-line); border-radius:16px; background:var(--ui-base); overflow:hidden; }
+#unit-radial-study .app-header { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:18px; padding:16px 20px; }
+#unit-radial-study .identity { display:grid; gap:2px; }
+#unit-radial-study .identity strong { font:600 17px/1.3 Bahnschrift,"Segoe UI",sans-serif; letter-spacing:.01em; }
+#unit-radial-study .identity>span { font-size:12px; color:var(--ui-muted); }
+#unit-radial-study button { font:inherit; color:var(--ui-ink); cursor:var(--cursor-interaction,pointer); background:var(--ui-panel); border:1px solid var(--ui-line); border-radius:9px; padding:7px 12px; }
+#unit-radial-study button:disabled { opacity:.45; cursor:default; }
+#unit-radial-study button:focus-visible { outline:2px solid var(--ui-accent); outline-offset:4px; }
+#unit-radial-study .mode-tabs { display:flex; gap:3px; background:var(--ui-field); padding:4px; border-radius:12px; }
+#unit-radial-study .mode-tabs button { background:transparent; border-color:transparent; padding:7px 15px; }
+#unit-radial-study .mode-tabs button[aria-pressed="true"] { background:var(--ui-panel); box-shadow:0 2px 6px #00000010; color:var(--ui-accent); }
+#unit-radial-study .audience-status { font-size:12px; color:var(--ui-muted); }
+#unit-radial-study .canvas { position:relative; height:530px; margin:0 12px; border-radius:12px; background:var(--ui-field); overflow:hidden; }
+#unit-radial-study svg.board, #unit-radial-study .audience-board { display:block; width:100%; height:100%; }
+#unit-radial-study svg text { fill:var(--ui-muted); font:12px "Segoe UI",sans-serif; }
+#unit-radial-study .canvas-mode, #unit-radial-study .audience-mode { position:absolute; top:14px; left:16px; z-index:2; font:11px/1.4 "Cascadia Code",Consolas,monospace; letter-spacing:.1em; color:var(--ui-accent); background:var(--ui-panel); padding:5px 9px; border-radius:7px; }
+#unit-radial-study .unit-layer, #unit-radial-study .unit-hud { position:absolute; inset:0; pointer-events:none; }
+#unit-radial-study .tray { position:absolute; padding:0; border:2px solid var(--unit-color); border-radius:2px; background:var(--ui-panel); pointer-events:auto; cursor:var(--cursor-interaction,pointer); }
+#unit-radial-study .tray::before { content:""; position:absolute; top:2px; left:2px; right:2px; height:3px; background:var(--unit-color); }
+#unit-radial-study .tray[aria-pressed="true"] { outline:2px solid var(--ui-accent); outline-offset:4px; }
+#unit-radial-study .tray.mask-estimated { border-style:dashed; opacity:.75; }
+#unit-radial-study .unit-name { position:absolute; transform:translate(-50%,-100%); font-size:12px; white-space:nowrap; color:var(--ui-ink); }
+#unit-radial-study .unit-hud { z-index:4; }
+#unit-radial-study .brief-leader { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+#unit-radial-study .unit-brief { position:absolute; width:170px; padding:13px 15px; border-radius:13px; background:var(--ui-panel); border:1px solid var(--ui-line); box-shadow:var(--ui-shadow); pointer-events:auto; }
+#unit-radial-study .brief-title { font:600 15px/1.4 Bahnschrift,"Segoe UI",sans-serif; margin-bottom:9px; }
+#unit-radial-study .brief-stats { display:grid; grid-template-columns:1fr auto; gap:6px 15px; font-size:12px; }
+#unit-radial-study .brief-stats span { color:var(--ui-muted); }
+#unit-radial-study .brief-stats strong { font-weight:500; font-variant-numeric:tabular-nums; }
+#unit-radial-study .estimated { color:var(--ui-warning); font-size:11px; border-top:1px solid var(--ui-line); padding-top:8px; margin-top:10px; }
+#unit-radial-study .orbit-track { position:absolute; width:220px; height:264px; border:1px solid color-mix(in srgb,var(--ui-accent) 30%,transparent); border-radius:50%; clip-path:inset(0 0 0 49%); }
+#unit-radial-study .orbit-track.flipped { clip-path:inset(0 49% 0 0); }
+#unit-radial-study .radial-button { position:absolute; width:114px; height:39px; display:flex; justify-content:space-between; align-items:center; border-radius:24px; padding:7px 13px; box-shadow:var(--ui-shadow); pointer-events:auto; }
+#unit-radial-study .radial-button:hover { border-color:var(--ui-accent); color:var(--ui-accent); }
+#unit-radial-study kbd { font:11px/1 "Cascadia Code",Consolas,monospace; color:var(--ui-muted); }
+#unit-radial-study .drawer-bar { padding:13px 18px; display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; }
+#unit-radial-study .context-caption { font-size:12px; color:var(--ui-muted); }
+#unit-radial-study .bar-actions { display:flex; flex-wrap:wrap; gap:8px; }
+#unit-radial-study .bar-actions button { font-size:12px; padding:5px 9px; border-color:transparent; background:transparent; }
+#unit-radial-study .review-count { display:inline-block; margin-left:4px; color:var(--ui-warning); }
+#unit-radial-study .drawer { border-top:1px solid var(--ui-line); background:var(--ui-panel); padding:16px 20px; display:flex; flex-wrap:wrap; justify-content:space-between; gap:16px; align-items:center; }
+#unit-radial-study .drawer h3 { font-size:15px; font-weight:600; margin:0 0 4px; }
+#unit-radial-study .drawer p { margin:0; color:var(--ui-muted); font-size:12px; }
+#unit-radial-study .drawer .actions { display:flex; flex-wrap:wrap; gap:7px; }
+#unit-radial-study .result-number { font-size:23px; color:var(--ui-accent); font-variant-numeric:tabular-nums; }
+#unit-radial-study .source-line { display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; padding:0 18px 13px; color:var(--ui-muted); font-size:11px; }
+#unit-radial-study .audience-caption { margin-top:25px; }
+#unit-radial-study .audience-window { width:min(100%,680px); aspect-ratio:16/9; position:relative; overflow:hidden; border-radius:12px; background:var(--ui-field); border:1px solid var(--ui-line); }
+#unit-radial-study .audience-result { position:absolute; left:16px; bottom:14px; padding:7px 12px; background:var(--ui-panel); border-radius:8px; font-size:12px; }
+@media(max-width:640px) {
+ #unit-radial-study .app-header { padding:13px; gap:12px; }
+ #unit-radial-study .mode-tabs { order:3; width:100%; }
+ #unit-radial-study .mode-tabs button { flex:1; padding:7px; }
+ #unit-radial-study .canvas { margin:0 7px; height:460px; }
+ #unit-radial-study .unit-brief { padding:10px 13px; }
+ #unit-radial-study .compact .brief-title { margin-bottom:5px; }
+ #unit-radial-study .compact .brief-stats { grid-template-columns:auto 1fr auto 1fr; }
+ #unit-radial-study .compact .estimated { margin-top:6px; padding-top:5px; }
+ #unit-radial-study .compact .radial-button { font-size:12px; padding:6px 9px; }
+ #unit-radial-study .compact .radial-button kbd { display:none; }
+ #unit-radial-study .drawer-bar, #unit-radial-study .drawer { padding:12px; }
+ #unit-radial-study .source-line { padding:0 12px 12px; }
+ #unit-radial-study .audience-status { max-width:110px; text-align:right; }
+}
+</style>
+<script>
+(() => {
+ const root=document.getElementById('unit-radial-study'),q=s=>root.querySelector(s),copy=v=>JSON.parse(JSON.stringify(v));
+ const units={ 'A1.1':{x:.30,y:.62,r:0,side:'A',damage:null,speed:6,uncertain:''}, 'B1.1':{x:.73,y:.31,r:180,side:'B',damage:3,speed:6,uncertain:'facing'}, 'B2.1':{x:.76,y:.76,r:150,side:'B',damage:null,speed:5,uncertain:'mask + facing'} };
+ const stored=window.openai?.widgetState?.privateContent||{};
+ const state={mode:['Live','Replay','What-if'].includes(stored.mode)?stored.mode:'Live',selected:units[stored.selected]?stored.selected:null,tool:'Select',target:null,anchor:stored.anchor||null,drawer:'',step:5,shift:0,hypo:null,undo:[],reviewed:false,notice:''};
+ const design={radius:110,sampleMovement:0,uncertainty:'From sample'};
+ let metrics={w:900,h:530,x:0,y:0,width:850,height:510};
+ const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+ function save(){window.openai?.setWidgetState?.({modelContent:{design:'Unit-centered bottom drawer',mode:state.mode,selectedUnit:state.selected,tool:state.tool},privateContent:{mode:state.mode,selected:state.selected,anchor:state.anchor}})?.catch(()=>{});}
+ function liveUnits(){const r=copy(units);r['A1.1'].x+=state.shift;if(state.reviewed)r['B2.1'].uncertain='facing';return r;}
+ function current(){if(state.mode==='What-if'){if(!state.hypo)state.hypo=liveUnits();return state.hypo;}const r=liveUnits();if(state.mode==='Replay'){r['A1.1'].x=.15+state.step*.03;r['B1.1'].r=140+state.step*8;}return r;}
+ function uncertainty(unit){return design.uncertainty==='From sample'?unit.uncertain:design.uncertainty==='Confirmed'?'':design.uncertainty;}
+ function projection(svg){const b=svg.getBoundingClientRect(),w=Math.max(260,b.width||900),h=Math.max(150,b.height||530);const width=Math.min(w-30,(h-34)*1.5),height=width/1.5;return {w,h,x:(w-width)/2,y:(h-height)/2,width,height};}
+ function position(u,m=metrics){return {x:m.x+u.x*m.width,y:m.y+u.y*m.height};}
+ function localPoints(u){const x=u.x*1828.8,y=u.y*1219.2,a=u.r*Math.PI/180;return [[-77.5,-25],[77.5,-25],[77.5,25],[-77.5,25]].map(([px,py])=>[x+px*Math.cos(a)-py*Math.sin(a),y+px*Math.sin(a)+py*Math.cos(a)]);}
+ function closest(a,b){const pa=localPoints(a),pb=localPoints(b);let best={distance:Infinity};for(const [p,poly,reverse] of [...pa.map(p=>[p,pb,false]),...pb.map(p=>[p,pa,true])])for(let i=0;i<4;i++){const s=poly[i],e=poly[(i+1)%4],d=[e[0]-s[0],e[1]-s[1]],t=clamp(((p[0]-s[0])*d[0]+(p[1]-s[1])*d[1])/(d[0]*d[0]+d[1]*d[1]),0,1),v=[s[0]+d[0]*t,s[1]+d[1]*t],distance=Math.hypot(p[0]-v[0],p[1]-v[1]);if(distance<best.distance)best={distance,a:reverse?v:p,b:reverse?p:v};}return best;}
+ function scene(svg,audience=false){
+  const m=projection(svg),r=current();svg.setAttribute('viewBox',`0 0 ${m.w} ${m.h}`);if(!audience)metrics=m;
+  let markup=`<title>${state.mode} sample board</title><desc>Sample unit trays and terrain, not production tracking.</desc><g transform="translate(${m.x} ${m.y})"><rect x="0" y="0" width="${m.width}" height="${m.height}" rx="8" fill="none" stroke="var(--ui-line)"/><path d="M${m.width*.40} ${m.height*.18} l${m.width*.14} ${m.height*.025} l${-m.width*.02} ${m.height*.19} l${-m.width*.14} ${-m.height*.02} Z" fill="var(--ui-base)" stroke="var(--ui-line)"/><ellipse cx="${m.width*.49}" cy="${m.height*.81}" rx="${m.width*.10}" ry="${m.height*.08}" fill="none" stroke="var(--ui-line)"/></g>`;
+  if(state.selected&&state.target&&r[state.target]&&state.tool==='Distance'){
+   const d=closest(r[state.selected],r[state.target]);const point=p=>[m.x+p[0]/1828.8*m.width,m.y+p[1]/1219.2*m.height];const a=point(d.a),b=point(d.b);
+   markup+=`<line x1="${a[0]}" y1="${a[1]}" x2="${b[0]}" y2="${b[1]}" stroke="var(--ui-accent)" stroke-width="2"/><circle cx="${a[0]}" cy="${a[1]}" r="3" fill="var(--ui-accent)"/><circle cx="${b[0]}" cy="${b[1]}" r="3" fill="var(--ui-accent)"/>`;
+  }
+  if(state.selected&&state.tool==='Move'&&state.mode==='Live'){
+   const u=r[state.selected],p=position(u,m),delta=152.4/1219.2*m.height;
+   for(let i=1;i<=3;i++)markup+=`<rect x="${p.x-155/1828.8*m.width/2}" y="${p.y-i*delta/3-50/1219.2*m.height/2}" width="${155/1828.8*m.width}" height="${50/1219.2*m.height}" fill="none" stroke="var(--ui-accent)" stroke-dasharray="3 4" opacity="${.25+i*.15}"/>`;
+  }
+  if(audience){for(const [id,u] of Object.entries(r)){if(uncertainty(u).includes('mask'))continue;const p=position(u,m),w=155/1828.8*m.width,h=50/1219.2*m.height;markup+=`<g transform="translate(${p.x} ${p.y})"><g transform="rotate(${u.r})"><rect x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" fill="var(--ui-panel)" stroke="var(--ui-${u.side.toLowerCase()})" stroke-width="2"/><line x1="${-w/2+2}" y1="${-h/2+3}" x2="${w/2-2}" y2="${-h/2+3}" stroke="var(--ui-${u.side.toLowerCase()})" stroke-width="3"/></g><text x="0" y="${-h/2-9}" text-anchor="middle">${id}</text></g>`;}}
+  svg.innerHTML=markup;
+  if(!audience){q('.unit-layer').innerHTML=Object.entries(r).map(([id,u])=>{const p=position(u,m),w=Math.max(30,155/1828.8*m.width),h=Math.max(14,50/1219.2*m.height),mask=uncertainty(u).includes('mask');return `<button class="tray ${mask?'mask-estimated':''}" data-unit="${id}" aria-label="Select ${id}" aria-pressed="${state.selected===id}" style="--unit-color:var(--ui-${u.side.toLowerCase()});left:${p.x}px;top:${p.y}px;width:${w}px;height:${h}px;transform:translate(-50%,-50%) rotate(${u.r}deg)"></button><span class="unit-name" style="left:${p.x}px;top:${p.y-h/2-8}px">${id}</span>`;}).join('');}
+ }
+ function hud(){
+  const el=q('.unit-hud'),u=current()[state.selected];el.hidden=!u;if(!u)return;
+  if(!state.anchor){const p=position(u);state.anchor={x:p.x/metrics.w,y:p.y/metrics.h};}
+  const compact=metrics.w<640||state.anchor.x*metrics.w<255,cx=clamp(state.anchor.x*metrics.w,compact?20:130,metrics.w-(compact?20:130)),cy=clamp(state.anchor.y*metrics.h,135,metrics.h-135),flip=cx+230>metrics.w?-1:1;
+  el.classList.toggle('compact',compact);
+  const brief=q('.unit-brief'),label=uncertainty(u),damage=u.damage===null?'—':String(u.damage);
+  brief.innerHTML=`<div class="brief-title">${state.selected}</div><div class="brief-stats"><span>Damage</span><strong>${damage}</strong><span>Speed</span><strong>${u.speed}\u2033</strong></div>${label?`<div class="estimated">Estimated: ${label}</div>`:''}`;
+  let bx=compact?12:flip>0?cx-245:cx-359,by=compact?metrics.h-(label?163:144):cy-51,bw=compact?metrics.w-24:170;
+  if(!compact&&(bx<12||bx+bw>metrics.w-12)){bx=clamp(cx-bw/2,12,metrics.w-bw-12);by=cy-155;}
+  brief.style.cssText=`left:${bx}px;top:${by}px;width:${bw}px`;
+  const orbit=q('.orbit-track');orbit.hidden=compact||state.tool!=='Select'||state.drawer==='Recovery';orbit.classList.toggle('flipped',flip<0);orbit.style.left=(cx-110)+'px';orbit.style.top=(cy-132)+'px';
+  const buttons=[...root.querySelectorAll('.radial-button')],offsets=[[78,-100],[112,0],[78,100]],available=state.tool==='Select'&&state.drawer!=='Recovery';
+  buttons.forEach((b,i)=>{b.hidden=!available;b.disabled=label.includes('mask');const left=compact?12+i*(metrics.w-24)/3:cx+flip*offsets[i][0]-57,top=compact?metrics.h-51:cy+offsets[i][1]-20;b.style.left=left+'px';b.style.top=top+'px';b.style.width=compact?(metrics.w-32)/3+'px':'114px';b.setAttribute('aria-label',b.dataset.tool+' for '+state.selected);});
+  const p=position(u),leader=q('.brief-leader');leader.setAttribute('viewBox',`0 0 ${metrics.w} ${metrics.h}`);leader.innerHTML=compact?'':`<line x1="${bx+bw+4}" y1="${by+44}" x2="${p.x-38}" y2="${p.y}" stroke="var(--ui-accent)" stroke-width="1" opacity=".45"/>`;
+ }
+ function drawer(){
+  const el=q('.drawer'),r=current(),unit=r[state.selected];el.hidden=!state.drawer;if(el.hidden)return;
+  let main='',actions='';
+  if(state.drawer==='Replay'){main=`<h3>Replay</h3><p>Step ${state.step} / 5 · ${state.step===0?'Initial registration':state.step%2?'Move A1.1':'Rotate B1.1'}</p>`;actions=`<button data-action="previous" ${state.step===0?'disabled':''}>Previous</button><button data-action="next" ${state.step===5?'disabled':''}>Next</button><button data-action="live">Back to Live</button>`;}
+  else if(state.drawer==='Recovery'){main=`<h3>Recovery · B2.1</h3><p>${state.reviewed?'Mask accepted in this sample. Facing remains Estimated.':'List B · one mask needs review. Normal units keep tracking.'}</p>`;actions=`<button data-action="accept" ${state.reviewed?'disabled':''}>Accept sample mask</button><button data-action="close-drawer">Close</button>`;}
+  else if(state.tool==='Distance'){if(state.target){const value=closest(unit,r[state.target]);main=`<h3>Distance · ${state.selected} to ${state.target}</h3><div class="result-number">${(value.distance/25.4).toFixed(1)} in</div><p>Sample tray geometry</p>`;}else main=`<h3>Distance · ${state.selected}</h3><p>${state.notice||'Click a second unit. Escape cancels.'}</p>`;actions='<button data-action="cancel-tool">Done</button>';}
+  else if(state.tool==='LOS'){main=`<h3>LOS · ${state.selected}${state.target?' to '+state.target:''}</h3><p>${state.notice||(state.target?'Height data is required for this sample.':'Click the target unit.')}</p>`;actions='<button data-action="cancel-tool">Done</button>';}
+  else if(state.tool==='Move'){main=`<h3>${state.mode==='What-if'?'Move virtual unit':'Movement preview'} · ${state.selected}</h3><p>${state.mode==='What-if'?'Drag the selected tray. The live layout stays separate.':'Illustrative Advance poses; rule backend is not connected.'}</p>`;actions=state.mode==='What-if'?'<button data-action="rotate">Rotate 45°</button><button data-action="undo" '+(!state.undo.length?'disabled':'')+'>Undo</button><button data-action="cancel-tool">Done</button>':'<button data-action="cancel-tool">Done</button>';}
+  else {main='<h3>What-if</h3><p>Select a unit, then choose Move to edit the copy.</p>';actions='<button data-action="undo" '+(!state.undo.length?'disabled':'')+'>Undo</button><button data-action="live">Back to Live</button>';}
+  el.innerHTML=`<div>${main}</div><div class="actions">${actions}</div>`;
+ }
+ function render(){
+  const focused=document.activeElement,hadFocus=root.contains(focused),focusData=hadFocus?{unit:focused.dataset.unit,action:focused.dataset.action,mode:focused.dataset.mode,tool:focused.dataset.tool}:{};
+  root.querySelectorAll('.mode-tabs button').forEach(b=>b.setAttribute('aria-pressed',String(state.mode===b.dataset.mode)));
+  q('.audience-status').textContent='Audience · '+state.mode;q('.canvas-mode').textContent=state.mode.toUpperCase();q('.audience-mode').textContent=state.mode==='What-if'?'WHAT-IF · HYPOTHETICAL':state.mode.toUpperCase();
+  q('.context-caption').textContent=state.tool!=='Select'?state.tool+' · '+state.selected:state.selected?state.selected+' selected · Esc clears': 'Select a unit on the board';
+  q('[data-action="clear"]').hidden=!state.selected;q('.review-count').textContent=state.reviewed?'0':'1';
+  scene(q('.board'));scene(q('.audience-board'),true);hud();drawer();
+  const result=q('.audience-result');result.hidden=!(state.tool==='Distance'&&state.target);if(!result.hidden)result.textContent=`${state.selected} → ${state.target} · ${(closest(current()[state.selected],current()[state.target]).distance/25.4).toFixed(1)} in`;
+  if(hadFocus){const key=Object.keys(focusData).find(k=>focusData[k]);let target=key?q('button[data-'+key+'="'+focusData[key]+'"]'):null;if(!target||target.disabled||!target.getClientRects().length)target=q('.drawer:not([hidden]) button:not(:disabled)')||q('.tray[aria-pressed="true"]');if(target)target.focus({preventScroll:true});}
+ }
+ function select(id){if(state.tool==='Distance'||state.tool==='LOS'){if(uncertainty(current()[id]).includes('mask')){state.target=null;state.notice='Confirm the Estimated mask before querying this unit.';}else if(id!==state.selected){state.target=id;state.notice='';}}else {state.selected=id;state.tool='Select';state.anchor=null;state.notice='';if(state.drawer==='Recovery')state.drawer='';}render();save();}
+ function setMode(mode){if(mode===state.mode)return;state.mode=mode;state.selected=null;state.anchor=null;state.tool='Select';state.target=null;state.drawer=mode==='Live'?'':mode;if(mode==='Replay')state.step=5;if(mode==='What-if'){state.hypo=liveUnits();state.undo=[];}render();save();}
+ function cancelTool(){state.tool='Select';state.target=null;state.notice='';state.drawer=state.mode==='Replay'?'Replay':state.mode==='What-if'?'What-if':'';}
+ root.addEventListener('click',event=>{
+  if(suppressClick){suppressClick=false;return;}
+  const mode=event.target.closest('button[data-mode]'),unit=event.target.closest('button[data-unit]'),tool=event.target.closest('button[data-tool]'),action=event.target.closest('button[data-action]');
+  if(mode){setMode(mode.dataset.mode);return;}if(unit){select(unit.dataset.unit);return;}
+  if(tool){state.tool=tool.dataset.tool;state.target=null;state.notice='';state.drawer='Tool';}
+  else if(action){switch(action.dataset.action){case'clear':state.selected=null;state.anchor=null;cancelTool();break;case'recovery':state.drawer='Recovery';state.tool='Select';break;case'accept':state.reviewed=true;break;case'close-drawer':state.drawer=state.mode==='Live'?'':state.mode;break;case'cancel-tool':cancelTool();break;case'previous':state.step=Math.max(0,state.step-1);break;case'next':state.step=Math.min(5,state.step+1);break;case'live':setMode('Live');return;case'rotate':if(state.selected){state.undo.push(copy(state.hypo));state.hypo[state.selected].r=(state.hypo[state.selected].r+45)%360;}break;case'undo':if(state.undo.length)state.hypo=state.undo.pop();break;}}
+  else if(q('.canvas').contains(event.target)&&!event.target.closest('.unit-hud')){state.selected=null;state.anchor=null;cancelTool();}
+  else return;render();save();
+ });
+ let drag=null,suppressClick=false;
+ q('.canvas').addEventListener('pointerdown',event=>{const unit=event.target.closest('button[data-unit]');if(!unit||state.mode!=='What-if'||state.tool!=='Move'||unit.dataset.unit!==state.selected)return;state.undo.push(copy(state.hypo));drag={id:state.selected,moved:false};q('.canvas').setPointerCapture(event.pointerId);});
+ q('.canvas').addEventListener('pointermove',event=>{if(!drag)return;const box=q('.canvas').getBoundingClientRect(),u=state.hypo[drag.id];u.x=clamp((event.clientX-box.left-metrics.x)/metrics.width,.08,.92);u.y=clamp((event.clientY-box.top-metrics.y)/metrics.height,.12,.88);drag.moved=true;render();});
+ q('.canvas').addEventListener('pointerup',()=>{if(drag){if(!drag.moved)state.undo.pop();else suppressClick=true;drag=null;drawer();save();}});
+ root.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){event.preventDefault();if(state.tool!=='Select')cancelTool();else{state.selected=null;state.anchor=null;}render();save();return;}
+  if(event.ctrlKey&&event.key.toLowerCase()==='z'&&state.mode==='What-if'){event.preventDefault();if(state.undo.length)state.hypo=state.undo.pop();render();save();return;}
+  if(state.mode==='Replay'&&!event.ctrlKey&&!event.metaKey&&['ArrowLeft','ArrowRight','a','d','A','D'].includes(event.key)){event.preventDefault();state.step=clamp(state.step+(['a','A','ArrowLeft'].includes(event.key)?-1:1),0,5);render();save();}
+  if(state.selected&&state.tool==='Select'&&!event.ctrlKey&&!event.metaKey){const tool={d:'Distance',l:'LOS',v:'Move'}[event.key.toLowerCase()];if(tool&&!uncertainty(current()[state.selected]).includes('mask')){event.preventDefault();state.tool=tool;state.drawer='Tool';render();save();}}
+ });
+ render();new ResizeObserver(()=>{scene(q('.board'));scene(q('.audience-board'),true);hud();}).observe(q('.canvas'));
+ if(globalThis.Tweak){const tweak=new Tweak({container:q('.operator-window'),onChange:()=>{state.shift=design.sampleMovement;render();}});tweak.addSlider(design,'sampleMovement',{label:'Sample live movement',min:0,max:.12,step:.01});tweak.addSelect(design,'uncertainty',{label:'Estimated label example',options:['From sample','Confirmed','mask','facing','mask + facing']});}
+ window.addEventListener('openai:set_globals',event=>{const data=event.detail?.globals?.widgetState?.privateContent;if(!data)return;if(['Live','Replay','What-if'].includes(data.mode))state.mode=data.mode;if(units[data.selected])state.selected=data.selected;if(data.selected===null)state.selected=null;if(data.anchor&&Number.isFinite(data.anchor.x)&&Number.isFinite(data.anchor.y))state.anchor={x:clamp(data.anchor.x,0,1),y:clamp(data.anchor.y,0,1)};if(Number.isFinite(data.sampleMovement))state.shift=clamp(data.sampleMovement,0,.12);if(['Confirmed','mask','facing','mask + facing','From sample'].includes(data.uncertainty))design.uncertainty=data.uncertainty;render();});
+})();
+</script>

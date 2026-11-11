@@ -91,6 +91,9 @@ def line_of_sight(scene, a_id, b_id, samples=9):
                     unknown_hit |= not known
                     break
             if not obstructed:
+                if scene.get('geometry_complete') is False:
+                    result.update(status='uncertain', reason='A registered unit has no valid tray; occlusion geometry is incomplete.')
+                    return result
                 result.update(status='clear', reason='A sampled front-facing-to-target-base ray is clear under the registered scene and supported mini-rulebook assumptions.', line_mm=[p, q])
                 return result
     result.update(status='uncertain', reason='No clear sampled ray was found; sampling cannot prove complete occlusion.' + (' Heights are unknown for some intersecting geometry.' if unknown_hit else ''))

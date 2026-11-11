@@ -80,7 +80,7 @@ def optional_number(value, label, *, positive=False):
 
 def edit_unit_rules(profile):
     special_rules = profile.get("special_rules") or []
-    special_rules = ", ".join(special_rules) if isinstance(special_rules, list) else str(special_rules)
+    special_rules = ", ".join(special_rules) if isinstance(special_rules, (list, tuple)) else str(special_rules)
     fields = [("speed_in", "Speed (inches)", profile.get("speed_in"), "number"),
               ("height", "Rule Height", profile.get("height"), "number"),
               ("side", "Side / army", profile.get("side"), "text"),

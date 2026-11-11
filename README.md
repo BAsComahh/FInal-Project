@@ -20,11 +20,13 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 本局公共数据集中在 [GameData](components/game_data.py)：保留局部观测历史及全局平移／旋转事件，完成注册后持续写入该次输出目录的 `history.sqlite3`。平移与旋转独立判断，容差内停稳 5 秒完成，初始位置容差 10 mm、旋转容差 10°；位置以原视频像素为基准保存，距离等规则仍用毫米；仅标定切换不中断动作，真实追踪／几何缺失保存中断记录，不算完成一步。内存保留约 5～5.5 分钟及进行中／未写盘数据，R 保留旧数据库。播放页的 Replay 以步骤对应的 Homography 后截图为背景，叠加 ID 和矩形重建历史棋盘，每次已完成移动或旋转各为一步，支持 ←／→、A／D 和按钮切步。回放期间后台继续运行，Back to Live 返回最新实况。用法见 [历史棋盘回放](frontend/README.md#历史棋盘回放)。
 
-完成注册后按源视频时间检测持续无 mask，默认 10 秒，通过 [frontend/config.py](frontend/config.py) 修改。EdgeTAM 超时实例先进入内部 Missing，后台只搜索一次；满足试运行门槛（相似度 0.85、分差 0.10、无竞争／正常区域占用）才接回，其他结果才显示在 A／B 人工名单。点击名单或 `Recover units` 可审核候选，`Correct` 确认、`No` 发起新一轮单次搜索，也可清空后补点。原追踪器自行返回的 mask 仍只作 `Estimated`。门槛尚未校准，流程见[前端说明](frontend/README.md#追踪失败判定与只读名单)。
+完成注册后按源视频时间检测持续无 mask，默认 10 秒，通过 [application/config.py](application/config.py) 修改。EdgeTAM 超时实例先进入内部 Missing，后台只搜索一次；满足试运行门槛（相似度 0.85、分差 0.10、无竞争／正常区域占用）才接回，其他结果才显示在 A／B 人工名单。点击名单或 `Recover units` 可审核候选，`Correct` 确认、`No` 发起新一轮单次搜索，也可清空后补点。原追踪器自行返回的 mask 仍只作 `Estimated`。门槛尚未校准，流程见[前端说明](frontend/README.md#追踪失败判定与只读名单)。
 
 播放页的 `Recalibrate [K]` 按固定相机理想假设处理，保持原始视频持续播放，不执行相机运动检测。重新选四角及确认尺寸后，以同帧原图和 mask 迁移到独立新会话，保留 ID、原始 reference 和失败回退，成功后切换标定并显示最新帧，源时钟不重启。初始化中也可 Esc 取消；详情见[重新标定流程](frontend/README.md#比赛中重新标定)。
 
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。
+
+运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供现有 UI 使用。PySide6／Qt Quick 预览仍独立在 `design/ui/registration`；完整 I14 验收与正式 UI 迁移均未标完成。
 
 ### 目录
 
@@ -32,12 +34,12 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 frontend/
   window.py                  OpenCV window lifecycle and event loop
   app.py                     Workflow composition and input routing
-  runtime/                   Video clock, serial model tasks and observations
-  registration/              Draft prompts, army lists, bindings and references
-  calibration/               Initial calibration and B08 transactions
+  presentation.py            Window-local selection and tool state
+  registration/              Registration layout, prompt input and catalog drag/drop
+  calibration/               Corner and dimension drafts
   live/                      Continuous live view and missing-unit lists
   replay/                    Historical board display and discrete event navigation
-  geometry_tools/            Snapshot queries and measurement overlays
+  geometry_tools/            Query controls and measurement overlays
   scene_editing/             Unit profiles, initial facing and terrain inputs
   shared/                    Drawing, viewport transforms and cached layers
   image/                     Standalone image registration windows

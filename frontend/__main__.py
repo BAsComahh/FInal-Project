@@ -8,7 +8,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from frontend.window import VideoWindow
-from frontend.config import DEFAULT_TRACKER, DEFAULT_UNITS, PROJECT_ROOT
+from application.config import DEFAULT_TRACKER, DEFAULT_UNITS, PROJECT_ROOT
 
 
 def main():
