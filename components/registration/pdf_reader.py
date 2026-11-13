@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 
 from .units import UnitRoster
+from .base_sizes import infer_dimensions
 
 
 _HEADER = re.compile(r"^(?P<name>.+?)\s+Sp\s+Me\s+Sh\s+De\s+US\s+Att\s+Ne\s+Ht\s+Pts$")
@@ -79,8 +80,8 @@ def _finish_entry(current):
     profile = current["profile"]
     details = _details(current["source"]["details"])
     classification = profile["classification"]
-    formation = re.search(r"\b(Troop|Regiment|Horde|Legion)$", classification)
-    formation = formation[1] if formation else "Hero" if re.search(r"\bHero\b", classification) else "Single"
+    formation = re.search(r"\b(Troop|Regiment|Horde|Legion)$", classification, re.I)
+    formation = formation[1].title() if formation else "Hero" if re.search(r"\bHero\b", classification, re.I) else "Single"
     kind = "individual" if any(rule.casefold() == "individual" for rule in details["special_rules"]) else (
         "war_engine" if re.search(r"\bWar (?:Engine|Eng)\b", classification, re.I) else "ordinary")
     nerve = profile["nerve"]
@@ -97,6 +98,7 @@ def _finish_entry(current):
         name += " / " + ", ".join(option["label"] for option in details["options"])
     return {"name": name, "unit_name": current["unit_name"], "formation": formation,
             "classification": classification, "attributes": attributes,
+            **infer_dimensions(classification, formation, current["source"]["details"]),
             "unparsed_details": details["unparsed_details"], "source": current["source"]}
 
 
@@ -195,8 +197,8 @@ def _type_id(index):
 def read_unit_list_pdfs(paths, *, sides=None):
     """Return a type catalog for one or more PDFs; instances stay registration-generated.
 
-    ``sides`` optionally supplies one explicit side label per PDF. Missing tray
-    dimensions and dynamic states are omitted, rather than guessed.
+    ``sides`` optionally supplies one explicit side label per PDF. Standard
+    footprints use the pinned KoW v4 matrix; unresolved sizes stay omitted.
     """
     paths = [paths] if isinstance(paths, (str, Path)) else list(paths)
     if not paths:
@@ -217,10 +219,12 @@ def read_unit_list_pdfs(paths, *, sides=None):
             record = groups[fingerprint]
             record["listed_count"] += 1
             record["source_entries"].append({"source_index": source_index, **original})
-    warnings = ["Tray dimensions are not printed in these PDFs; add dimension.width_mm/depth_mm before tray fitting.",
+    warnings = ["Tray dimensions use explicit PDF base notes or the KoW v4 FAQ v0.1 matrix; review unit-specific exceptions before registration.",
                 "Listed counts are reference metadata; registration still generates instance IDs without enforcing counts.",
                 "Parsed special rules and purchased options are retained; this does not establish rule-engine support."]
     for record in groups.values():
+        if "dimension" not in record:
+            warnings.append(f"Type {record['type_id']} ({record['unit_name']}): {record['dimension_inference']['reason']}")
         if record["unparsed_details"]:
             warnings.append(f"Type {record['type_id']} contains unparsed detail lines; review unparsed_details and source_entries.")
     result = {"format": "mantic-companion-pdf-catalog-v1", "sources": sources,

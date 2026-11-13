@@ -49,7 +49,7 @@
 - [x] U08 单独登记地形 label、区域、类别与可选规则 Height；转换到毫米平面，支持撤回草稿点和删除最后一个地形。
 - [ ] U09 **部分实现**：地形可添加，但缺少已有地形的选择、修改、任意删除及属性配置；Obstacle 的 Height=1 约束尚未落实，见 Q05。
 - [x] U10 不将未登记的骰子、尺子、时钟等自动加入单位或规则地形；只有主动绑定的 mask／人工地形进入相关场景。
-- [ ] U11 **部分实现（2026-11-08）**：已按 D30 提供 `Tray dimensions (mm)` 按钮，独立窗口以 A／B 两列按 type 手动填写宽／深，预填已有值、两列独立滚动、整表验证及 Save／Cancel。保存刷新已有 mask 的托盘，修改尺寸的实例需重新标正面；保留 ID、属性、绑定、计数和来源。尺寸随最终注册保存，完成后锁定，R 保留目录。真实双 PDF、CPU 托盘拟合与保存、旧结果隔离及窗口回调检查已通过，原生窗口外观待人工确认。剩余：依据兵种＋编制推导尺寸建议及来源核对；PDF 本身不含尺寸，不自动套用 ABC 估算值。
+- [x] U11 **PDF 自动尺寸已实现（2026-11-11）**：共享 PDF reader 新增官方 FAQ v0.1 的类别＋编制标准占地映射，明确毫米底座备注优先；未知／冲突／n/a 保持无尺寸并提示。`dimension_inference` 保留导入原值及规则／PDF 依据。用户随后要求移除手动入口，Qt 已删除 Tray sizes 按钮／弹窗及输入适配，只从 PDF／目录取得尺寸；旧 OpenCV 的 D30 编辑窗口与共享更新接口保留，改尺寸仍重新拟合并清除目标旧正面，注册完成后锁定。Qt／OpenCV 导入及 CLI 共用，旧 JSON 不重写。Terra 检查标准矩阵／底座声明／冲突、双军表21个type、CLI及roster覆盖／清空／来源；发现的 Single 别名问题已修复，主实现局部10例及原始 Unicode 声明检查通过，未重跑整批。证据在 outputs/refactor_checks/pdf_dimensions_terra_20261111；Qt入口移除及最终注册保存本轮未运行验收，Unicode × 的实际PDF提取及原生外观／具体特殊单位底座仍待核对。
 - [ ] U12 **可选**：通用 Range 字段与开关、纯文本军表导入。当前已有 JSON 和指定格式 PDF，尚无通用文本导入器；Range 不是默认 KoW 字段。
 - [ ] U13 **部分实现**：法术、所选装备／artefact 的原始名称可随 `options` 保留，但尚无独立配置、选择与详情展示；不能把所有带 `(n)` 的选项自动当成法术，解析出名称也不代表规则效果已经实现。
 
@@ -105,6 +105,8 @@
 
 ## 6. 托盘占地与有方向的朝向
 
+- [ ] T15 **质心／形状门控已实现，受控几何已检查（2026-11-11）**：用户授权默认 adaptive；稳定单位跳过矩形搜索，明显变化从上一已接纳解局部拟合、失败回退完整搜索。基准保留在实际拟合帧，轻微位移可累计触发，面积／缩略轮廓／可靠长轴防止漏掉原地转动。首次、缺失、尺寸／标定／身份变化、R 和恢复目标不跨边界复用；worker 独立 previous_trays 状态已移除，按请求取拥有者接纳的几何。配置阈值为试验值，full／local 保留对照。Terra 已检查稳定复用／慢移累计／转动与面积触发、空mask、尺寸／映射／图像大小变更及静态CPU耗时；完整回退／取消迟到／R和恢复目标／计数与历史持续未完整覆盖。证据在 outputs/refactor_checks/qt_uncertainty_adaptive_terra_20261111，动态效果与准确率仍待实测。
+
 主要证据：[托盘拟合](components/boundary_detection/tray/detector.py)、[批量适配](components/boundary_detection/tray/batch.py)、[正面记录](components/registration/rule_state.py)。
 
 - [x] F01 区分可见模型 mask 与真实底盘占地；用 type 的固定宽深约束矩形，并在毫米平面拟合再投回图像。
@@ -133,13 +135,23 @@
 - [ ] I11 **部分实现／展示待改造**：A／B 名单已按恢复阶段过滤，只有单次自动搜索未能接回的实例显示，支持点击进入审核／补点；内部 Missing 始终维护失败实例，在场过滤和独立滚动保留。**剩余：简洁 Missing ID 名单、M／E 画面标记及按需属性展示**，与 I12／F08 一起设计，未知值不补零。
 - [ ] I12 **部分实现**：几何、资料／地形、B08、自动搜索／候选审核及手动恢复均不冻结、不停源，回放保持独立画面与后台运行；A／B 原 ID 拖放及主动纠错草稿保留。剩余：removed、运行期独立正面补充、Missing ID／M／E 标记及按需属性、what-if 区域；见 CL26／CL34。阈值仍只放配置文件，No 拒绝排除另见 CL08。
 
-- [ ] I13 **设计阶段／未实现**：按 D33 先设计控制台交互，再实施或重构。保留现有流程与视频为主结构，重做单位选中、上下文工具／面板、错误反馈和模式切换；新增独立观众窗口，自动跟随控制台 Live／Replay／What-if。已用样例数据提供右侧面板／底部抽屉两版低保真交互草图并做无界面检查，用户已选底部抽屉，并要求默认 Select、点单位出现 Move／Distance／LOS 环形动作及详情、取消单位下拉与重复尺寸／朝向字段、按需组合 Estimated: mask／facing；已按手绘稿更新右侧半环动作与左侧只读 Damage／Speed 摘要，菜单固定、选框继续跟踪；新版选中交互已获认可。Damage 编辑留后续。框架方向见 D36；正式接入仍须评审展示状态接口及迁移范围；原型不代表双窗口或 What-if 已接入运行层。
+- [ ] I13 **Qt 主交互部分接入／完整迁移未完成**：按 D33 先设计控制台交互，再实施或重构。保留现有流程与视频为主结构，重做单位选中、上下文工具／面板、错误反馈和模式切换；新增独立观众窗口，自动跟随控制台 Live／Replay／What-if。已用样例数据提供右侧面板／底部抽屉两版低保真交互草图并做无界面检查，用户已选底部抽屉，并要求默认 Select、点单位出现 Move／Distance／LOS 环形动作及详情、取消单位下拉与重复尺寸／朝向字段、按需组合 Estimated: mask／facing；已按手绘稿更新右侧半环动作与左侧只读 Damage／Speed 摘要，菜单固定、选框继续跟踪；新版选中交互已获认可。Damage 编辑留后续。框架方向见 D36；Qt Live 主交互接入见 I16，后续辅助流程及观众展示仍需评审；原型不代表双窗口或 What-if 已接入运行层。
 
-- [ ] I14 **主体已迁出／完整验收未完成（2026-11-11）**：以 f08876d 为基线，将 worker、配置、MatchSession 及注册／B08／恢复／查询／回放迁入 application；MatchApplication 提供无窗口 tick、FrameRef、冻结快照和明确命令回执。现有 UI 使用展示选择模型，资料／地形修改由应用接纳；保留代次、同帧、身份、目标隔离、方向接纳和历史重试，删除旧 runtime／控制器、Live 转发壳、LOS 英文提示解析及运行层 repaint 状态。CPU checkpoint 摘要、离屏流程、RX 7900 XT 真实注册／传播／候选／DVMNet 短测已通过，原引用 hash 不变。**剩余：**完整取消／关闭／后端消耗帧与方向迟到交叉矩阵、SAM3／Cutie 实跑、双读者持续读取与原生桌面长局尚未全部覆盖。生产范围总非空行数目前增加 405 行（显式快照与命令合同、应用生命周期及帧取样边界），净减少目标未达到；继续精简不得删必要保护。详情见 [执行状态](前端解耦重构计划.md)。本轮不提交、不迁移 Qt、不实现双窗口／What-if。
+- [ ] I14 **主体已迁出／完整验收未完成（2026-11-11）**：以 f08876d 为基线，将 worker、配置、MatchSession 及注册／B08／恢复／查询／回放迁入 application；MatchApplication 提供无窗口 tick、FrameRef、冻结快照和明确命令回执。现有 UI 使用展示选择模型，资料／地形修改由应用接纳；保留代次、同帧、身份、目标隔离、方向接纳和历史重试，删除旧 runtime／控制器、Live 转发壳、LOS 英文提示解析及运行层 repaint 状态。CPU checkpoint 摘要、离屏流程、RX 7900 XT 真实注册／传播／候选／DVMNet 短测已通过，原引用 hash 不变。**剩余：**完整取消／关闭／后端消耗帧与方向迟到交叉矩阵、SAM3／Cutie 实跑、双读者持续读取与原生桌面长局尚未全部覆盖。生产范围总非空行数目前增加 405 行（显式快照与命令合同、应用生命周期及帧取样边界），净减少目标未达到；继续精简不得删必要保护。详情见 [执行状态](前端解耦重构计划.md)。后续获用户授权以 `292dc30` 保存 checkpoint，Qt 接入单列 I15，不实现双窗口／What-if。
 
 - I14 独立验收待处理（2026-11-11）：Terra-medium 复现关闭后 `undo_terrain()` 仍修改地形，以及共享快照可经 `setflags(write=True)` 改写其他读者的图像。证据在 `outputs/refactor_checks/terra_trial_20261111/reproductions.md`；两项尚未修复。本轮试验通过 3／失败 2／未测 13／受阻 0，不代表完整矩阵通过。按用户后续额度约束，实现期间不主动测试，节点完成后再批量交 Terra，暂不启动修复／复验循环。
 
-- [ ] I15 **最小预览已实现／正式接入已获授权**：D36 将 PySide6／Qt Quick 框架验证缩到单个注册窗口。已提供 [独立预览](design/ui/registration/preview.py)，使用只读保存画面／mask、A／B 示例类型及内存提示点／绑定／撤回，CPU 离屏检查与两种窗口尺寸通过。2026-11-11 后续用户授权提交阶段 checkpoint，再实现 Qt 主窗口骨架和真实注册接入 application；节点完成后统一交 Terra-medium 验收。预览本身未接 SAM、未导出 reference、未打开原生窗口；双窗口及后续工作流仍不在本节点。启动见 frontend/README。
+- [ ] I15 **真实注册节点已实现／部分接口验收**：独立 D36 预览保留于 [design/ui/registration](design/ui/registration/preview.py)。用户已授权提交 I14 阶段 checkpoint `292dc30` 后接入真实业务。新增 `python -m frontend.qt VIDEO`：Qt 主窗口、自动／手工桌角及尺寸、SAM 正负点／撤回／多对象、A／B 导入与点击／拖放绑定、托盘尺寸／初始正面、一次保存锁定／重置，以及基础连续播放。共用 CLI 和现有应用命令、图层缓存；Qt 不持有模型或可写比赛数据。已交独立上下文 Terra-medium 集中验收，受控接口检查 22 项通过；按钮同名冲突及 Flow 只读属性赋值已修正，用户报告后由 Terra-low 定向确认桌面设置／注册两页离屏加载通过，无属性绑定错误，证据在 outputs/refactor_checks/qt_startup_20261111/low_recheck.log。真实模型／GPU、窗口布局／点击拖放、文件取消及 Reset 在途结果未覆盖；未操作原生桌面。恢复／B08／规则／回放、完整半环／抽屉、双窗口和 What-if 留后续。入口与范围见 [Qt 客户端](frontend/qt/README.md)。
+
+- I15 后续注册交互（2026-11-11）：Qt 注册不再绘制选中外接框；Points 绑定类型成功后自动复用 New mask 进入下一目标，下一点才发分割请求。Assign 重新绑定、失败／落空／过期输入不自动推进，mask／提示点和直播选框保留。Terra 受控槽检查6条主路径，发现的拒绝拖放仍切换选择问题已修复；主实现补充4种接纳／拒绝组合和注册→直播→注册的绘制／mask／点／Trays开关／输入不变局部检查。证据在 outputs/refactor_checks/qt_registration_flow_20261111/local_checks.json；未验证原生拖放、真实模型或完整应用保存，不新增测试文件。
+
+- I15 注册目录精简（2026-11-13）：Qt A／B 每条改为 48 px、最多两行，只显示 classification／名称，移除 Type 编号、详情及 Next；同步清理展示字段和拖放浮层，原 type／配置／计数及点击拖放绑定保留。未运行原生布局检查或回归。
+
+- 播放默认时限已移除（2026-11-11）：Qt／OpenCV 与 MatchSession 默认播到末帧，显式 `--seconds` 继续支持短段运行；启动参数及算法默认门槛已在 frontend/README.md 集中说明。未启动整段视频／模型长跑。
+
+- 启动参数精简（2026-11-11）：Qt／OpenCV 共用选项转换，移除 `--calibration`／`--board-size-in`／`--tray-search`，正式入口固定 adaptive；`--model` 改为 `--segmentor`，原应用 model_id 接口不变。桌面标定／尺寸由界面确认；无窗口／底层实验接口保留。随后按用户批准取消默认追踪限速、删除 CLI／共享运行层 stride；显式 `--inference-fps` 仍可限速，恢复／标定调度及 OpenCV 状态显示兼容无上限，快照／注册记录以空值表示。自定义 tracker checkpoint 保留。CPU受控调度检查确认无上限／2 Hz、最新帧选择及忙碌／重复／已消费／关闭保护；未运行真实模型／GPU或整段长跑，证据在 outputs/refactor_checks/tracking_schedule_20261111/checks.json。
+
+- [ ] I16 **Live 主交互已实现／受控主路径已检查（2026-11-11）**：按 design/ui/unit-radial-console.html 接入 Qt 默认 Select、mask／托盘点选、固定半环 Distance／LOS／Move、跟踪双框／引线、只读 Damage／Speed／条件 Estimated 与底部结果抽屉。真实调用已有 geometry，显示观测时间、不可用原因与采样限制；Move 只预览候选，不改比赛状态。后续统一采用截图中的竖排信息卡／右半环，边缘整体限位或缩放；Distance 改为连线上读数，无结果抽屉，LOS／Move 保留抽屉；最新局部 CPU 离屏检查覆盖双尺寸六位置的统一布局／控件边界和线中点投影／过期隐藏，证据在 outputs/refactor_checks/qt_live_menu_revision_20261111/checks.json。当前新增右侧 A／B mask／facing 关注列表，正常受监测连续追踪不再因非 manual 来源持续告警，移除卡片／视频名的重复标签；Terra 状态组合／双尺寸加载／原ID点选已检查，双栏溢出修复后260／300px局部复查通过；完整Live侧栏显隐仍待检查。OpenCV／Qt 共用查询叠加缓存；隐藏直播中的注册目录控件。工具期间 tick／追踪／历史继续，Reset／清除作废查询；Terra 已集中检查实际 QML 点选／双尺寸、真实距离／有正面 LOS／Move 候选、固定菜单／选框更新、过期叠加、工具／Reset 清理与源推进。左缘遮挡已修正并由主实现定向复查。持续 tracker 输出／历史、所有 Estimated 组合、旧 OpenCV 有效结果绘制及原生交互未完整覆盖，证据在 outputs/refactor_checks/qt_live_terra_20261111。恢复／B08／Replay、资料／地形、观众窗口及 What-if 另行迁移。范围与验收见 [Live 节点](design/ui/live/implementation.md)。
 
 ## 8. 距离、移动范围与基础 LOS
 

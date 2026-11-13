@@ -8,7 +8,7 @@ def create_tracker(name, *, model_id=None, device=None, cache_dir=None):
     cache = Path(cache_dir) if cache_dir is not None else Path(__file__).resolve().parents[2] / "outputs/model_cache"
     if name == "sam3":
         if model_id is not None:
-            raise ValueError("Use --model for SAM3; --tracker-model is for Cutie or EdgeTAM")
+            raise ValueError("Use --segmentor for SAM3; --tracker-model is for Cutie or EdgeTAM")
         return None
     # Expose optional packages before SAM3 imports Transformers and caches their availability.
     dependencies = Path(__file__).resolve().parents[2] / "outputs/tracking_dependencies"

@@ -26,7 +26,13 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。
 
-运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供现有 UI 使用。PySide6／Qt Quick 预览仍独立在 `design/ui/registration`；完整 I14 验收与正式 UI 迁移均未标完成。
+运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供 UI 使用。Qt 已接入真实注册和 Live 单位选择／半环菜单、只读单位信息、Distance 连线读数、LOS／Move 底部查询抽屉及右侧 A／B 不确定单位列表；默认托盘更新为 adaptive，稳定 mask 复用几何，变化时局部拟合并完整回退；Live 主路径已做受控 CPU 离屏检查，真实模型／持续追踪与原生交互仍待验收。注册包含桌角／尺寸、点提示、类型绑定、初始正面、一次保存和连续播放；部分受控接口验收已通过，两页离屏加载已通过，实际界面交互待验收，完整 UI 迁移及 I14 验收仍未完成。使用相同模型环境与独立 Qt 依赖，启动见 [Qt 客户端](frontend/qt/README.md)：
+
+```powershell
+conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
+```
+
+完整直播已下载至 `inputs/Ja5-2RIOBXU_full.mp4`（9:35:57，1080p／60fps，约 5.9 GB；大文件已忽略，来源见 [记录](inputs/Ja5-2RIOBXU_full.source.json)）。上述命令从 01:00:00 的该场第一回合开始，单位较原 02:30:00 片段分散；可修改 `--start` 秒数。省略 `--seconds` 默认播放到视频结尾，短测可显式传入时长。原五分钟片段保留。Qt 注册不画选中外接框，Points 模式赋予类型成功后自动进入下一 mask。
 
 ### 目录
 
@@ -93,7 +99,7 @@ outputs/                     Generated experiment results
 
 算法接口直接从组件导入，例如 `from components.boundary_detection.table import detect_table`；CLI 只处理参数、展示与导出。LSD 配置位于 [config.toml](components/boundary_detection/config.toml)，源线段长度过滤默认关闭，合并后长度过滤默认开启。几何长度配置使用百分比（`5` = 5%）：桌边以图像短边为基准，托盘局部容差以托盘短边为基准；实际尺寸仍用 mm／in。完整用法见各组件 README。
 
-前端默认由 SAM3 完成首帧注册，再将 mask 交给 EdgeTAM 传播（`--tracker edgetam`）；可显式选择 `--tracker sam3`／`--tracker cutie` 作对照，详见 [视频追踪](components/tracking/README.md)。`--tray-search local` 尝试当前观测上的局部托盘更新，失败后完整搜索；`--profile` 导出计时。几何结果持续更新并标注观测时间，资料／地形表单采用非阻塞轮询，B08 不停源；播放页已移除 Hold／HELD。EdgeTAM 自动／手动恢复已接入，what-if 仍待实现，LK 已移除。
+前端默认由 SAM3 完成首帧注册（`--segmentor` 指定其 checkpoint），再将 mask 交给 EdgeTAM 传播（`--tracker edgetam`）；可显式选择 `--tracker sam3`／`--tracker cutie` 作对照，详见 [视频追踪](components/tracking/README.md)。正式客户端固定 adaptive 托盘更新：稳定时复用，变化时先局部、失败再完整搜索；`--profile` 导出计时。几何结果持续更新并标注观测时间，资料／地形表单采用非阻塞轮询，B08 不停源；播放页已移除 Hold／HELD。EdgeTAM 自动／手动恢复已接入，what-if 仍待实现，LK 已移除。
 
 ### 环境
 
@@ -119,7 +125,7 @@ EdgeTAM is the default propagation backend, initialized from the registered SAM3
 
 Use `Import list A` / `Import list B` in the registration sidebar to select each army's PDF or single-army JSON directly. Two independent columns show Type 1, Type 2, etc., with click/drag binding. Instances of types A1/B1 become A1.1/B1.1; no catalog parameter is required. The [ABC test data](inputs/units.video_estimate.json) initially occupies List A: Type 1 is approximately 155 x 50 mm and Types 2/3 are 205 x 80 mm; List B awaits import. After locking the corners, confirm the `Length (in)` / `Width (in)` fields, prefilled with 72 / 48. These defaults are test assumptions, not verified measurements. External calibration and the standalone `tools.read_unit_list` converter remain available. The camera is assumed fixed between calibrations.
 
-Use `--board-size-in WIDTH DEPTH` to prefill different inch dimensions, or `--calibration PATH` to prefill the dimensions of an existing metric calibration; the two options are mutually exclusive. F marks the initial front edge, E edits unit rule information and manual states, and G annotates terrain. D/L/V/J query distance/LOS/ordinary movement/Double; Q clears the query. Results are based on registered geometry, not full match adjudication. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
+Confirm table corners and physical dimensions in the setup view; dimensions are initially prefilled as 72 by 48 inches. F marks the initial front edge, E edits unit rule information and manual states, and G annotates terrain. D/L/V/J query distance/LOS/ordinary movement/Double; Q clears the query. Results are based on registered geometry, not full match adjudication. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
 
 The directory tree and independent tool list above describe the current ownership. The window owns a VideoApplication, which coordinates workflow controllers and views; MatchSession schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
 

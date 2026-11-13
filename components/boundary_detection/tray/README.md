@@ -4,6 +4,14 @@
 
 ## 最小百分比像素实验
 
+正式 Qt／OpenCV 入口固定 adaptive（2026-11-11 用户后续要求），不再提供 `--tray-search`，单图 CLI 的 `fit_tray` 算法不变。`fit_registered_trays(frame, prediction, context, previous=..., reuse_stable=True, source_frame=...)` 从上一已接纳矩形的小型描述判断稳定性：质心相对上次实际拟合位移 ≤短边 2%、面积变化 ≤10%、32×32 归一化轮廓 IoU ≥0.90、可靠主轴变化 ≤3°。近方形主轴不作为独立判据。全部通过返回 `method=stable_reuse`，保留原拟合帧、方法与基准；否则先局部搜索再走已有完整回退。基准不随噪音更新，慢移可累计触发；阈值均为试验配置。
+
+只复用同图像大小／映射／尺寸、身份仍有效的已接纳上一解；首帧编辑、恢复目标、R、实际缺失或标定变化不能用旧矩形。无上一成功拟合或持续不合格的 mask 仍需要拟合，不缓存一个假矩形。完整 mask 不另存，仅保存面积／矩和 128 字节压缩轮廓（以 hex 存储）；当前结果／profile 区分 `fit_sample.frame_index`、`observation_frame_index` 与 reuse_check。历史仍记录接纳时间及滤波后的几何，不把每条观测解释为一次新拟合，不改变历史 schema。
+
+无窗口应用的 `tray_search="full"` 保留完整拟合基线，`"local"` 每次尝试上一解局部拟合，均保留完整回退；正式客户端不暴露这些对照选项。计时 stats 给 reused／refitted／unavailable 数量；静态计时或门控通过不表示定位精度已经校准。
+
+2026-11-11 受控 CPU 检查覆盖稳定复用、慢移累计、10° 转动／面积变化、空 mask、尺寸／映射／图像大小变更及近方形方向退化。320×240 合成静态样例 full 约 194 ms，稳定 adaptive 均值约 0.184 ms；不计模型／动态遮挡，不能当作整场性能收益。局部失败完整回退、取消／迟到结果、R／恢复目标与连续历史的会话级交叉情况尚未完整检查，证据在 `outputs/refactor_checks/qt_uncertainty_adaptive_terra_20261111`。
+
 ```powershell
 # 复用已有 SAM3 点分割组件生成一个 mask，随后运行局部 boundary 搜索。
 conda run --no-capture-output -n sam3-demo python -m tools.tray_detector inputs/test5.png --point 530 555 --size-pct 17.02 6.38 --show
@@ -60,7 +68,7 @@ JSON 必须包含 `image_to_board` 和 `board_size`。相机、裁剪和图片�
 5. **mask**：仍不足时，在 mask 质心和包围框中心附近搜索位置和角度。单边与 mask 分支再做局部逐级细化。
 6. 每级按分数排序；通过该级覆盖／边缘门槛后停止回退。`--mode corner|edge|mask` 可强制检查某一级，`--mode auto` 为默认策略。
 
-视频实验可用 `python -m frontend ... --tray-search local`：以上次成功四角在当前工作视图初始化，先尝试沿两轴 ±2×`corner_nudge_pct` 的平移及 ±2° 旋转，共 27 个候选；仍按当前 mask 覆盖和当前原始 LSD 边缘评分，通过直角分支门槛才接受。成功时跳过短线合并和全量角点组合；失败才执行完整流程。`--tray-search full` 是默认对照。标定、尺寸、对象集合发生变化或重置后不沿用旧初值；没有成功候选的对象下一次也重新完整搜索。这是当前观测上的局部更新，不是缓存旧矩形冒充新测量。
+无窗口对照可传 `tray_search="local"`：以上次成功四角在当前工作视图初始化，先尝试沿两轴 ±2×`corner_nudge_pct` 的平移及 ±2° 旋转，共 27 个候选；仍按当前 mask 覆盖和当前原始 LSD 边缘评分，通过直角分支门槛才接受。成功时跳过短线合并和全量角点组合；失败才执行完整流程。`tray_search="full"` 保留全量对照。标定、尺寸变化或重置后不沿用不兼容的旧初值；没有成功候选的对象下一次也重新完整搜索。这是当前观测上的局部更新，不是缓存旧矩形冒充新测量。
 
 矩形宽深固定。旋转角对矩形只定义到 180°，正方形还存在 90° 对称；它不代表已识别单位正面方向。
 

@@ -28,7 +28,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 每次仍先确认桌角／尺寸，再注册和绑定。所选候选模型在启动准备期间加载；首次播放先把最终 SAM3 masks 交给候选初始化，完成后才启动视频时钟，避免冷启动消耗整个短片区间。S 只完成保存，首次播放再初始化传播后端。R 清空本局会话，保留已加载权重；不自动编辑播放中的历史提示。
 
-`--model` 指定注册用 SAM3；`--tracker-model` 覆盖候选 checkpoint，`--tracker-cache` 指定模型缓存根目录。`--inference-fps` 只是更新上限，实际速度依设备、对象数和输入尺寸而变；没有积累无界视频帧或使用未来帧。暂停显示／查询不暂停输入和追踪，Clear query／Return live 回到最新画面。
+`--segmentor` 指定注册用 SAM3 checkpoint；`--tracker` 选择传播后端，`--tracker-model` 覆盖该后端 checkpoint，`--tracker-cache` 指定模型缓存根目录。默认不额外限制调度频率，worker 空闲后处理最新未消费源帧；可显式 `--inference-fps` 限速，`--stride` 已移除。实际速度依设备、对象数和输入尺寸而变；串行任务与重复／已消费帧保护保留，没有积累无界视频帧或使用未来帧。暂停显示／查询不暂停输入和追踪，Clear query／Return live 回到最新画面。
 
 ## 官方接口及实现选择
 

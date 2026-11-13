@@ -65,8 +65,9 @@ class RegistrationView:
         model_status = "ready" if session.startup_ready else ("preparing" if session.model_loaded else "loading")
         if session.model_failed:
             model_status = "error"
+        rate = f"max {session.inference_fps:g} Hz" if session.inference_fps is not None else "uncapped"
         clock = (f"Clip {session.source_ref.frame_index/session.fps:.2f}s | model {model_status} | display {fps:.1f}/{session.fps:g} fps"
-                 f" | SAM max {session.inference_fps:g} Hz | mask age {lag} | object {self.registration.active_id}")
+                 f" | Tracking {rate} | mask age {lag} | object {self.registration.active_id}")
         cv2.putText(panel, clock, (10, y + 96), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (230, 230, 230), 1)
         limit = max(20, self.preview_size[0] // 8)
         for row, text in enumerate((session.note[:limit], session.note[limit:limit * 2])):

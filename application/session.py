@@ -13,15 +13,13 @@ from .automatic_recovery import AutomaticRecovery
 from .task_worker import TaskWorker
 
 class MatchSession:
-    def __init__(self, video, data, *, model_id="facebook/sam3", device=None, start=0, seconds=10,
-                 inference_fps=2, stride=None, output_dir=None,
-                 profile=False, tray_search="full", tracker=config.DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
-        if seconds <= 0 or not np.isfinite(seconds):
+    def __init__(self, video, data, *, model_id="facebook/sam3", device=None, start=0, seconds=None,
+                 inference_fps=None, output_dir=None,
+                 profile=False, tray_search=config.DEFAULT_TRAY_SEARCH, tracker=config.DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
+        if seconds is not None and (seconds <= 0 or not np.isfinite(seconds)):
             raise ValueError("seconds must be positive")
-        if inference_fps <= 0 or not np.isfinite(inference_fps):
+        if inference_fps is not None and (inference_fps <= 0 or not np.isfinite(inference_fps)):
             raise ValueError("inference-fps must be positive")
-        if stride is not None and stride < 1:
-            raise ValueError("stride must be positive")
         self.disappearance_seconds = validate_disappearance_seconds(config.TRACKING_DISAPPEARANCE_SECONDS)
         self.data = data
         self.data.motion_recorder = MotionRecorder(position_tolerance_mm=config.MOTION_POSITION_TOLERANCE_MM,
@@ -43,8 +41,10 @@ class MatchSession:
         self.registration_start_frame = self.source.frame_index
         self.data.board.source_size = self.data.current.frame.shape[1::-1]
         self.start = start
-        self.end_index = min(self.source.frame_count - 1, int((start + seconds) * self.source.fps) - 1)
-        self.inference_fps = self.source.fps / stride if stride is not None else inference_fps
+        self.end_index = self.source.frame_count - 1
+        if seconds is not None:
+            self.end_index = min(self.end_index, int((start + seconds) * self.source.fps) - 1)
+        self.inference_fps = inference_fps
         self.output_dir = (Path(output_dir) if output_dir is not None else
                            config.PROJECT_ROOT / "outputs/sam3_registration")
         self.load_progress = None
@@ -71,6 +71,10 @@ class MatchSession:
     @property
     def registration_locked(self):
         return self.data.reference_folder is not None
+
+    @property
+    def inference_interval(self):
+        return 0.0 if self.inference_fps is None else 1 / self.inference_fps
 
     def _history_stores(self):
         current = [self.data.history_store] if self.data.history_store is not None else []
@@ -216,7 +220,7 @@ class MatchSession:
             self.worker.submit(kind, **values)
             if kind == "propagate":
                 self.last_submitted_frame = values["metadata"]["frame_index"]
-                self.next_inference_time = now + 1 / self.inference_fps
+                self.next_inference_time = now + self.inference_interval
         elif (request := registration.take_pending_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values, generation=self.generation, raw_frame=self.source.frame)
@@ -228,7 +232,8 @@ class MatchSession:
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
         elif self.pending_play and not self.worker.tracker_initialized and not self.model_failed:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
-                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
+                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
+                               previous_trays=self.data.current.prediction.get("trays", {}))
         elif calibration._context is None and (request := self.automatic_recovery.take_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values)
@@ -241,9 +246,10 @@ class MatchSession:
                 return
             candidate = self.recovery.for_propagation() if self.recovery is not None else None
             self.worker.submit("propagate", **values, recovery_candidate=candidate,
-                               automatic_candidates=self.automatic_recovery.candidates())
+                               automatic_candidates=self.automatic_recovery.candidates(),
+                               previous_trays=self.data.current.prediction.get("trays", {}))
             self.last_submitted_frame = values["metadata"]["frame_index"]
-            self.next_inference_time = now + 1 / self.inference_fps
+            self.next_inference_time = now + self.inference_interval
         elif self.recovery is not None and not self.playing:
             candidate = self.recovery.for_propagation()
             if candidate is not None and self.source.frame_index > candidate.backend.source_frame:
@@ -276,7 +282,7 @@ class MatchSession:
             if error is not None:
                 self.data.fail_recovery(object_id, self.source.metadata(), method=method)
             self.last_submitted_frame = max(self.last_submitted_frame, self.worker.tracker.source_frame)
-            self.next_inference_time = perf_counter() + 1 / self.inference_fps
+            self.next_inference_time = perf_counter() + self.inference_interval
         self.recovery.accept(request, prediction, error)
         self.mark_changed()
 
@@ -354,17 +360,20 @@ class MatchSession:
                             source=self.source.metadata())
                     if request["kind"] == "click":
                         self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
-                        self.next_inference_time = now + 1 / self.inference_fps
+                        self.next_inference_time = now + self.inference_interval
                     elif request["kind"] == "replace":
                         self.last_submitted_frame = request["metadata"]["frame_index"]
-                        self.next_inference_time = now + 1 / self.inference_fps
+                        self.next_inference_time = now + self.inference_interval
                     elif request["kind"] == "start_tracker":
                         self.start_stream(now)
                     self.mark_changed()
                     times = prediction.get("timings_seconds", {})
+                    tray_counts = prediction.get("tray_fit_stats", {})
+                    tray_detail = (f" (reuse {tray_counts['reused']}, refit {tray_counts['refitted']})"
+                                   if tray_counts else "")
                     self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
                                  f"{prediction.get('tracking_backend', 'model')} operation {times.get('worker_operation', 0):.2f}s | "
-                                 f"tray {times.get('tray_fit', 0):.2f}s. Latest result held between updates.")
+                                 f"tray {times.get('tray_fit', 0):.2f}s{tray_detail}. Latest result held between updates.")
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
                     self.note = "Point undone. No objects remain; click to register again."

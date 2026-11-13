@@ -2,6 +2,8 @@
 
 `MatchApplication` 拥有一份 GameData、一个源时钟与一个串行模型 worker。构造时即加载模型；`tick(now=None)` 接纳结果、推进源并调度，不等待模型 Future。`snapshot()` 返回冻结元数据和共享只读图像／mask，当前源帧与已接纳观测各有 FrameRef。反复读取同一 revision 不复制图像、不写历史。
 
+默认 `seconds=None` 播放到视频结尾，`inference_fps=None` 表示 worker 空闲时处理最新未消费帧，不施加额外频率上限；显式正数可限定时长或调度频率。stride 参数已删除。快照的 `inference_fps` 与注册记录的 `inference_fps_limit` 无上限时对应 None／JSON null，串行、帧对齐和代次保护保持。
+
 ```python
 from application.app import MatchApplication
 

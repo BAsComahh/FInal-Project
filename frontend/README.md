@@ -1,20 +1,46 @@
 # 桌面视频界面
 
-首帧先检测并确认桌面边界，再确认桌面长宽，用 Homography 拉正并聚焦战场，进入单位注册与传播流程。窗口显示和交互放在 `frontend/`，模型及算法留在 `components/`。界面文案使用英文，沿用现有 OpenCV 窗口，不增加 UI 框架依赖。
+首帧先检测并确认桌面边界，再确认桌面长宽，用 Homography 拉正并聚焦战场，进入单位注册与传播流程。窗口显示和交互放在 `frontend/`，运行／业务流程归 `application/`，模型及算法留在 `components/`。界面文案使用英文。现有完整客户端使用 OpenCV；新 [Qt 客户端](qt/README.md) 已接入真实注册、Live 单位菜单／只读信息和底部几何查询，Live 受控主路径已检查，真实模型与原生交互待验收；其余工具仍从 OpenCV 入口使用。
 
 ```powershell
 conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
 ```
 
-视频路径为必填；起点默认 0 秒，区间默认 10 秒。无需传军表参数，注册界面通过 `Import list A`／`Import list B` 分别选择单方 PDF 或 JSON。默认 [ABC 测试资料](../inputs/units.video_estimate.json) 放在 A 栏：Type 1 为 155 × 50 mm，Type 2／3 为 205 × 80 mm；B 栏等待导入。这些值来自假定桌面尺寸的近似换算。独立 [read_unit_list](../components/registration/README.md#pdf-军表-reader) 工具及原命令行入口仍可使用。
+视频路径为必填；起点默认 0 秒，省略 `--seconds` 播放到片尾，显式传正的有限秒数才限定区间。无需传军表参数，注册界面通过 `Import list A`／`Import list B` 分别选择单方 PDF 或 JSON。默认 [ABC 测试资料](../inputs/units.video_estimate.json) 放在 A 栏：Type 1 为 155 × 50 mm，Type 2／3 为 205 × 80 mm；B 栏等待导入。这些值来自假定桌面尺寸的近似换算。独立 [read_unit_list](../components/registration/README.md#pdf-军表-reader) 工具及原命令行入口仍可使用。
 
-## UI 重构设计（D33，尚未接入）
+## 启动参数默认值
 
-前置的应用核心解耦已按 D35／I14 写入 [前端解耦重构计划](../前端解耦重构计划.md)：先迁出 runtime 与业务流程、保留现有界面为首个调用方，以无窗口运行和现有流程回归验收，再接新版 UI。下文仍描述当前路径；`application/` 和展示模型是待实施结构，不是已迁移模块。计划同时要求删重复状态、无用转发和多余防御，保留异步身份／帧及历史保护。
+Qt 与 OpenCV 共用 `frontend/arguments.py`，未传参数时的有效设置如下；手动指定的命令行值覆盖对应默认值。
 
-2026-11-10 确认先设计、再实施／重构：操作者控制台沿用现有流程和视频为主结构，但重做交互；新增独立观众窗口，自动跟随控制台 Live／Replay／What-if 模式。当前仍是下文描述的单个 OpenCV 主窗，双窗口和 What-if 没有因交互草图而成为现成功能。设计方案、待评审边界与实施状态分别见根目录《项目思路》《待澄清列表》及 TODO I13。
+| 参数 | 默认值／行为 |
+| --- | --- |
+| `video` | 必填，无默认视频 |
+| `--start` | 0 秒，选作注册首帧 |
+| `--seconds` | 不限时，播放到视频末帧 |
+| `--units` | `inputs/units.video_estimate.json`，ABC 测试目录；可由 A／B 导入替换 |
+| `--inference-fps` | 不额外限速；指定正数时才限制调度频率，源视频保持自身时钟／帧率 |
+| `--preview-width` | 960 像素的初始画面宽度，提示仍用完整拉正帧坐标 |
+| `--device` | 自动选显存最多的可用 GPU，无可用 GPU 时 CPU |
+| `--segmentor` | `facebook/sam3`，初始分割模型 checkpoint |
+| `--tracker` | `edgetam`，可选 `sam3`／`cutie` |
+| `--tracker-model` | 使用所选后端默认模型；EdgeTAM 为 `yonigozlan/EdgeTAM-hf` |
+| `--tracker-cache` | `outputs/model_cache` |
+| `--profile` | 关闭额外 GPU 同步计时 |
+| `--output-dir` | `outputs/sam3_registration` |
 
-后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；当前程序尚未据此重构，新版仅为已检查的样例原型。
+正式客户端不再提供 `--calibration`／`--board-size-in`，桌角和物理尺寸在界面确认（尺寸仍预填 72×48 英寸）。托盘搜索固定 adaptive：稳定时复用矩形，变化时局部拟合，失败完整回退。默认不额外限制追踪调度，worker 空闲时处理最新未消费源帧；只有显式 `--inference-fps` 才设置上限，`--stride` 已移除。串行执行和重复／已消费帧保护继续生效。`--tracker` 选择后端，`--tracker-model` 仅覆盖该后端权重。
+
+算法试运行门槛另在 `application/config.py`：持续缺失 10 秒；EdgeTAM 单次自动恢复启用，相似度 0.85／分差 0.10；DVMNet facing 启用，候选角误差分差 20°。稳定托盘复用门槛为质心移动 2%／面积变化 10%／轮廓 IoU 0.90／可靠长轴 3°；动作记录为位置容差 10 mm／角度容差 10°／停稳 5 秒。这些与播放时限独立，属于现有试运行设置，不是精度校准结果。
+
+## UI 重构设计与 Qt 接入（D33／D34）
+
+最新 Qt 修订统一采用 [竖排信息卡／右半环参考](../design/ui/live/unit-info-reference.png)，边缘通过整体限位／缩放保持格式。Distance 数值直接标在测量连线上，不展开结果抽屉；LOS／Move 仍用抽屉，Distance 提示及完成操作留在控制栏。
+
+前置的应用核心解耦已按 D35／I14 迁出主体，以 `292dc30` 保存阶段 checkpoint；完整验收仍开放，见 [前端解耦重构计划](../前端解耦重构计划.md)。现有 OpenCV 和新 Qt 客户端都通过 application 命令及快照工作。Qt 已接入注册及 Live 主交互；下文的恢复／回放及完整规则表单等操作仍描述 OpenCV 完整客户端。
+
+2026-11-10 确认先设计、再实施／重构：操作者控制台沿用现有流程和视频为主结构，但重做交互；新增独立观众窗口，自动跟随控制台 Live／Replay／What-if 模式。Qt 当前为一个操作者主窗，完整旧流程另有 OpenCV 入口；双窗口和 What-if 没有因交互草图而成为现成功能。设计方案、待评审边界与实施状态分别见根目录《项目思路》《待澄清列表》及 TODO I13。
+
+后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；该版 Live 主交互现已接入 Qt，并完成受控主路径检查，其他模式及辅助流程继续另行迁移。
 
 参考文件随仓库存档：以 [单位半环／底部抽屉](../design/ui/unit-radial-console.html) 为当前设计基线，[早期双布局比较](../design/ui/match-console-wireframes.html) 仅供查看取舍。两者是样例内联 HTML，详细适用范围见重构计划第 1.1 节。
 
@@ -39,7 +65,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 - 检测失败：直接进入手动模式；重复点、共线点或不能形成凸四边形的四点不能确认。
 - 手动模式提供 `Undo` 和 `Clear` 按钮；也可用右键、`Ctrl+Z`／`U` 撤回，`R` 清空。四点齐全后仍可撤回；`A` 重新自动检测，`Esc` 退出。
 
-尺寸页显示 `Length (in)` 和 `Width (in)` 两个输入栏，默认 72、48，分别对应 TL→TR 的横向长度和 TL→BL 的纵向宽度。点击输入栏或按 Tab 切换，输入数字会替换被选中的默认值，支持小数、退格、Ctrl+A 和 Enter；空值、零和非有限值不能继续。`Back to corners [B]` 返回四角检查，手动标记的 Undo 仍可用。`--board-size-in` 可预填其他英寸尺寸，外部 `--calibration` 则使用其毫米宽深换算后预填；两参数不能同时使用。
+尺寸页显示 `Length (in)` 和 `Width (in)` 两个输入栏，默认 72、48，分别对应 TL→TR 的横向长度和 TL→BL 的纵向宽度。点击输入栏或按 Tab 切换，输入数字会替换被选中的默认值，支持小数、退格、Ctrl+A 和 Enter；空值、零和非有限值不能继续。`Back to corners [B]` 返回四角检查，手动标记的 Undo 仍可用。尺寸在此界面确认，不再通过启动参数预填标定或尺寸。
 
 确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册显示、SAM 输入、mask 和 reference 裁剪使用拉正图像坐标；托盘、地形及正面另保存原视频像素锚点，毫米和显示坐标为带标定版本的派生值；每一版标定期间沿用同一变换和尺寸，镜头变化后需显式重新标定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
 
@@ -59,11 +85,11 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 点击注册侧栏的 `Tray dimensions (mm)`，在独立窗口中批量填写尺寸：List A／List B 各一列，每个 type 显示编号、兵种／编制，以及 `Width (mm)`／`Depth (mm)`。宽指正面边长，深指前后长度；同 type 的实例共用尺寸。已有尺寸预填，两列分别滚动；两格都空表示未知，只填一格、非正数或非有限数会阻止保存。
 
-`Save` 整表验证后更新内存目录，已有 mask 自动重新拟合；修改尺寸的实例需要再次用 F 标记正面。`Cancel`、Esc 或关闭窗口保留原值。模型准备期间也可填写；S／首次播放后锁定尺寸编辑，最终尺寸随单位目录和 reference 保存，R 保留编辑后的目录。原始 PDF／JSON 不被覆盖，重新导入某方仍以新目录为准，不自动套用旧手填尺寸。当前没有自动尺寸建议，也不把 ABC 估算值套给真实兵种。缺少已绑定单位尺寸时，TRAY 仍提示 `NO SIZES`。
+`Save` 整表验证后更新内存目录，已有 mask 自动重新拟合；修改尺寸的实例需要再次用 F 标记正面。`Cancel`、Esc 或关闭窗口保留原值。模型准备期间也可填写；S／首次播放后锁定尺寸编辑，最终尺寸随单位目录和 reference 保存，R 保留编辑后的目录。原始 PDF／JSON 不被覆盖，重新导入某方仍以新目录为准，不自动套用旧手填尺寸。PDF 导入已按官方 FAQ v0.1 的类别＋编制表自动填入标准尺寸，明确毫米底座备注优先；未知／冲突仍为空并提示，不套用 ABC 估算值。尺寸窗口可人工覆盖，导入原值与依据另存 `dimension_inference`；旧 JSON 需重新导入原 PDF 才取得映射。缺少已绑定单位尺寸时，TRAY 仍提示 `NO SIZES`。
 
 红绿提示点只显示当前对象；按 N 或选择另一个对象时，上一对象的标记隐藏，点提示数据仍保留。右侧不再提供上一／下一 mask 按钮，注册时仍可点击 mask、使用数字键或 `[`／`]` 选择目标。
 
-视频按源帧率播放；`--inference-fps 2` 控制后台更新频率。每个视频帧先应用固定 Homography，再用于显示或 SAM 推理。模型忙时显示上一份结果，图层可能落后于当前视频；调试文字仅在注册布局中显示。
+视频按源帧率播放；默认 worker 空闲时处理最新未消费帧，可显式用 `--inference-fps 2` 将提交频率限制为每秒最多两次。每个视频帧先应用固定 Homography，再用于显示或 SAM 推理。模型忙时显示上一份结果，图层可能落后于当前视频；调试文字仅在注册布局中显示，无上限状态显示为 uncapped。
 
 ## 显示图层
 
@@ -75,7 +101,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 矩形层使用现有 `fit_tray`，需要类型表中的 `dimension.width_mm/depth_mm` 和属于同一视频视角、以毫米输入的桌面标定：
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend inputs/你的录像.mp4 --units inputs/你的类型表.json --calibration outputs/homography/对应标定.json --seconds 30
+conda run --no-capture-output -n sam3-demo python -m frontend inputs/你的录像.mp4 --units inputs/你的类型表.json --seconds 30
 ```
 
 标定需要 `image_to_board` 和 `board_size`，格式来自已有 Homography 工具。也可在完成注册前点击右侧 `Load tray calibration [C]` 或按 C，选择对应视频视角的毫米标定 JSON；已有 mask 和尺寸时会在后台补算矩形。只有像素拉正矩阵、未提供实际桌面尺寸的标定不能用于毫米托盘拟合。
@@ -269,10 +295,10 @@ EdgeTAM 失败实例先进入内部 Missing；`recovery_phase=queued/searching` 
 
 当前采用 `KoW4 mini` 规则子集，提供托盘最近距离、基础 LOS 和普通移动／At the Double。冲锋、完整射击判断和自动战斗结算未加入；EdgeTAM 单次自动 ID 恢复已接入，见上文。规则来源与限制见 [game_rules](../components/game_rules/README.md)，需求核对见 [审计记录](../docs/Game%20information%20requirements%20audit.md)。
 
-先确认物理比例。程序会在锁定桌角后显示默认 72 × 48 inches，供确认或修改；也可用参数预填其他尺寸，不要与 `--calibration` 同时使用：
+先确认物理比例。程序会在锁定桌角后显示默认 72 × 48 inches，在界面确认或修改：
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --board-size-in 72 48 --seconds 30
+conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
 ```
 
 完成尺寸确认后建立毫米平面和对应宽高比；也可继续载入原视频的有效毫米标定。没有有效托盘或缺少必要规则输入时工具返回 `Unavailable`。
@@ -340,7 +366,7 @@ python -m tools.setup_facing --reuse-experiment outputs/dvmnet_experiment/202611
 资源、官方固定源码及依赖位于忽略缓存，权重校验和安全加载由组件执行，不复制进受版本管理代码。外部许可边界、实测和未验证范围见根目录《项目思路》2026-11-10 接入节。
 ## 追踪优化实验选项
 
-默认 `--tray-search full` 保留全量托盘搜索；`--tray-search local` 先以上次成功姿态在当前 mask 和 LSD 上局部更新，失败才完整搜索。更换类型尺寸／标定或 R 重置会清除旧初值。界面分别显示 SAM 操作与托盘耗时。
+正式客户端固定 adaptive：质心／形状稳定时复用上一接纳矩形，变化后先局部拟合，失败才完整搜索。更换类型尺寸／标定或 R 重置不复用不兼容的旧解。底层 full／local 接口保留作无窗口对照，不再提供客户端 `--tray-search` 参数。界面分别显示 SAM 操作与托盘耗时。
 
 `--profile` 开启 SAM3 GPU 分段同步并导出任务计时到终端给出的 `outputs/tracking_comparison/sam_.../`；额外同步可能影响速度，和正常模式分开比较。候选后端记录包含后处理／回传的操作总时延，不伪造细分 GPU 时间。
 

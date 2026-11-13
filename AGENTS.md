@@ -74,6 +74,27 @@ checkpoint and starting the Qt main-window/real-registration milestone.
 Do not push or add test files. Keep later UI workflows outside this milestone.
 The headless boundary now lives in application/app.py; frontend is its existing
 client. Keep I14 open until its remaining acceptance checks are complete.
+The Qt registration/basic-live client now lives in frontend/qt and uses the
+same public application boundary. Keep the independent design preview intact.
+The later 2026-11-11 instruction starts the Live console milestone: follow
+design/ui/unit-radial-console.html for selection, fixed unit menus, read-only
+unit information and the bottom query drawer. Keep source playback running
+and use existing application geometry commands. Other operator workflows,
+the audience window and What-if remain separate work.
+The latest UI revision uses design/ui/live/unit-info-reference.png uniformly:
+vertical information card on the left and semicircle menu on the right, with
+whole-group bounds/scaling instead of alternate compact layouts. Distance
+values belong on the current measurement line; Distance has no result drawer.
+The later uncertainty UI decision moves mask/facing notices to a right-side
+A/B list, separate from the unit card and video labels. Facing review lists
+only suspicious, pending, failed or unknown items; ordinary recovery phase
+tracking is not a persistent alert merely because its source is inferred.
+Keep backend provenance/history/rule warnings and recovery thresholds intact.
+The later tray optimization is authorized: gate stable masks using centroid
+motion plus cheap shape/axis checks, reuse accepted geometry for noise, then
+try local fitting before full fallback when refitting is required. Keep the
+baseline at the last actual fit so slow motion accumulates. Never reuse across
+identity/calibration/size changes, reset, missing masks or recovery targets.
 
 The 2026-11-11 D36 follow-up separately authorized a minimal registration-only
 Qt preview and accepted its feasibility. Keep it isolated in
@@ -211,8 +232,13 @@ The user authorized assistant-run module and practical video checks on
 2026-11-02. The later 2026-11-11 instruction limits the default cadence:
 do not proactively run regressions or tests during implementation. Complete
 an agreed implementation milestone first, then batch its acceptance work to
-GPT-6.1 Terra with medium reasoning and an independent context. Give it
-acceptance criteria, public entry points and necessary project constraints,
+GPT-6.1 Terra with medium reasoning and an independent context. Under the
+latest 2026-11-11 follow-up, the main agent directly handles small targeted
+reproductions, startup failures and local fix checks using its existing
+context; do not delegate these by default. This supersedes the earlier
+Terra-low preference for small checks and does not expand proactive testing.
+For delegated milestone acceptance, give Terra acceptance criteria, public
+entry points and necessary project constraints,
 without implementation explanations or suspected fault locations. It reports
 reproduced failures with steps/evidence and concise coverage counts; the main
 agent independently locates and fixes code. Do not start per-edit retesting

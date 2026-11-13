@@ -5,6 +5,12 @@ from pathlib import Path
 # Source-video seconds of consecutive missing-mask observations before failure.
 TRACKING_DISAPPEARANCE_SECONDS = 10.0
 DEFAULT_TRACKER = "edgetam"
+DEFAULT_TRAY_SEARCH = "adaptive"
+# Trial mask-stability gates, relative to the last actual rectangle fit.
+TRAY_STABLE_CENTROID_PCT = 2.0
+TRAY_STABLE_MAX_AREA_CHANGE = 0.10
+TRAY_STABLE_MIN_SHAPE_IOU = 0.90
+TRAY_STABLE_MAX_AXIS_DEG = 3.0
 
 # User-selected experimental retrieval thresholds, not calibrated probabilities.
 AUTO_RECOVERY_ENABLED = True  # EdgeTAM only; other trackers keep their failure display.

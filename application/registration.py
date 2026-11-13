@@ -84,6 +84,11 @@ class Registration:
         self._session.mark_changed()
         count = sum(row.get("list_id") == list_id for row in roster.types.values())
         self._session.note = f"Imported list {list_id}: {count} types."
+        if path.suffix.lower() == ".pdf":
+            sized = sum("dimension" in row for row in payload["unit_types"])
+            self._session.note += f" Tray sizes filled: {sized}/{count}; check unit-specific base sizes."
+            if sized < count:
+                self._session.note += f" {count - sized} sizes unavailable; check the unit profiles or import a catalog with explicit sizes."
         if cleared:
             self._session.note += f" Reassign {len(cleared)} masks from the replaced list."
         return CommandReceipt("accepted", value=True)

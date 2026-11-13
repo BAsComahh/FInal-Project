@@ -36,11 +36,13 @@ def main(argv=None):
         for source in catalog["sources"]:
             totals = source["totals"]
             print(f"{Path(source['pdf']).name}: {totals['units']} units / {totals['points']} points / US {totals['unit_strength']} (verified)")
-        print("Type Qty  Sp  Ht   Pts  Unit / formation / purchased options")
+        print("Type Qty  Sp  Ht   Pts  Tray mm     Unit / formation / purchased options")
         for record in catalog["unit_types"]:
             attributes = record["attributes"]
+            size = record.get("dimension")
+            footprint = f"{size['width_mm']:g}x{size['depth_mm']:g}" if size else "unknown"
             print(f"{record['type_id']:<4} {record['listed_count']:>3} {attributes['speed_in']:>3g} {attributes['height']:>3} "
-                  f"{attributes['points']:>5}  {record['name']}")
+                  f"{attributes['points']:>5}  {footprint:<11} {record['name']}")
         print(f"Saved: {args.output.resolve()}")
         for warning in catalog["warnings"]:
             print(f"Note: {warning}")

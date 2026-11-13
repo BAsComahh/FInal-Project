@@ -122,7 +122,7 @@ class Calibration:
                                            metadata=self._session.frame_metadata(), generation=self._session.generation,
                                            raw_frame=self._session.source.frame)
                 self._session.last_submitted_frame = self._session.source.frame_index
-                self._session.next_inference_time = perf_counter() + 1 / self._session.inference_fps
+                self._session.next_inference_time = perf_counter() + self._session.inference_interval
                 return True
             return False
         corners, boundary, size = context["pending"]
@@ -178,7 +178,7 @@ class Calibration:
         self._data.record_calibration(request["metadata"])
         self._data.calibrations[-1]["unseeded_units"] = draft["unseeded_units"]
         self._session.last_submitted_frame = request["metadata"]["frame_index"]
-        self._session.next_inference_time = perf_counter() + 1 / self._session.inference_fps
+        self._session.next_inference_time = perf_counter() + self._session.inference_interval
         self._session.pending_trays = False
         self._session.generation += 1
         self._context = None

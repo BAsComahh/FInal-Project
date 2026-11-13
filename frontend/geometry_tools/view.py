@@ -1,15 +1,15 @@
 """Query controls, selected trays and cached measurement/range overlays."""
 import cv2
 import numpy as np
-from components.homography import transform_points
 from ..shared.drawing import draw_text
+from ..shared.layers import QueryLayers
 
 class GeometryView:
     def __init__(self, geometry, queries, editor, scene_view):
         self.geometry, self.editor, self.scene_view = geometry, editor, scene_view
         self.buttons = []
         self.queries = queries
-        self.overlay = self.overlay_key = None
+        self.query_layers = QueryLayers()
 
     def controls(self, panel, preview_size, y, presentation, source):
         width = preview_size[0]
@@ -57,25 +57,5 @@ class GeometryView:
                     points = np.rint(np.asarray(tray["corners_image"]) * scale).astype(np.int32)
                     cv2.polylines(preview, [points], True, (245, 245, 245), 2, cv2.LINE_AA)
         self.scene_view.draw_inputs(preview, view)
-        if self.queries.result is None or self.queries.result_request is None or self.geometry.mode is None:
-            return
-        if not self.queries.result_current(view):
-            return
-        key = (self.queries.result_request["epoch"], self.queries.result_request["view_revision"], preview.shape)
-        if key != self.overlay_key:
-            self.overlay_key = key
-            self.overlay = np.zeros_like(preview)
-            inverse = np.linalg.inv(self.queries.result_request["image_to_plane"])
-            line = self.queries.result.get("line_mm")
-            if self.geometry.mode == "distance" and "point_a_mm" in self.queries.result:
-                line = [self.queries.result["point_a_mm"], self.queries.result["point_b_mm"]]
-            if line is not None:
-                points = np.rint(transform_points(line, inverse) * scale).astype(int)
-                color = (100, 240, 160) if self.queries.result.get("status") in ("ok", "clear") else (0, 190, 240)
-                cv2.line(self.overlay, tuple(points[0]), tuple(points[1]), color, 2, cv2.LINE_AA)
-            centers = [pose["center_mm"] for pose in self.queries.result.get("poses", [])]
-            if centers:
-                for point in np.rint(transform_points(centers, inverse) * scale).astype(int):
-                    cv2.circle(self.overlay, tuple(point), 2, (230, 160, 60), -1)
-        mask = self.overlay.any(axis=2)
-        preview[mask] = (preview[mask] * .4 + self.overlay[mask] * .6).astype(np.uint8)
+        if self.geometry.mode is not None:
+            self.query_layers.draw(preview, self.queries, view)

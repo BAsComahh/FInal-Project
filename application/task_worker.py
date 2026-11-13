@@ -15,6 +15,7 @@ from .config import DEFAULT_TRACKER, PROJECT_ROOT, AUTO_RECOVERY_ENABLED
 from . import config
 from components.sam3.video import VideoPredictor
 from components.tracking import create_tracker
+from components.boundary_detection.tray.temporal import TrayStability
 
 
 def _point_ids(clicks):
@@ -27,10 +28,12 @@ def _point_ids(clicks):
 class TaskWorker:
     """One in-flight request; playback never waits for its result."""
 
-    def __init__(self, model_id="facebook/sam3", device=None, *, profile=False, tray_search="full",
+    def __init__(self, model_id="facebook/sam3", device=None, *, profile=False, tray_search=config.DEFAULT_TRAY_SEARCH,
                  tracker=DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
-        if tray_search not in ("full", "local"):
-            raise ValueError("tray_search must be full or local")
+        if tray_search not in ("adaptive", "full", "local"):
+            raise ValueError("tray_search must be adaptive, full or local")
+        self.tray_stability = TrayStability(config.TRAY_STABLE_CENTROID_PCT, config.TRAY_STABLE_MAX_AREA_CHANGE,
+                                            config.TRAY_STABLE_MIN_SHAPE_IOU, config.TRAY_STABLE_MAX_AXIS_DEG)
         self.predictor = VideoPredictor(model_id, device, profile=profile)
         self.tracker = create_tracker(tracker, model_id=tracker_model, device=device, cache_dir=tracker_cache)
         self.tracker_name = tracker
@@ -56,8 +59,6 @@ class TaskWorker:
             self.automatic = AutomaticRecoveryEngine(device)
         self.tracker_initialized = self.tracker is None
         self.tray_search = tray_search
-        self.previous_trays = {}
-        self.previous_context = None
         self.timing_dir = None
         if profile:
             self.timing_dir = PROJECT_ROOT / "outputs/tracking_comparison" / f"sam_{uuid4().hex[:12]}"
@@ -65,11 +66,13 @@ class TaskWorker:
             run = {"model": model_id, "tracker": tracker,
                    "tracker_model": self.tracker.model_id if self.tracker is not None else model_id,
                    "requested_device": device, "profile": True, "tray_search": tray_search,
+                   "tray_stability": vars(self.tray_stability),
                    "versions": {name: importlib.metadata.version(name) for name in ("torch", "transformers", "opencv-python")},
                    "model_precision": "float32", "inference_state_device": "cpu"}
             root = PROJECT_ROOT
             run["source_hashes"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
-                "application/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py")}
+                "application/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py",
+                "components/boundary_detection/tray/batch.py", "components/boundary_detection/tray/temporal.py")}
             if self.tracker is not None:
                 name = f"components/tracking/{tracker}.py"
                 run["source_hashes"][name] = hashlib.sha256((root / name).read_bytes()).hexdigest()
@@ -189,8 +192,6 @@ class TaskWorker:
                 self.tracker.reset()
                 self.tracker_initialized = False
             self.prompts.clear()
-            self.previous_trays.clear()
-            self.previous_context = None
             if self.automatic is not None:
                 self.automatic.references.clear()
             self.facing_references.clear()
@@ -292,15 +293,10 @@ class TaskWorker:
                 from components.boundary_detection.tray.batch import fit_registered_trays
 
                 context = request["tray_context"]
-                mapping = context["image_to_plane"]
-                signature = (None if mapping is None else tuple(np.asarray(mapping).ravel()),
-                             tuple(sorted((key, tuple(size)) for key, size in context["sizes"].items())))
-                previous = self.previous_trays if (kind in ("propagate", "recovery_commit", "automatic_recovery") and self.tray_search == "local"
-                                                   and signature == self.previous_context) else None
-                if previous is not None and kind == "recovery_commit":
-                    previous = {obj: tray for obj, tray in previous.items() if obj != request["recovery_object_id"]}
-                if previous is not None and kind == "automatic_recovery":
-                    previous = {obj: tray for obj, tray in previous.items() if obj not in request["automatic_applied"]}
+                previous = (request["previous_trays"] if kind in ("propagate", "start_tracker")
+                            and self.tray_search != "full" else None)
+                fitting = dict(reuse_stable=self.tray_search == "adaptive", stability=self.tray_stability,
+                               source_frame=request["metadata"]["frame_index"])
                 corrected = (request.get("automatic_applied", []) if kind == "automatic_recovery" else
                              [request["recovery_object_id"]] if kind == "recovery_commit" else [])
                 if corrected and request.get("prediction") is not None:
@@ -308,19 +304,19 @@ class TaskWorker:
                     selected = [i for i, obj in enumerate(prediction["object_ids"]) if obj in corrected]
                     target = {"object_ids": [prediction["object_ids"][i] for i in selected],
                               "masks": prediction["masks"][selected]}
-                    trays, errors = fit_registered_trays(request["frame"], target, context)
+                    trays, errors = fit_registered_trays(request["frame"], target, context, **fitting)
                     prediction["trays"] = {**{obj: tray for obj, tray in request["prediction"].get("trays", {}).items()
                                               if obj not in corrected}, **trays}
                     prediction["tray_errors"] = {**{obj: error for obj, error in request["prediction"].get("tray_errors", {}).items()
                                                     if obj not in corrected}, **errors}
                 else:
-                    prediction["trays"], prediction["tray_errors"] = fit_registered_trays(
-                        request["frame"], prediction, context, previous=previous)
-                self.previous_trays = prediction["trays"]
-                self.previous_context = signature
+                    trays, errors = fit_registered_trays(request["frame"], prediction, context, previous=previous, **fitting)
+                    prediction["trays"], prediction["tray_errors"] = trays, errors
+                reused = sum(tray["method"] == "stable_reuse" for tray in trays.values())
+                prediction["tray_fit_stats"] = dict(reused=reused, refitted=len(trays) + len(errors) - reused,
+                                                    unavailable=len(errors))
             else:
-                self.previous_trays.clear()
-                self.previous_context = None
+                prediction["tray_fit_stats"] = {}
             trays_finished = perf_counter()
             references = request.get("facing_references", {})
             if self.facing is not None and references:
@@ -372,10 +368,14 @@ class TaskWorker:
                       "tracker": self.tracker_name, "error": error}
             if prediction is not None:
                 record.update(object_ids=prediction["object_ids"], timings_seconds=prediction.get("timings_seconds", {}),
+                              tray_fit_stats=prediction.get("tray_fit_stats", {}),
                               timing_gpu_synchronized=prediction.get("timing_gpu_synchronized", False),
                               inference_call_count=prediction.get("inference_call_count"),
                               object_score_logits=prediction.get("object_score_logits"),
-                              trays={key: {name: row[name] for name in ("method", "mask_coverage", "edge_support")}
+                              trays={key: {**{name: row[name] for name in ("method", "mask_coverage", "edge_support")},
+                                           "fit_frame_index": row.get("fit_sample", {}).get("frame_index"),
+                                           "fit_method": row.get("fit_method", row["method"]),
+                                           "reuse_check": row.get("reuse_check")}
                                      for key, row in prediction.get("trays", {}).items()})
             if request["kind"] == "automatic_recovery":
                 record.update(automatic_applied=request.get("automatic_applied", []),
@@ -387,7 +387,7 @@ class TaskWorker:
 
     def submit(self, kind, *, frame=None, metadata=None, prompt=None, generation=0, clicks=None, prediction=None,
                tray_context=None, raw_frame=None, calibration_token=None, recovery_candidate=None, recovery_object_id=None,
-               automatic_request=None, automatic_candidates=()):
+               automatic_request=None, automatic_candidates=(), previous_trays=None):
         if self.busy:
             raise RuntimeError("A SAM3 request is already in flight")
         self.request = {"kind": kind, "frame": frame.copy() if frame is not None else None,
@@ -400,6 +400,8 @@ class TaskWorker:
                         "automatic_request": automatic_request, "automatic_candidates": tuple(automatic_candidates),
                         "facing_references": dict(self.facing_references), "facing_excluded": tuple(self.facing_excluded),
                         "facing_fronts": deepcopy(self.facing_fronts), "facing_states": deepcopy(self.facing_states),
+                        "previous_trays": deepcopy({obj: tray for obj, tray in (previous_trays or {}).items()
+                                                    if obj not in self.facing_excluded}),
                         "tray_context": deepcopy(self.tray_context if tray_context is None else tray_context)}
         self.request["submitted_at"] = perf_counter()
         self.future = self.executor.submit(self._recorded_run if self.timing_dir is not None else self._run, self.request)

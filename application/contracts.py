@@ -131,7 +131,7 @@ class MatchSnapshot:
     tracker_initialized: bool
     facing_error: str | None
     load_progress: object
-    inference_fps: float
+    inference_fps: float | None
     history_warning: str | None
     tray_status: str
     note: str

@@ -1,0 +1,2 @@
+# Same optional runtime as the isolated design preview.
+-r ../../design/ui/registration/requirements.txt
