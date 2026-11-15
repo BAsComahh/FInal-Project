@@ -57,12 +57,14 @@ class LiveView:
         state = "LIVE"
         stamp = (view.current.prediction_metadata or {}).get("timestamp_seconds")
         observed = "none" if stamp is None else f"{stamp:.2f}s"
+        geometry_stamp = (view.current.prediction or {}).get("geometry_metadata", {}).get("timestamp_seconds")
+        geometry_time = "none" if geometry_stamp is None else f"{geometry_stamp:.2f}s"
         unavailable = set((view.current.prediction or {}).get("unavailable_ids", ())) | set((view.current.prediction or {}).get("inactive_ids", ()))
         eligible = set(faces) - unavailable
         facing_caption = f" | facing {len(eligible & view.rules.fronts.keys())}/{len(eligible)}" if faces else ""
         live_time = session.source_ref.frame_index / session.fps
         version = session.board.calibration_version
-        caption = (f"{session.tracker_name} | View {state} | live {live_time:.2f}s | masks {observed} | calibration v{version}{facing_caption}"
+        caption = (f"{session.tracker_name} | View {state} | live {live_time:.2f}s | masks {observed} | geometry {geometry_time} | calibration v{version}{facing_caption}"
                    if width >= 640 else f"LIVE {live_time:.1f}s | seen {observed} | v{version}{facing_caption}")
         draw_text(panel, caption, (10, height + 84 + extra_height), size=12)
         self.geometry_view.controls(panel, preview_size, height + 92 + extra_height, view, self.match.snapshot())
@@ -70,7 +72,7 @@ class LiveView:
             status = (session.note if session.model_failed or session.pending_play or recovery_note else
                       "Facing unavailable: " + facing_error if facing_error else
                       facing_note if facing_note else
-                      "Tracking failed: " + ", ".join(missing) + ". Returned masks remain Estimated.")
+                      "Candidates ready for review: " + ", ".join(missing) + ".")
             limit = max(24, width // 7)
             for row in range(2):
                 draw_text(panel, status[row * limit:(row + 1) * limit], (10, height + 238 + extra_height + row * 18),

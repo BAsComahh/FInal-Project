@@ -39,6 +39,8 @@ class CurrentData:
     prediction_frame: object = None
     prediction_metadata: dict | None = None
     view_revision: int = 0
+    geometry_frame: object = None
+    geometry_revision: int = 0
 
 
 @dataclass
@@ -57,6 +59,17 @@ class GameData:
     _history_sequence: int = 0
     _history_latest_time: float = 0.0
 
+    def _source_geometry(self, prediction):
+        if self.board.source_to_plane is None:
+            return prediction
+        inverse = np.linalg.inv(self.board.source_to_plane)
+        trays = {}
+        for obj, tray in prediction.get("trays", {}).items():
+            corners = np.asarray(tray["corners_plane"], dtype=float)
+            trays[obj] = {**tray, "corners_source": transform_points(corners, inverse).tolist(),
+                          "center_source": transform_points(corners.mean(axis=0), inverse).tolist()}
+        return {**prediction, "trays": trays}
+
     def accept_observation(self, prediction, frame, metadata, *, disappearance_seconds=None):
         """Accept a completed result with its matching image and source time."""
         if disappearance_seconds is not None:
@@ -64,23 +77,55 @@ class GameData:
             if previous is not None and (metadata["frame_index"] < previous["frame_index"]
                                          or metadata.get("calibration_version", 0) < previous.get("calibration_version", 0)):
                 return False
-        if self.board.source_to_plane is not None:
-            inverse = np.linalg.inv(self.board.source_to_plane)
-            trays = {}
-            for object_id, tray in prediction.get("trays", {}).items():
-                corners = np.asarray(tray["corners_plane"], dtype=float)
-                trays[object_id] = {**tray, "corners_source": transform_points(corners, inverse).tolist(),
-                                    "center_source": transform_points(corners.mean(axis=0), inverse).tolist()}
-            prediction = {**prediction, "trays": trays}
+        pending = prediction.get("geometry_pending", False)
+        if not pending:
+            prediction = self._source_geometry(prediction)
         if disappearance_seconds is not None:
             prediction = update_tracking(self.tracking, self.units, prediction, metadata, disappearance_seconds)
+        if pending:
+            previous = self.current.prediction or {}
+            prediction = {**prediction, **{key: previous[key] for key in
+                ("trays", "tray_errors", "facing_results", "geometry_metadata") if key in previous}}
+            unavailable = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
+            prediction["trays"] = {obj: tray for obj, tray in prediction.get("trays", {}).items() if obj not in unavailable}
+            for obj in unavailable:
+                self.rules.fronts.pop(obj, None)
+        else:
+            prediction = {**prediction, "geometry_metadata": deepcopy(metadata)}
+            self.current.geometry_frame = frame
+            self.current.geometry_revision += 1
         self.current.prediction = prediction
         self.current.prediction_frame = frame
         self.current.prediction_metadata = metadata
-        self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
-                           calibration_version=metadata.get("calibration_version"),
-                           bindings=self.units.bindings if self.units is not None else None)
+        if not pending:
+            self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
+                               calibration_version=metadata.get("calibration_version"),
+                               bindings=self.units.bindings if self.units is not None else None)
         return True
+
+    def accept_geometry(self, prediction, frame, metadata):
+        """Attach one frame-aligned batch without rewinding the latest masks."""
+        prediction = self._source_geometry(prediction)
+        trays = {}
+        for obj, tray in prediction.get("trays", {}).items():
+            if obj in prediction.get("unavailable_ids", ()) or obj in prediction.get("inactive_ids", ()):
+                continue
+            trays[obj] = tray
+            state = self.tracking.get(self.units.bindings.get(obj))
+            if state is not None:
+                state.last_accepted_position = dict(corners_mm=deepcopy(tray["corners_plane"]),
+                    corners_source=tray.get("corners_source"), center_source=tray.get("center_source"),
+                    frame_index=metadata["frame_index"], timestamp_seconds=metadata["timestamp_seconds"],
+                    calibration_version=metadata.get("calibration_version"))
+        prediction = {**prediction, "trays": trays, "geometry_metadata": deepcopy(metadata), "geometry_pending": False}
+        self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
+                           calibration_version=metadata.get("calibration_version"), bindings=self.units.bindings)
+        current = self.current
+        current.prediction = {**current.prediction, **{key: prediction[key] for key in
+            ("trays", "tray_errors", "facing_results", "geometry_metadata", "tray_fit_stats") if key in prediction}}
+        current.geometry_frame = frame
+        current.geometry_revision += 1
+        return prediction
 
     def snapshot(self):
         """Freeze one observation without copying the growing match history."""
@@ -93,7 +138,8 @@ class GameData:
             current=CurrentData(frame=frame, prediction=deepcopy(current.prediction),
                                 prediction_frame=frame if current.prediction is not None else None,
                                 prediction_metadata=deepcopy(current.prediction_metadata),
-                                view_revision=current.view_revision),
+                                view_revision=current.view_revision, geometry_frame=current.geometry_frame,
+                                geometry_revision=current.geometry_revision),
             reference_folder=self.reference_folder,
         )
 
@@ -195,43 +241,51 @@ class GameData:
         self.record_history(kind=f"{method}_recovery_failed", source=source,
                             recovery={"unit_id": unit_id, "object_id": object_id, "method": method})
 
-    def record_history(self, *, kind="observation", source=None, interruption=None, recovery=None):
+    def record_history(self, *, kind="observation", source=None, interruption=None, recovery=None,
+                       observation=None, tracking=None, interruptions=()):
         """Record geometry/states; the writer separately retains active step images."""
         current = self.current
+        prediction, frame, metadata = (observation if observation is not None else
+            (current.prediction, current.geometry_frame if current.geometry_frame is not None else current.prediction_frame,
+             (current.prediction or {}).get("geometry_metadata", current.prediction_metadata)))
         if self.units is None or current.prediction is None or current.prediction_metadata is None:
             return False
         units = {}
-        unavailable = set(current.prediction.get("unavailable_ids", [])) | set(current.prediction.get("inactive_ids", []))
+        unavailable = set(prediction.get("unavailable_ids", [])) | set(prediction.get("inactive_ids", []))
         for object_id, unit_id in self.units.bindings.items():
             unit = self.units.units[unit_id]
             profile = {**self.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
-            tray = current.prediction.get("trays", {}).get(object_id) if object_id not in unavailable else None
-            tracking = self.tracking.get(unit_id)
+            tray = prediction.get("trays", {}).get(object_id) if object_id not in unavailable else None
+            state = (self.tracking if tracking is None else tracking).get(unit_id)
             units[unit_id] = {
                 "type_id": unit["type_id"], "attributes": deepcopy(profile),
                 "corners_mm": deepcopy(tray["corners_plane"]) if tray is not None else None,
                 "corners_source": deepcopy(tray.get("corners_source")) if tray is not None else None,
                 "center_source": deepcopy(tray.get("center_source")) if tray is not None else None,
                 "position_status": "available" if tray is not None else "unavailable",
-                "tracking_status": tracking.status if tracking else None,
-                "visibility": tracking.visibility if tracking else None,
-                "disappeared_time": tracking.disappeared_time if tracking else None,
-                "active": tracking.active if tracking else not (profile.get("routed") or profile.get("removed")),
+                "tracking_status": state.status if state else None,
+                "visibility": state.visibility if state else None,
+                "disappeared_time": state.disappeared_time if state else None,
+                "recovery_phase": state.recovery_phase if state else None,
+                "recovery_note": state.recovery_note if state else None,
+                "active": state.active if state else not (profile.get("routed") or profile.get("removed")),
                 "state": {"engaged": deepcopy(profile.get("engaged")),
                           "wavering": deepcopy(profile.get("wavering")),
                           "facing": deepcopy(self.rules.fronts.get(object_id))},
             }
-        observation = current.prediction_metadata
-        source = observation if source is None else source
+        source = metadata if source is None else source
         entry = {"calibration_version": self.board.calibration_version, "kind": kind,
-                 "source": _history_source(source), "observation_source": _history_source(observation),
+                 "source": _history_source(source), "observation_source": _history_source(metadata),
+                 "mask_source": _history_source(metadata if observation is not None else current.prediction_metadata),
                  "rules": self.rules.snapshot(),
-                 "observation_frame_index": observation["frame_index"],
-                 "observation_timestamp_seconds": observation.get("timestamp_seconds"),
+                 "observation_frame_index": metadata["frame_index"],
+                 "observation_timestamp_seconds": metadata.get("timestamp_seconds"),
                  "frame_index": source["frame_index"],
                  "timestamp_seconds": source.get("timestamp_seconds"), "units": units}
         if recovery is not None:
             entry["recovery"] = deepcopy(recovery)
+        if interruptions:
+            entry["tracking_interruptions"] = list(interruptions)
         if self.history and {key: value for key, value in self.history[-1].items()
                             if key not in ("sequence", "motion_events", "motion_event_ids")} == entry:
             return False
@@ -239,6 +293,8 @@ class GameData:
         entry["sequence"] = self._history_sequence
         if self.motion_recorder is not None:
             events = []
+            for unit_id in interruptions:
+                events.extend(self.motion_recorder.interrupt_unit(unit_id, entry, "mask_missing"))
             if recovery is not None:
                 events.extend(self.motion_recorder.interrupt_unit(recovery["unit_id"], entry, kind))
             events.extend(self.motion_recorder.interrupt_all(entry, interruption) if interruption is not None
@@ -248,7 +304,7 @@ class GameData:
             self.global_history.update({event["event_id"]: event for event in events})
         self.history.append(entry)
         if self.history_store is not None:
-            self.history_store.append(entry, self._calibration_records(), frame=current.prediction_frame)
+            self.history_store.append(entry, self._calibration_records(), frame=frame)
             self._history_latest_time = max(self._history_latest_time, entry["timestamp_seconds"])
             self.poll_history()
         return True

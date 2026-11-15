@@ -32,6 +32,8 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
 ```
 
+复用完成的注册可在注册页点 `Load registration` 选原目录的 `prompts.json`，或在上面命令中用 `--registration outputs/sam3_registration/frame_5b58dfca4481` 替换 `--start 3600`。该存档自动回到45:00，保留24个对象及原ID，模型就绪后直接 `Start video`。每次载入新建测试记录，不覆盖原存档；这是复用初始注册，不是恢复中途进度。
+
 完整直播已下载至 `inputs/Ja5-2RIOBXU_full.mp4`（9:35:57，1080p／60fps，约 5.9 GB；大文件已忽略，来源见 [记录](inputs/Ja5-2RIOBXU_full.source.json)）。上述命令从 01:00:00 的该场第一回合开始，单位较原 02:30:00 片段分散；可修改 `--start` 秒数。省略 `--seconds` 默认播放到视频结尾，短测可显式传入时长。原五分钟片段保留。Qt 注册不画选中外接框，Points 模式赋予类型成功后自动进入下一 mask。
 
 ### 目录

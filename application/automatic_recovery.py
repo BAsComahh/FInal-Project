@@ -1,5 +1,7 @@
 """Internal missing episodes and post-search human requests, independent of the visible tool."""
 from copy import deepcopy
+import json
+from pathlib import Path
 from threading import Event
 
 from . import config
@@ -18,7 +20,19 @@ class AutomaticRecovery:
     def _phase(self, uid, phase, note):
         state = self._session.data.tracking.get(uid)
         if state is not None:
+            changed = (state.recovery_phase, state.recovery_note) != (phase, note)
             state.recovery_phase, state.recovery_note = phase, note
+            if changed and self._session.data.reference_folder is not None:
+                entry = {"unit_id": uid, "phase": phase, "reason": note,
+                         "source": self._session.source.metadata(), "generation": self._session.generation,
+                         "observation": self._session.data.current.prediction_metadata,
+                         "diagnostics": self.records.get(uid, {}).get("diagnostics")}
+                try:
+                    path = Path(self._session.data.reference_folder) / "automatic_recovery.jsonl"
+                    with path.open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                except OSError as error:
+                    print(f"Automatic recovery log could not be written: {error}", flush=True)
         self._session.mark_changed()
 
     def observe(self):
@@ -87,7 +101,8 @@ class AutomaticRecovery:
             self.records[uid] = {"candidate": candidate,
                                  "preview": {"prediction": candidate.prediction, "metadata": deepcopy(request["metadata"])}
                                  if candidate is not None else None,
-                                 "diagnostics": {key: row.get(key) for key in ("scores", "top_two_margin", "reason")}}
+                                 "diagnostics": {key: row.get(key) for key in ("scores", "top_two_margin", "reason",
+                                                                             "candidate_id", "candidate_ids")}}
             self._phase(uid, "review" if candidate is not None else "manual",
                         str(error) if error is not None else row.get("reason", "Automatic search could not recover this unit"))
 

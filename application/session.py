@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 import sys
 from time import perf_counter
+from threading import Event
 import cv2
 import numpy as np
 from components.video_io import VideoSource
@@ -11,6 +12,7 @@ from components.motion_history import MotionRecorder
 from . import config
 from .automatic_recovery import AutomaticRecovery
 from .task_worker import TaskWorker
+from .tray_worker import TrayWorker
 
 class MatchSession:
     def __init__(self, video, data, *, model_id="facebook/sam3", device=None, start=0, seconds=None,
@@ -22,11 +24,13 @@ class MatchSession:
             raise ValueError("inference-fps must be positive")
         self.disappearance_seconds = validate_disappearance_seconds(config.TRACKING_DISAPPEARANCE_SECONDS)
         self.data = data
+        self.data.rules.track_facing = config.FACING_TRACKING_ENABLED
         self.data.motion_recorder = MotionRecorder(position_tolerance_mm=config.MOTION_POSITION_TOLERANCE_MM,
                                                    rotation_tolerance_deg=config.MOTION_ROTATION_TOLERANCE_DEG,
                                                    settle_seconds=config.MOTION_SETTLE_SECONDS)
         self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search,
                                  tracker=tracker, tracker_model=tracker_model, tracker_cache=tracker_cache)
+        self.trays = TrayWorker(tray_search, self.worker.tray_stability)
         self.worker.submit("load", generation=0)
         self.source = None
         try:
@@ -36,11 +40,13 @@ class MatchSession:
             if self.source is not None:
                 self.source.close()
             self.worker.close()
+            self.trays.close()
             raise
         self.initial_frame = self.data.current.frame
         self.registration_start_frame = self.source.frame_index
         self.data.board.source_size = self.data.current.frame.shape[1::-1]
         self.start = start
+        self.playback_seconds = seconds
         self.end_index = self.source.frame_count - 1
         if seconds is not None:
             self.end_index = min(self.end_index, int((start + seconds) * self.source.fps) - 1)
@@ -48,7 +54,9 @@ class MatchSession:
         self.output_dir = (Path(output_dir) if output_dir is not None else
                            config.PROJECT_ROOT / "outputs/sam3_registration")
         self.load_progress = None
-        self.pending_trays = False
+        self.pending_trays = set()
+        self.tray_versions = {}
+        self._geometry_visible = set()
         self.generation = 0
         self.needs_reset = False
         self.needs_load = False
@@ -75,6 +83,44 @@ class MatchSession:
     @property
     def inference_interval(self):
         return 0.0 if self.inference_fps is None else 1 / self.inference_fps
+
+    @property
+    def tray_fitting(self):
+        return not self.worker.tray_cancelled.is_set()
+
+    def _pause_geometry(self):
+        current = self.data.current
+        if current.prediction is not None:
+            current.prediction = {**current.prediction, "trays": {}, "tray_errors": {}, "facing_results": {}}
+            self.data.record_history(kind="interruption", source=self.source.metadata(), interruption="tray_fitting_paused")
+
+    def set_tray_fitting(self, enabled):
+        if enabled == self.tray_fitting:
+            return
+        self.trays.invalidate()
+        current = self.data.current
+        if not enabled:
+            self.worker.tray_cancelled.set()
+            request = self.worker.request
+            if request is not None and request["kind"] == "trays":
+                self.pending_trays.update(obj for obj, version in (request.get("tray_versions") or {}).items()
+                    if self.tray_versions.get(obj) == version and obj not in self.registration.unconfirmed)
+            if self.playback_started:
+                self.pending_trays.clear()
+                self._pause_geometry()
+        else:
+            self.worker.tray_cancelled = Event()
+            if self.playback_started:
+                self.pending_trays.clear()
+            if (self.playback_started and current.prediction is not None and
+                    current.prediction_metadata.get("calibration_version") == self.data.board.calibration_version):
+                request = dict(frame=current.prediction_frame, metadata=current.prediction_metadata,
+                    raw_frame=self.prediction_raw_frame, generation=self.generation, tray_context=self.worker.tray_context,
+                    tray_cancelled=self.worker.tray_cancelled)
+                self.trays.offer(request, current.prediction, self.data.tracking)
+        self.mark_changed()
+        self.note = ("Tray fitting resumed from the latest accepted masks." if enabled else
+                     "Tray fitting paused. Source playback and mask tracking continue.")
 
     def _history_stores(self):
         current = [self.data.history_store] if self.data.history_store is not None else []
@@ -123,7 +169,7 @@ class MatchSession:
                 metadata.update(image_to_plane=board.image_to_plane.tolist(), board_size_mm=list(board.board_size_mm))
         return metadata
 
-    def configure_trays(self):
+    def configure_trays(self, object_ids=None, *, refit=True):
         sizes = {}
         if self.data.units:
             for object_id, unit_id in self.data.units.bindings.items():
@@ -133,21 +179,35 @@ class MatchSession:
                     sizes[object_id] = (dimension["width_mm"], dimension["depth_mm"])
         self.worker.tray_context = ({"image_to_plane": self.data.board.image_to_plane, "sizes": sizes}
                                     if self.data.board.image_to_plane is not None else None)
-        request = self.worker.request if self.worker.busy else None
-        # A queued result may still carry tray sizes from the replaced list.
-        self.pending_trays = self.data.current.prediction is not None or (
-            request is not None and request["kind"] in ("click", "replace", "propagate", "trays"))
-        if self.data.current.prediction is not None:
-            self.data.current.prediction = {**self.data.current.prediction, "trays": {}, "tray_errors": {}}
+        targets = (set(object_ids) if object_ids is not None else
+                   set(sizes) | set((self.data.current.prediction or {}).get("object_ids", ())))
+        self.invalidate_trays(targets)
+        if refit:
+            unconfirmed = self.registration.unconfirmed if hasattr(self, "registration") else set()
+            self.pending_trays.update((targets & sizes.keys()) - unconfirmed)
+
+    def invalidate_trays(self, object_ids):
+        """Invalidate only edited objects; a running fit cannot restore their old trays."""
+        targets = set(object_ids)
+        if not targets:
+            return
+        self.trays.invalidate(targets)
+        self.pending_trays.difference_update(targets)
+        for obj in targets:
+            self.tray_versions[obj] = self.tray_versions.get(obj, 0) + 1
+        current = self.data.current
+        if current.prediction is not None:
+            current.prediction = {**current.prediction, **{key: {obj: row for obj, row in
+                current.prediction.get(key, {}).items() if obj not in targets}
+                for key in ("trays", "tray_errors", "facing_results")}}
 
     def capture_facing_references(self):
         """Freeze initial manual facing material once, alongside registration."""
-        from components.facing import make_reference
-
         self.worker.facing_references.clear()
         self.worker.facing_states.clear()
         if self.worker.facing is None:
             return
+        from components.facing import make_reference
         current = self.data.current
         masks = dict(zip(current.prediction["object_ids"], current.prediction["masks"]))
         for obj, front in self.data.rules.fronts.items():
@@ -165,14 +225,18 @@ class MatchSession:
             front["appearance_reference_id"] = reference["reference_id"]
         self.worker.facing_fronts = deepcopy(self.data.rules.fronts)
 
-    def mark_changed(self):
+    def mark_changed(self, *, geometry=True):
         self.data.current.view_revision += 1
+        if geometry:
+            self.data.current.geometry_revision += 1
 
     def source_sample(self):
         return {"frame": self.data.current.frame, "metadata": self.frame_metadata(),
                 "generation": self.generation, "raw_frame": self.source.frame}
 
     def tray_status(self):
+        if not self.tray_fitting:
+            return "OFF"
         if self.data.board.image_to_plane is None:
             return "NO CALIB"
         if not self.worker.tray_context["sizes"]:
@@ -184,11 +248,19 @@ class MatchSession:
             return f"ON ({len(trays)})"
         if self.data.current.prediction.get("tray_errors"):
             return "CHECK FIT"
-        if self.pending_trays or self.worker.busy:
+        if self.pending_trays or self.worker.busy or self.trays.busy:
             return "FITTING"
         return "NO FIT"
 
     def start_stream(self, now=None):
+        if not self.data.rules.track_facing:
+            self.data.rules.fronts.clear()
+        if not self.tray_fitting:
+            self.pending_trays.clear()
+            self._pause_geometry()
+        prediction = self.data.current.prediction or {}
+        self._geometry_visible = {obj for obj, mask in zip(prediction.get("object_ids", ()), prediction.get("masks", ()))
+                                  if mask.any() and obj not in prediction.get("unavailable_ids", ())}
         self.play_start = perf_counter() if now is None else now
         self.play_start_frame = self.source.frame_index
         self.playing = True
@@ -197,7 +269,7 @@ class MatchSession:
     def schedule(self, now=None):
         registration, calibration = self.registration, self.calibration
         now = perf_counter() if now is None else now
-        self.worker.facing_fronts = deepcopy(self.data.rules.fronts)
+        self.worker.facing_fronts = deepcopy(self.data.rules.fronts) if self.data.rules.track_facing else {}
         self.worker.facing_excluded = {obj for obj, uid in (self.data.units.bindings.items() if self.data.units else ())
                                        if uid in self.data.tracking and
                                        (not self.data.tracking[uid].active or self.data.tracking[uid].status == "failed")}
@@ -224,16 +296,24 @@ class MatchSession:
         elif (request := registration.take_pending_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values, generation=self.generation, raw_frame=self.source.frame)
-        elif self.pending_trays and self.data.current.prediction is not None:
-            self.pending_trays = False
+        elif self.tray_fitting and self.pending_trays and self.data.current.prediction is not None:
+            targets = tuple(sorted(self.pending_trays))
+            self.pending_trays.clear()
             self.worker.submit("trays", frame=self.data.current.prediction_frame,
                                metadata=self.frame_metadata(frame=self.data.current.prediction_frame,
                                                             source_metadata=self.data.current.prediction_metadata),
-                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame)
+                               prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
+                               tray_ids=targets, tray_versions={obj: self.tray_versions[obj] for obj in targets})
         elif self.pending_play and not self.worker.tracker_initialized and not self.model_failed:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
-                               previous_trays=self.data.current.prediction.get("trays", {}))
+                               previous_trays={**self.data.current.prediction.get("trays", {}), **self.trays.attempts})
+        elif self.tray_fitting and not self.model_failed and (ready := self.trays.take_ready()) is not None:
+            request, prediction = ready
+            self.worker.submit("facing", frame=request["frame"], metadata=request["metadata"],
+                raw_frame=request.get("raw_frame"), prediction=prediction, generation=request["generation"],
+                tray_context=request["tray_context"], tray_epoch=request["tray_epoch"],
+                tray_attempts=request.get("tray_attempts", {}), tracking=request["tracking"])
         elif calibration._context is None and (request := self.automatic_recovery.take_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values)
@@ -246,8 +326,7 @@ class MatchSession:
                 return
             candidate = self.recovery.for_propagation() if self.recovery is not None else None
             self.worker.submit("propagate", **values, recovery_candidate=candidate,
-                               automatic_candidates=self.automatic_recovery.candidates(),
-                               previous_trays=self.data.current.prediction.get("trays", {}))
+                               automatic_candidates=self.automatic_recovery.candidates())
             self.last_submitted_frame = values["metadata"]["frame_index"]
             self.next_inference_time = now + self.inference_interval
         elif self.recovery is not None and not self.playing:
@@ -269,6 +348,7 @@ class MatchSession:
                 return
             error = ValueError("Confirmed update was invalidated after the backend consumed it.")
         if request["kind"] == "recovery_commit" and consumed:
+            self.trays.invalidate((request["recovery_object_id"],))
             object_id = request["recovery_object_id"]
             method = (request.get("prompt") or {}).get("method", "manual")
             if error is None:
@@ -276,6 +356,7 @@ class MatchSession:
                     self.data.accept_recovery(prediction, request["frame"], request["metadata"], object_id,
                                               source=self.source.metadata(), disappearance_seconds=self.disappearance_seconds, method=method)
                     self.worker.commit_facing(request, (object_id,))
+                    self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
                 except Exception as failure:
                     error = failure
@@ -290,6 +371,8 @@ class MatchSession:
         if prediction is not None and self.pending_trays:
             prediction = {**prediction, "trays": {}, "tray_errors": {}}
         valid = self.automatic_recovery.valid(request)
+        if request.get("automatic_consumed"):
+            self.trays.invalidate(request["automatic_consumed"])
         for obj in request.get("automatic_consumed", []):
             if valid and error is None and prediction is not None and obj in request.get("automatic_applied", []):
                 try:
@@ -297,6 +380,7 @@ class MatchSession:
                                               source=self.source.metadata(), disappearance_seconds=self.disappearance_seconds,
                                               method="automatic")
                     self.worker.commit_facing(request, (obj,))
+                    self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
                     continue
                 except Exception as failure:
@@ -315,6 +399,44 @@ class MatchSession:
                          f"Recovery: {len(request.get('automatic_applied', []))} unit(s) recovered automatically.")
         self.mark_changed()
 
+    def _accept_geometry(self, request, prediction, error):
+        current = self.data.current
+        metadata = request["metadata"]
+        previous = (current.prediction or {}).get("geometry_metadata")
+        valid = (self.tray_fitting and metadata.get("calibration_version") == self.data.board.calibration_version and
+                 current.prediction is not None and metadata["frame_index"] <= current.prediction_metadata["frame_index"] and
+                 (previous is None or metadata["frame_index"] >= previous["frame_index"]))
+        if error is not None:
+            self.trays.accept(request, valid=False)
+            self.note = f"Tray/facing update failed; mask tracking continues: {error}"
+            return
+        if not self.trays.accept(request, valid=valid):
+            return
+        prediction = self.data.accept_geometry(prediction, request["frame"], metadata)
+        self.worker.commit_facing(request)
+        self.data.record_history(source=self.source.metadata(),
+                                 observation=(prediction, request["frame"], metadata), tracking=request["tracking"])
+        self.mark_changed()
+        stats = prediction.get("tray_fit_stats", {})
+        self.note = (f"Masks continue | tray {prediction.get('timings_seconds', {}).get('tray_fit', 0):.2f}s "
+                     f"(reuse {stats.get('reused', 0)}, refit {stats.get('refitted', 0)}, "
+                     f"retry wait {stats.get('retry_wait', 0)}) | geometry {metadata['timestamp_seconds']:.2f}s")
+
+    def _queue_geometry(self, request):
+        prediction = self.data.current.prediction
+        unavailable = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
+        visible = {obj for obj, mask in zip(prediction["object_ids"], prediction["masks"]) if mask.any()} - unavailable
+        if visible != self._geometry_visible:
+            lost = self._geometry_visible - visible
+            self.trays.invalidate(self._geometry_visible ^ visible)
+            if lost:
+                self.data.record_history(kind="tracking_gap", source=self.source.metadata(),
+                    interruptions=[self.data.units.bindings[obj] for obj in lost if obj in self.data.units.bindings])
+            self._geometry_visible = visible
+            self.data.current.geometry_revision += 1
+        if self.tray_fitting and not self.pending_trays:
+            self.trays.offer({**request, "tray_cancelled": self.worker.tray_cancelled}, prediction, self.data.tracking)
+
     def advance(self, now=None):
         registration, calibration = self.registration, self.calibration
         if self.closed:
@@ -324,7 +446,14 @@ class MatchSession:
         if completed is not None:
             request, prediction, error = completed
             if request["generation"] == self.generation:
-                if request["kind"] == "automatic_recovery":
+                cancelled = request.get("tray_cancelled")
+                if prediction is not None and cancelled is not None and cancelled.is_set():
+                    prediction = {**prediction, "trays": {}, "tray_errors": {}, "facing_results": {},
+                                  "tray_fit_stats": {}, "geometry_pending": True}
+                if request["kind"] == "facing":
+                    self._accept_geometry(request, prediction, error)
+                    prediction = error = None
+                elif request["kind"] == "automatic_recovery":
                     self._accept_automatic_result(request, prediction, error)
                     prediction = error = None
                 elif request["kind"].startswith("recovery_"):
@@ -341,20 +470,26 @@ class MatchSession:
                 if request["kind"] == "recalibrate" and not calibration.accept_result(request, prediction, error):
                     prediction = error = None
                 if error is not None:
+                    self.trays.invalidate()
                     self.data.finish_motion("model_error", self.source.metadata())
                     self.model_failed = True
                     self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
                     prediction["accepted_at"] = perf_counter()
-                    if self.pending_trays:
-                        prediction = {**prediction, "trays": {}, "tray_errors": {}}
+                    prediction = registration.merge_trays(request, prediction)
                     accepted = self.data.accept_observation(
                         prediction, request["frame"], request["metadata"],
                         disappearance_seconds=self.disappearance_seconds if self.registration_locked else None)
-                    if accepted:
+                    if accepted and request["kind"] != "propagate":
                         self.worker.commit_facing(request)
+                        self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
-                    if self.registration_locked and request["kind"] in ("propagate", "recalibrate"):
+                    if accepted and request["kind"] == "propagate":
+                        self._queue_geometry(request)
+                        if not self.tray_fitting:
+                            self.data.record_history(source=self.source.metadata(),
+                                observation=(self.data.current.prediction, request["frame"], request["metadata"]))
+                    if self.registration_locked and request["kind"] == "recalibrate":
                         self.data.record_history(
                             kind="recalibration" if request["kind"] == "recalibrate" else "observation",
                             source=self.source.metadata())
@@ -366,7 +501,7 @@ class MatchSession:
                         self.next_inference_time = now + self.inference_interval
                     elif request["kind"] == "start_tracker":
                         self.start_stream(now)
-                    self.mark_changed()
+                    self.mark_changed(geometry=request["kind"] != "propagate")
                     times = prediction.get("timings_seconds", {})
                     tray_counts = prediction.get("tray_fit_stats", {})
                     tray_detail = (f" (reuse {tray_counts['reused']}, refit {tray_counts['refitted']})"
@@ -374,6 +509,8 @@ class MatchSession:
                     self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
                                  f"{prediction.get('tracking_backend', 'model')} operation {times.get('worker_operation', 0):.2f}s | "
                                  f"tray {times.get('tray_fit', 0):.2f}s{tray_detail}. Latest result held between updates.")
+                    if request["kind"] in ("click", "replace"):
+                        self.note = "Mask updated. Assign its type to confirm and fit this unit's tray."
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
                     self.note = "Point undone. No objects remain; click to register again."
@@ -383,6 +520,11 @@ class MatchSession:
                 elif request["kind"] == "prepare":
                     self.startup_ready = True
                     self.note = f"SAM3 and first-frame features ready on {self.worker.predictor.device}. Segment targets; Tab labels."
+                if (request["kind"] in ("reset", "load") and self.registration_locked and not self.playback_started
+                        and self.worker.models_loaded and not self.needs_load and error is None):
+                    self.startup_ready = True
+                    self.capture_facing_references()
+                    self.note = "Saved registration loaded. Start video when ready."
         if self.playing:
             target = min(self.end_index, self.play_start_frame + int((now - self.play_start) * self.source.fps))
             if target > self.source.frame_index:
@@ -394,6 +536,8 @@ class MatchSession:
             if target >= self.end_index:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
+        if self.tray_fitting:
+            self.trays.start((self.data.current.prediction or {}).get("trays", {}))
         self.schedule(now)
         self._poll_history()
 
@@ -405,6 +549,11 @@ class MatchSession:
         self.playing = False
 
     def reset(self):
+        self.trays.invalidate()
+        self.pending_trays.clear()
+        self.worker.tracker_initialized = self.worker.tracker is None
+        self.tray_versions.clear()
+        self._geometry_visible = set()
         self.worker.facing_references.clear()
         self.worker.facing_states.clear()
         self.worker.facing_fronts.clear()
@@ -430,6 +579,7 @@ class MatchSession:
         self.startup_ready = False
         self.data.current.frame = self._warp_frame(self.source.read_frame(self.registration_start_frame))
         self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
+        self.data.current.geometry_frame = None
         self.prediction_raw_frame = None
         self.last_submitted_frame = -1
         self.next_inference_time = 0
@@ -448,6 +598,7 @@ class MatchSession:
         self.data.finish_motion("session_closed", self.source.metadata())
         self.source.close()
         self.worker.close()
+        self.trays.close()
         for store in self._history_stores():
             if not store.close():
                 print(f"History not saved on exit: {store.path}: {store.pending_count} updates remain in RAM; "

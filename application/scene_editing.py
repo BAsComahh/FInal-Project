@@ -11,6 +11,7 @@ class SceneEditing:
         self._data = session.data
 
     def changed(self, *, refresh_inputs=True):
+        self._session.trays.invalidate()
         if refresh_inputs and self._session.registration_locked:
             self._data.record_history(kind="manual_state", source=self._session.source.metadata())
         self._session.mark_changed()

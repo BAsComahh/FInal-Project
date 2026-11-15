@@ -163,6 +163,7 @@ class Calibration:
         return True
 
     def commit_recalibration(self, request):
+        self._session.trays.invalidate()
         context = self._context
         draft = context["draft"]
         if self._session.worker.tracker is None:
@@ -179,7 +180,7 @@ class Calibration:
         self._data.calibrations[-1]["unseeded_units"] = draft["unseeded_units"]
         self._session.last_submitted_frame = request["metadata"]["frame_index"]
         self._session.next_inference_time = perf_counter() + self._session.inference_interval
-        self._session.pending_trays = False
+        self._session.pending_trays.clear()
         self._session.generation += 1
         self._context = None
 

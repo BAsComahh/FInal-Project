@@ -266,6 +266,10 @@ def _rebuild_motion(records, original_events, calibrations, metadata):
                      for event in original_events.values() if event.get("status") == "interrupted"}
     events = {}
     for entry in records:
+        for unit_id in entry.get("tracking_interruptions", ()):
+            for event in recorder.interrupt_unit(unit_id, entry, "mask_missing"):
+                event["reconstructed_from_source"] = True
+                events[event["event_id"]] = event
         if entry.get("recovery") is not None:
             for event in recorder.interrupt_unit(entry["recovery"]["unit_id"], entry, entry["kind"]):
                 event["reconstructed_from_source"] = True

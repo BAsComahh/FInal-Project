@@ -15,7 +15,8 @@ Item {
         Text {
             id: label
             anchors.centerIn: parent
-            text: overlay.query.metric; color: "#246b89"
+            text: overlay.query.metric + (overlay.query.fixed ? "\nSnapshot · " + overlay.query.observed : ""); color: "#246b89"
+            horizontalAlignment: Text.AlignHCenter
             font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold
         }
     }

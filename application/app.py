@@ -18,7 +18,7 @@ from .contracts import (command, CommandReceipt, FrameRef, MatchSnapshot, BoardS
 
 
 class MatchApplication:
-    def __init__(self, video, *, units=None, calibration=None, board_size_in=None, **options):
+    def __init__(self, video, *, units=None, calibration=None, board_size_in=None, registration_archive=None, **options):
         data = GameData()
         configure_board(data, calibration, board_size_in)
         data.units = UnitRoster.load(units if units is not None else DEFAULT_UNITS)
@@ -35,6 +35,11 @@ class MatchApplication:
         self.scene_editing = SceneEditing(self._session, self.geometry)
         self._snapshot = self._snapshot_key = None
         self._revision = 0
+        if registration_archive is not None:
+            receipt = self.registration.load_archive(registration_archive)
+            if receipt.status == "rejected":
+                self.close()
+                raise ValueError(receipt.reason)
 
     def tick(self, now=None):
         if self._session.closed:
@@ -68,6 +73,8 @@ class MatchApplication:
     @command
     def start(self, overlay=None, now=None):
         session = self._session
+        if not session.startup_ready or session.model_failed:
+            raise ValueError("Wait for models and registration preparation before starting playback")
         if session.source.frame_index >= session.end_index:
             raise ValueError("End of video interval. R restarts.")
         receipt = self.registration.finish_registration(overlay)
@@ -85,6 +92,16 @@ class MatchApplication:
 
     def set_note(self, note):
         self._session.note = note
+
+    @command
+    def set_tray_fitting(self, enabled):
+        if self._session.closed:
+            raise ValueError("Match is closed.")
+        if not isinstance(enabled, bool):
+            raise ValueError("Tray fitting must be enabled or disabled.")
+        self._session.set_tray_fitting(enabled)
+        self.geometry.invalidate()
+        return CommandReceipt("accepted")
 
     def snapshot(self):
         session, data = self._session, self._session.data
@@ -111,7 +128,7 @@ class MatchApplication:
         self._snapshot = MatchSnapshot(
             self._revision, stage, "replay" if self.replay.active else "live", self.frame_ref(), freeze(session.source.frame),
             self.frame_ref(data.current.prediction_metadata) if data.current.prediction_metadata is not None else None,
-            board, current, units, RulesSnapshot(freeze(data.rules.fronts), freeze(data.rules.terrain)), tracking,
+            board, current, units, RulesSnapshot(freeze(data.rules.fronts), freeze(data.rules.terrain), data.rules.track_facing), tracking,
             data.reference_folder, session.source.fps, session.end_index, session.playing, session.pending_play,
             session.closed, session.registration_locked, session.startup_ready, session.model_failed,
             worker.predictor.model is not None, worker.tracker_name, worker.tracker_initialized,
@@ -119,7 +136,8 @@ class MatchApplication:
             session.inference_fps, session.history_warning, session.tray_status(), session.note, freeze(self.registration.clicks),
             freeze({"active": recovery.active, "busy": recovery.busy, "committing": recovery.committing,
                     "candidate_generation": recovery.candidate_generation, "preview": recovery._preview,
-                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}))
+                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}),
+            tray_fitting=session.tray_fitting)
         self._snapshot_key = key
         return self._snapshot
 

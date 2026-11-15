@@ -1,6 +1,10 @@
 # Qt 注册与 Live 控制台
 
-客户端接入真实 MatchApplication，不使用预存 mask 或示例绑定替代 SAM。保留 [独立注册预览](../../design/ui/registration/preview.py)；这里是新客户端入口。注册的部分受控接口与两页离屏加载已通过；新增 Live 单位菜单／信息与底部查询控制台，受控主路径已检查，真实模型与原生交互待验收，完整 UI 尚未迁移。
+当前暂不使用实时facing，DVMNet不会加载，方向检查／恢复和矩形正面连续更新均停用；代码与初始注册F资料保留。直播侧栏隐藏facing和Missing提示，仅保留Estimated mask／可审核候选；后台失踪判定及自动／手动恢复不变。
+
+Trays复选框同时暂停／恢复后台矩形计算。关闭后视频与mask追踪继续，Distance选齐两单位后才按当时已接纳观测做一次拟合，显示固定距离／矩形及Snapshot时间，不连续更新；此模式下LOS／Move显示Not implemented。开启后恢复连续几何查询。已在执行的单次调用会先结束，旧结果不接纳。
+
+客户端接入真实 MatchApplication，可重新注册，也可载入已完成注册的真实 mask／绑定再初始化追踪。保留 [独立注册预览](../../design/ui/registration/preview.py)；这里是新客户端入口。注册的部分受控接口与两页离屏加载已通过；新增 Live 单位菜单／信息与底部查询控制台，受控主路径已检查，真实模型与原生交互待验收，完整 UI 尚未迁移。
 
 ```powershell
 cd 'C:\Users\vasco\Desktop\FInal Project'
@@ -10,6 +14,14 @@ cd 'C:\Users\vasco\Desktop\FInal Project'
 ```
 
 完整视频为 9:35:57、1080p／60fps，已下载到 inputs，来源见 [记录](../../inputs/Ja5-2RIOBXU_full.source.json)，大视频不进入 Git。前半小时是待机画面，示例从 01:00:00 的该场第一回合开始，单位比原 02:30:00 片段分散；`--start` 为完整视频中的秒数，原片段仍可使用。
+
+复用标注：注册页顶部点 `Load registration`，选择原存档内的 `prompts.json`；等待模型就绪后点 `Start video`。也可直接启动：
+
+```powershell
+conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_registration/frame_5b58dfca4481
+```
+
+该存档包含24个对象，自动定位到45:00；存档帧覆盖 `--start`，`--seconds` 从该帧计时，省略则播到结尾。载入恢复初始mask、原单位ID／类型／属性、桌面标定、地形及已有矩形，注册保持锁定。每次载入新建reference／history目录，原存档不改写；不恢复上次播放进度、追踪器内部记忆或中途失败状态。视频帧不匹配、文件不全会显示拒绝原因；要换存档先Reset。
 
 与 `python -m frontend` 共用视频、目录、segmentor、tracker、起点、时长及推理频率等参数；省略 `--seconds` 默认从起点播放到视频结尾，显式传正秒数才限定区间。完整默认值见 [启动参数](../README.md#启动参数默认值)。`--preview-width` 设定初始窗口宽度的画面部分；视频保持比例，黑边点击不作提示。Qt 不改变模型的自动设备选择。安装目录仅提供可选 Qt，不向模型环境自动安装依赖。
 
@@ -28,7 +40,7 @@ A／B 类型列表使用 48 px 高的紧凑条目，只显示分类名称，例�
 8. 点 Distance／D 再点第二个单位，inch／mm 数值直接显示在最近点连线中点，不打开抽屉；等待或失败原因及 Done 留在控制栏。LOS／L 选目标后仍用底部抽屉显示状态、原因、警告和观测时间。Move／V 提供 Advance、Double、Back、Sidestep、Change facing、Halt 的离散姿态候选；未知输入会明确提示。这不是完整合法性判定，也不移动正式单位。Estimated mask、失效位置或没有托盘时不作为可查询几何。
 9. Done／Esc 退出当前工具，保留单位选择；Select 模式下 Esc、Clear selection、Q／Space 或点空白清除选择。mask／托盘开关独立于业务。菜单、查询和信息展示期间源播放／追踪／历史继续；连线数值与抽屉结果只对应其观测，过期结果暂时隐藏等待更新。
 
-Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，信息菜单格式与 Distance 线上数值以 [用户最新截图约定](../../design/ui/live/implementation.md) 为准。Missing 提示使用已有失败状态并隐藏 queued／searching；本节点未迁移完整恢复、B08、资料／地形、回放、观众窗口或 What-if，完整旧流程仍用 OpenCV 入口。
+Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，信息菜单格式与 Distance 线上数值以 [用户最新截图约定](../../design/ui/live/implementation.md) 为准。2026-11-13 接入辅助流程：红色 Correct 打开当前单位的隔离矫正，正／负点生成黄色候选，再把右侧原 ID 拖到候选上确认；Recover units 可选择自动候选并 Correct／No，Clear／Cancel 保留原追踪。候选时间显示在工具栏，确认等待核心完成对齐后生效。B08 的 Recalibrate 在连续原视频上选择四角并提交尺寸，Cancel 保留原标定；Unit information 编辑既有规则字段；Terrain 点多边形后 Save polygon 填资料，右键撤点，Undo terrain 撤最后地形。Replay 替换主画面，Previous／Next 或 A／D 切步，Refresh 保持事件，Cancel／Esc 返回最新实况。上述流程中 tick、追踪和历史继续；本节点仍待受控验收与实机验证。观众窗口及 What-if 尚未实现。
 
 mask／facing 不确定信息现在集中在右侧 A／B 双栏，只有需要关注的条目才占用侧栏。正常 facing recovery_phase=tracking 不因连续性／DVMNet 来源而一直告警；pending／failed／waiting、无可用正面和没有监测状态的旧估计仍列出。选择列表单位只是查看信息，不确认恢复，也不重新绑定。信息卡和视频单位名不重复显示这些标签，后端来源及规则警告保留。
 

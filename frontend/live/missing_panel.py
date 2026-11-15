@@ -18,7 +18,7 @@ class MissingUnitPanel:
     @staticmethod
     def failed_units(data):
         return [unit_id for unit_id, state in data.tracking.items() if state.active and state.status == "failed"
-                and state.recovery_phase not in ("queued", "searching")]
+                and state.recovery_phase == "review"]
 
     def unit_at(self, x, y):
         return next((uid for rect, uid in self.rows if rect[0] <= x < rect[2] and rect[1] <= y < rect[3]), None)
@@ -41,7 +41,7 @@ class MissingUnitPanel:
             cv2.line(canvas, (x, 76), (x, height), (65, 65, 65), 1)
             ids = [unit_id for unit_id in failed
                    if data.units.types[data.units.units[unit_id]["type_id"]].get("list_id", "A") == list_id]
-            draw_text(canvas, f"List {list_id} | {len(ids)} failed", (x + 12, 92), size=15)
+            draw_text(canvas, f"List {list_id} | {len(ids)} candidates", (x + 12, 92), size=15)
             start = min(max(0, self.offset[list_id]), max(0, len(ids) - count))
             self.offset[list_id] = start
             for row, unit_id in enumerate(ids[start:start + count]):
@@ -63,6 +63,6 @@ class MissingUnitPanel:
                 text = f"Last position: {last['timestamp_seconds']:.2f}s | v{last['calibration_version']}" if last else "Last position: unavailable"
                 draw_text(canvas, text, (x + 14, y + 85), (170, 170, 170), size=10)
             if not ids:
-                draw_text(canvas, "No failed units", (x + 14, 131), size=12)
+                draw_text(canvas, "No candidates", (x + 14, 131), size=12)
             draw_text(canvas, f"{len(ids)} units | scroll this column", (x + 12, height - 12), (170, 170, 170), size=11)
         return canvas

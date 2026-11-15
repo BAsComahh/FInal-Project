@@ -17,6 +17,7 @@ class RuleState:
     def __init__(self):
         self.fronts = {}
         self.terrain = []
+        self.track_facing = True
 
     @staticmethod
     def _source_ray(front, corners, edge, source_to_plane):
@@ -43,6 +44,8 @@ class RuleState:
         self._source_ray(self.fronts[object_id], corners, edge, source_to_plane)
 
     def observe(self, prediction, frame_index, *, source_to_plane=None, calibration_version=None, bindings=None):
+        if not self.track_facing:
+            return
         unavailable = set(prediction.get("unavailable_ids", [])) | set(prediction.get("inactive_ids", []))
         appearances = prediction.get("facing_results", {})
         for object_id in set(self.fronts) | set(appearances):
@@ -106,6 +109,8 @@ class RuleState:
             corners = (transform_points(tray["corners_source"], source_to_plane).tolist()
                        if source_to_plane is not None and tray.get("corners_source") is not None else tray["corners_plane"])
             front = self.fronts.get(object_id)
+            if not self.track_facing and (metadata is None or front is not None and front.get("frame_index") != metadata.get("frame_index")):
+                front = None
             edge = None
             if front is not None:
                 angles = edge_headings(corners)
@@ -137,4 +142,6 @@ class RuleState:
 
     def snapshot(self):
         return {"ruleset": "kow4-mini", "fronts": deepcopy(self.fronts), "terrain": deepcopy(self.terrain),
-                "facing_assumption": "Rectangle continuity assumes associated axes and small inter-observation turns; square bases add ambiguity. Optional foreground checks trigger DVMNet recovery; direction-only failures retain an Estimated front."}
+                "facing_tracking_enabled": self.track_facing,
+                "facing_assumption": ("Rectangle continuity assumes associated axes and small inter-observation turns; square bases add ambiguity. Optional foreground checks trigger DVMNet recovery; direction-only failures retain an Estimated front."
+                                      if self.track_facing else "Directed facing tracking disabled; initial registration evidence only.")}

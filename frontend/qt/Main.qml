@@ -12,8 +12,8 @@ ApplicationWindow {
     color: "#edf2f5"; font.family: "Segoe UI"; font.pixelSize: 13
     property var s: ui.state
     readonly property bool table: s.stage === "table"
-    readonly property bool live: s.stage === "playback"
-    readonly property bool modalOpen: resetDialog.visible || armyFile.visible
+    readonly property bool live: s.stage === "playback" || s.stage === "recalibrate"
+    readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || workflowControls.formOpen
     onClosing: ui.close()
 
     ColumnLayout {
@@ -38,12 +38,14 @@ ApplicationWindow {
                     visible: window.live; implicitWidth: 66; implicitHeight: 30; radius: 7; color: "#e8f1f5"
                     Text { anchors.centerIn: parent; text: "LIVE"; color: "#246b89"; font.family: "Consolas"; font.pixelSize: 11; font.letterSpacing: 1 }
                 }
+                ConsoleButton { objectName: "loadRegistration"; text: "Load registration"; visible: !window.live; enabled: !s.locked; onClicked: registrationFile.open() }
                 ConsoleButton { text: "Undo"; visible: !window.live; enabled: window.table ? s.tableMode === "manual" && s.cornerCount > 0 : s.editable && s.undo; onClicked: ui.undo() }
                 ConsoleButton { text: "Reset"; visible: !window.table; onClicked: resetDialog.open() }
                 ConsoleButton { objectName: "saveRegistration"; text: s.locked ? "Saved" : "Save"; visible: !window.table && !window.live; enabled: s.editable && s.ready; onClicked: ui.finish() }
                 ConsoleButton { objectName: "startPlayback"; text: s.pendingPlay ? "Starting…" : "Start video"; primary: true; visible: !window.table && !window.live; enabled: s.ready; onClicked: ui.start() }
             }
         }
+        WorkflowControls { id: workflowControls; visible: window.live; Layout.leftMargin: 20; Layout.rightMargin: 20 }
         RowLayout {
             Layout.fillHeight: true; Layout.fillWidth: true; Layout.margins: 20; spacing: 16
             ColumnLayout {
@@ -84,6 +86,14 @@ ApplicationWindow {
                                                          mouse.button === Qt.LeftButton, surface.imageRevision())
                         }
                         DropArea {
+                            anchors.fill: parent; keys: ["unit-recovery"]; enabled: flow.state.kind === "recovery"
+                            onDropped: drop => {
+                                flow.dropUnit(drop.source.unitId, drop.x / surface.scaleX, drop.y / surface.scaleY,
+                                              surface.imageRevision(), drop.source.candidateGeneration)
+                                drop.acceptProposedAction()
+                            }
+                        }
+                        DropArea {
                             anchors.fill: parent; keys: ["unit-type"]; enabled: s.editable && board.status === Image.Ready
                             onDropped: drop => {
                                 ui.dropType(drop.source.typeId, drop.x / surface.scaleX, drop.y / surface.scaleY, surface.imageRevision())
@@ -92,11 +102,11 @@ ApplicationWindow {
                         }
                     }
                     UnitHud {
-                        anchors.fill: parent; visible: window.live && s.console.selected; viewData: s.console; z: 2
+                        anchors.fill: parent; visible: window.live && flow.state.kind === "live" && s.console.selected; viewData: s.console; z: 2
                         imageRect: Qt.rect(surface.x, surface.y, surface.width, surface.height)
                     }
                     DistanceLabel {
-                        anchors.fill: parent; visible: window.live && s.console.query.showDistance; query: s.console.query; z: 3
+                        anchors.fill: parent; visible: window.live && flow.state.kind === "live" && s.console.query.showDistance; query: s.console.query; z: 3
                         imageRect: Qt.rect(surface.x, surface.y, surface.width, surface.height)
                     }
                 }
@@ -139,15 +149,16 @@ ApplicationWindow {
                 state: s; dragLayer: Overlay.overlay
                 onImportRequested: side => { armyFile.side = side; armyFile.open() }
             }
+            RecoveryPanel { visible: window.live && flow.state.kind === "recovery"; Layout.preferredWidth: 260; Layout.fillHeight: true }
             UncertaintyPanel {
-                visible: window.live && ui.uncertainty.count > 0
+                visible: window.live && flow.state.kind === "live" && ui.uncertainty.count > 0
                 Layout.preferredWidth: window.width < 1000 ? 260 : 300; Layout.fillHeight: true
                 viewData: ui.uncertainty; selectedUnit: s.console.unitId
                 onInspectRequested: unitId => ui.inspectUnit(unitId)
             }
         }
         LiveConsole {
-            visible: window.live; Layout.fillWidth: true
+            visible: window.live && flow.state.kind === "live"; Layout.fillWidth: true
             viewData: s.console; drawerHeight: Math.min(220, window.height * .26)
         }
         Rectangle {
@@ -159,7 +170,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Text { Layout.fillWidth: true; elide: Text.ElideRight; text: s.modelLabel; color: s.ready ? "#22765c" : "#44667d"; font.weight: Font.DemiBold }
                     ProgressBar { visible: s.loading; indeterminate: s.progress < 0; value: Math.max(0, s.progress); Layout.preferredWidth: 160 }
-                    Text { Layout.maximumWidth: window.width * 0.5; elide: Text.ElideRight; text: "Source " + s.sourceTime + "s · Observation " + s.observationTime + "s · Age " + s.observationAge + "s"; color: "#607b8d"; font.pixelSize: 11 }
+                    Text { Layout.maximumWidth: window.width * 0.6; elide: Text.ElideRight; text: "Source " + s.sourceTime + "s · Masks " + s.observationTime + "s · Geometry " + s.geometryTime + "s"; color: "#607b8d"; font.pixelSize: 11 }
                 }
                 Text { objectName: "statusNote"; Layout.fillWidth: true; text: s.note; color: "#405d70"; wrapMode: Text.WordWrap }
                 Text { Layout.fillWidth: true; visible: s.historyWarning.length > 0; text: s.historyWarning; color: "#a23f42"; wrapMode: Text.WordWrap }
@@ -167,6 +178,13 @@ ApplicationWindow {
         }
     }
 
+    FileDialog {
+        id: registrationFile
+        title: "Load registration · select prompts.json"
+        currentFolder: s.archivesFolder
+        nameFilters: ["Registration (prompts.json)"]
+        onAccepted: ui.loadArchive(selectedFile)
+    }
     FileDialog {
         id: armyFile
         property string side: "A"
@@ -188,9 +206,11 @@ ApplicationWindow {
     Shortcut { sequence: "S"; enabled: s.editable && !window.modalOpen; onActivated: ui.finish() }
     Shortcut { sequence: "Space"; enabled: !window.table && !window.live && !window.modalOpen; onActivated: ui.start() }
     Shortcut { sequence: "Tab"; enabled: s.editable && !window.modalOpen; onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
-    Shortcut { sequence: "D"; enabled: window.live && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("distance") }
-    Shortcut { sequence: "L"; enabled: window.live && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("los") }
-    Shortcut { sequence: "V"; enabled: window.live && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("move") }
+    Shortcut { sequence: "D"; enabled: window.live && flow.state.kind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("distance") }
+    Shortcut { sequence: "L"; enabled: window.live && flow.state.kind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("los") }
+    Shortcut { sequence: "V"; enabled: window.live && flow.state.kind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("move") }
+    Shortcut { sequences: ["Left", "A"]; enabled: flow.state.kind === "replay" && !window.modalOpen; onActivated: flow.action("previous") }
+    Shortcut { sequences: ["Right", "D"]; enabled: flow.state.kind === "replay" && !window.modalOpen; onActivated: flow.action("next") }
     Shortcut { sequence: "Escape"; enabled: window.live && !window.modalOpen; onActivated: ui.escapeLive() }
     Shortcut { sequences: ["Q", "Space"]; enabled: window.live && !window.modalOpen; onActivated: ui.clearSelection() }
 }

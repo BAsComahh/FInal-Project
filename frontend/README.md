@@ -1,6 +1,14 @@
 # 桌面视频界面
 
-首帧先检测并确认桌面边界，再确认桌面长宽，用 Homography 拉正并聚焦战场，进入单位注册与传播流程。窗口显示和交互放在 `frontend/`，运行／业务流程归 `application/`，模型及算法留在 `components/`。界面文案使用英文。现有完整客户端使用 OpenCV；新 [Qt 客户端](qt/README.md) 已接入真实注册、Live 单位菜单／只读信息和底部几何查询，Live 受控主路径已检查，真实模型与原生交互待验收；其余工具仍从 OpenCV 入口使用。
+已完成注册可通过两客户端共用的 `--registration DIRECTORY` 或 `--registration DIRECTORY/prompts.json` 载入，Qt 注册页另有 `Load registration`。存档帧覆盖起点，恢复原ID／mask／标定／属性并锁定注册；模型就绪后播放，每次新建reference和history，不恢复中途追踪状态。Qt示例见 [Qt入口](qt/README.md)。
+
+当前实时facing暂时停用，代码和注册初始资料保留；直播不再显示Missing及facing关注提示。后台失败锁／自动恢复／手动Recover仍有效，不能把隐藏提示理解为追踪正常。
+
+Trays／T现在同时控制托盘计算：关闭暂停矩形拟合及依赖它的正面检查，mask与源播放继续；开启恢复最新观测的几何，暂停段不补运动历史。
+
+关闭Trays时Distance提供按需快照：选齐两单位才拟合该时刻的两只托盘，结果固定并标取样时间；LOS／Move在此模式暂显Not implemented，后续工作见TODO。查询结果不写回追踪或运动历史。
+
+首帧先检测并确认桌面边界，再确认桌面长宽，用 Homography 拉正并聚焦战场，进入单位注册与传播流程。窗口显示和交互放在 `frontend/`，运行／业务流程归 `application/`，模型及算法留在 `components/`。界面文案使用英文。旧客户端使用 OpenCV；新 [Qt 客户端](qt/README.md) 已接入真实注册、Live 单位菜单／几何查询，以及恢复／B08／资料地形编辑／回放的辅助入口。部分受控路径已检查，真实模型、候选确认与重标定成功等路径仍待验收；完整验证前保留旧客户端。
 
 ```powershell
 conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30

@@ -7,10 +7,8 @@ TRACKING_DISAPPEARANCE_SECONDS = 10.0
 DEFAULT_TRACKER = "edgetam"
 DEFAULT_TRAY_SEARCH = "adaptive"
 # Trial mask-stability gates, relative to the last actual rectangle fit.
-TRAY_STABLE_CENTROID_PCT = 2.0
-TRAY_STABLE_MAX_AREA_CHANGE = 0.10
-TRAY_STABLE_MIN_SHAPE_IOU = 0.90
-TRAY_STABLE_MAX_AXIS_DEG = 3.0
+TRAY_STABLE_CENTROID_PCT = 5.0
+TRAY_STABLE_MIN_MASK_IOU = 0.90
 
 # User-selected experimental retrieval thresholds, not calibrated probabilities.
 AUTO_RECOVERY_ENABLED = True  # EdgeTAM only; other trackers keep their failure display.
@@ -25,6 +23,7 @@ MOTION_ROTATION_TOLERANCE_DEG = 10.0
 MOTION_SETTLE_SECONDS = 5.0
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FACING_TRACKING_ENABLED = False  # Retain D32 code; current runtime does not use facing.
 DVMNET_FACING_ENABLED = True
 DVMNET_FACING_CACHE = PROJECT_ROOT / "outputs/model_cache/dvmnet"
 # Trial ambiguity guard between tray-edge angular errors; not model confidence.

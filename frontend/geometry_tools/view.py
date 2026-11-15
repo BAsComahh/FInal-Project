@@ -35,7 +35,8 @@ class GeometryView:
             if self.queries.result_request is not None:
                 observed = self.queries.result_request["metadata"]["timestamp_seconds"]
                 age = max(0, source.source_ref.frame_index - self.queries.result_request["metadata"]["frame_index"]) / source.fps
-                text = f"Observed {observed:.2f}s / age {age:.2f}s | " + text
+                label = "Snapshot" if self.queries.result_request.get("fixed") else "Observed"
+                text = f"{label} {observed:.2f}s / age {age:.2f}s | " + text
                 if not self.queries.result_current(presentation):
                     text = "Updating | " + text
             if self.queries.result.get("warnings"):

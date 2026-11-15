@@ -9,6 +9,7 @@ from components.homography import transform_points
 from components.homography.geometry import order_corners
 from .board import BoardImages, BoardRenderer
 from .live import LiveSelection, MOVE_ORDERS
+from .workflows import Workflows
 
 
 class MatchBridge(QObject):
@@ -23,13 +24,13 @@ class MatchBridge(QObject):
         self.live = LiveSelection(match)
         self.selected = 1
         self.mode = "Points"
-        self.show_masks = self.show_trays = True
+        self.show_masks = True
         self.table_mode = "detecting"
         self.corners, self.corner_points = None, []
         self.corner_method = "lsd"
         self.notice = ""
         self._view = {}
-        self._uncertainty = dict(rowsA=[], rowsB=[], count=0)
+        self._uncertainty = dict(rowsA=[], rowsB=[], count=0, showFacing=False)
         self._shown = self._image_key = self._published_key = None
         self._image_revision = 0
         self._local_revision = 0
@@ -37,7 +38,7 @@ class MatchBridge(QObject):
         self._detection = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="qt-table")
         self._snapshot = match.snapshot()
-        self._board_size = [value / 25.4 for value in self._snapshot.board.board_size_mm]
+        self.flow = Workflows(self)
         self.timer = QTimer(self)
         self.timer.setInterval(15)
         self.timer.timeout.connect(self.advance)
@@ -84,23 +85,29 @@ class MatchBridge(QObject):
             return
         self._snapshot = state
         self._published_key = key
+        self.flow.publish(state)
         uncertainty = self.live.uncertainty(state)
         if uncertainty != self._uncertainty:
             self._uncertainty = uncertainty
             self.uncertaintyChanged.emit()
-        live = state.stage == "playback"
+        live = state.stage in ("playback", "recalibrate")
         selected = self.live.object_id(state, self.live.unit_id) if live else self.selected
         target = self.live.object_id(state, self.live.target_id) if live else None
-        queries = self.match.geometry if live and self.live.tool != "select" else None
-        image_key = (state.source_ref, state.current.view_revision, selected, target, self.show_masks, self.show_trays,
+        queries = self.match.geometry if live and self.flow.kind(state) == "live" and self.live.tool != "select" else None
+        image_key = (state.source_ref, state.current.view_revision, selected, target, self.show_masks, state.tray_fitting,
+                     self._local_revision, self.flow.kind(state), self.match.replay.selected,
+                     state.revision if self.flow.kind(state) != "live" else None,
                      id(queries.result) if queries is not None else None,
                      tuple(prompt["click_id"] for prompt in state.registration_prompts),
                      repr(self.corners), tuple(map(tuple, self.corner_points)), state.stage)
         if image_key != self._image_key:
-            self.images.publish(self.renderer.render(state, selected=selected, target=target, queries=queries,
-                                             masks=self.show_masks, trays=self.show_trays,
+            frame = self.renderer.render(state, selected=selected, target=target, queries=queries,
+                                             masks=self.show_masks, trays=state.tray_fitting,
                                              corners=self.corners if state.stage == "table" else None,
-                                             points=self.corner_points if state.stage == "table" else ()))
+                                             points=self.corner_points if state.stage == "table" else ())
+            frame = self.flow.render(state, frame)
+            self.images.publish(frame)
+            self._display_size = frame.shape[1::-1]
             self.match.present(state.source_ref)
             self._shown = state
             self._image_key = image_key
@@ -120,6 +127,7 @@ class MatchBridge(QObject):
         observation = state.observation_ref
         age = (max(0, state.source_ref.timestamp_seconds - observation.timestamp_seconds)
                if observation is not None else None)
+        geometry = (prediction or {}).get("geometry_metadata")
         editable = state.stage == "register" and not state.registration_locked
         self._view = dict(stage=state.stage, locked=state.registration_locked, editable=editable,
                           ready=state.startup_ready and not state.model_failed, mode=self.mode, selected=self.selected,
@@ -129,19 +137,21 @@ class MatchBridge(QObject):
                           assigned=len(state.units.bindings), total=len(object_ids), undo=bool(state.registration_prompts),
                           typesA=[row for row in types if row["side"] == "A"],
                           typesB=[row for row in types if row["side"] == "B"], types=types,
-                          imageRevision=self._image_revision, imageWidth=state.current.frame.shape[1],
-                          imageHeight=state.current.frame.shape[0], tableMode=self.table_mode,
+                          imageRevision=self._image_revision, imageWidth=self._display_size[0],
+                          imageHeight=self._display_size[1], tableMode=self.table_mode,
                           cornerCount=len(self.corner_points), canConfirmCorners=self.corners is not None,
-                          boardWidth=f"{self._board_size[0]:g}", boardDepth=f"{self._board_size[1]:g}",
+                          boardWidth=f"{state.board.board_size_mm[0] / 25.4:g}", boardDepth=f"{state.board.board_size_mm[1] / 25.4:g}",
                           modelLabel=model_label, loading=not state.startup_ready and not state.model_failed,
                           progress=(progress[1] / progress[2] if progress and progress[1] is not None and progress[2] else -1),
                           note=self.notice or state.note, historyWarning=state.history_warning or "",
                           sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
                           observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
                           observationAge=f"{age:.2f}" if age is not None else "—",
+                          geometryTime="OFF" if not state.tray_fitting else f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
                           playing=state.playing, pendingPlay=state.pending_play, console=self.live.data(state),
-                          reference=str(state.reference_folder or ""), masks=self.show_masks, trays=self.show_trays,
+                          reference=str(state.reference_folder or ""), masks=self.show_masks, trays=state.tray_fitting,
                           inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString())
+        self._view["archivesFolder"] = QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "outputs/sam3_registration")).toString()
         self.changed.emit()
 
     def _refresh(self, receipt=None):
@@ -160,8 +170,10 @@ class MatchBridge(QObject):
             self._publish()
             return
         shown = self._shown
-        height, width = shown.current.frame.shape[:2]
+        width, height = self._display_size
         if not (0 <= x < width and 0 <= y < height):
+            return
+        if self.flow.click(x, y, positive, shown):
             return
         if shown.stage == "table":
             if self.table_mode == "manual":
@@ -304,8 +316,6 @@ class MatchBridge(QObject):
                         confirmed=True, board_size_in=size, board_size_mm=[value * 25.4 for value in size],
                         dimensions_confirmed=True, coordinate_space="source_image_pixels")
         receipt = self.match.calibration.confirm_table(self.corners, boundary, board_size_in=size)
-        if receipt.status != "rejected":
-            self._board_size = size
         return self._refresh(receipt)
 
     @Slot(QUrl, str)
@@ -323,10 +333,22 @@ class MatchBridge(QObject):
 
     @Slot()
     def reset(self):
+        self.flow.action("cancel")
         receipt = self.match.reset()
         if receipt.status != "rejected":
             self.selected, self.mode = 1, "Points"
             self.live.clear()
+        self._refresh(receipt)
+
+    @Slot(QUrl)
+    def loadArchive(self, path):
+        receipt = self.match.registration.load_archive(path.toLocalFile())
+        if receipt.status != "rejected":
+            self.live.clear()
+            state = self.match.snapshot()
+            self.selected = next(iter(state.current.prediction["object_ids"]), 1)
+            self.mode = "Assign"
+            self.corners, self.corner_points = None, []
         self._refresh(receipt)
 
     @Slot(str)
@@ -362,6 +384,9 @@ class MatchBridge(QObject):
     @Slot()
     def escapeLive(self):
         if not self._closed:
+            if self.flow.kind(self.match.snapshot()) != "live":
+                self.flow.action("cancel")
+                return
             self.live.escape()
             self._refresh()
 
@@ -370,7 +395,8 @@ class MatchBridge(QObject):
         if overlay == "masks":
             self.show_masks = enabled
         elif overlay == "trays":
-            self.show_trays = enabled
+            self._refresh(self.match.set_tray_fitting(enabled))
+            return
         self._refresh()
 
     @Slot()

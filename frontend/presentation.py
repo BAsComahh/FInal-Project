@@ -11,8 +11,12 @@ def unit_uncertainties(state, object_id):
     issues = {}
     if object_id in prediction.get("estimated_ids", ()):
         issues["mask"] = "Estimated"
-    elif tracking is not None and tracking.status == "failed":
-        issues["mask"] = "Missing"
+    elif tracking is not None and tracking.status == "failed" and tracking.recovery_phase == "review":
+        issues["mask"] = "Candidate ready for review"
+    if "mask" in issues and tracking is not None and tracking.status == "failed" and tracking.recovery_note:
+        issues["mask"] += f" · {tracking.recovery_note}"
+    if not state.rules.track_facing:
+        return issues
     front = state.rules.fronts.get(object_id)
     if (front is None or object_id in prediction.get("unavailable_ids", ()) or
             tracking is not None and tracking.status == "failed"):

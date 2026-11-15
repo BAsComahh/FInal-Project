@@ -66,6 +66,40 @@ class UnitRoster:
             raise ValueError(f"Invalid unit JSON: {path}: {error}") from error
         return cls(payload, source=str(path))
 
+    @classmethod
+    def from_snapshot(cls, payload):
+        """Restore generated instance identities without allocating new numbers."""
+        roster = cls(payload["roster"], source=payload.get("source"))
+        roster.units = _records(payload.get("units"), "unit_id", "saved units")
+        for uid, unit in roster.units.items():
+            type_id = unit.get("type_id")
+            if type_id not in roster.types:
+                raise ValueError(f"Unknown saved type for {uid}")
+            prefix = type_id + ("." if roster.types[type_id].get("list_id") else "")
+            serial = uid.removeprefix(prefix) if uid.startswith(prefix) else ""
+            if not serial.isdecimal() or int(serial) < 1:
+                raise ValueError(f"Invalid saved unit ID: {uid}")
+            unit.setdefault("attributes", {})
+        rows = payload.get("bindings")
+        if not isinstance(rows, list):
+            raise ValueError("Saved bindings must be a list")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise ValueError("Invalid saved object binding")
+            obj, uid = row.get("object_id"), row.get("unit_id")
+            if (isinstance(obj, bool) or not isinstance(obj, int) or obj < 1 or obj in roster.bindings
+                    or uid not in roster.units or uid in roster.bindings.values()):
+                raise ValueError("Saved bindings contain invalid or duplicate identities")
+            roster.bindings[obj] = uid
+        if set(roster.bindings.values()) != set(roster.units):
+            raise ValueError("Each saved unit must have exactly one object binding")
+        counters = payload.get("counters", {})
+        if not isinstance(counters, dict) or any(key not in roster.types or isinstance(value, bool)
+                or not isinstance(value, int) or value < 0 for key, value in counters.items()):
+            raise ValueError("Invalid saved instance counters")
+        roster.counters = dict(counters)
+        return roster
+
     def _next(self, type_id):
         if type_id not in self.types:
             raise ValueError(f"Unknown type: {type_id}")

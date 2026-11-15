@@ -8,6 +8,8 @@ from application.config import DEFAULT_TRACKER, DEFAULT_UNITS, PROJECT_ROOT
 def video_parser(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument("video", type=Path)
+    parser.add_argument("--registration", dest="registration_archive", type=Path,
+                        help="Load a completed registration directory or prompts.json; its saved frame sets the start")
     parser.add_argument("--units", type=Path, default=DEFAULT_UNITS,
                         help="JSON unit-type catalog (default: ABC test catalog, inputs/units.video_estimate.json)")
     parser.add_argument("--start", type=float, default=0, help="Local clip start in seconds")

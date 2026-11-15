@@ -16,6 +16,7 @@ def create_window(app, match, *, visible=True, preview_width=960):
     engine = QQmlApplicationEngine()
     engine.addImageProvider("match", bridge.images)
     engine.rootContext().setContextProperty("ui", bridge)
+    engine.rootContext().setContextProperty("flow", bridge.flow)
     engine.setInitialProperties({"visible": visible, "width": max(820, preview_width + 340)})
     engine.load(QUrl.fromLocalFile(str(Path(__file__).with_name("Main.qml"))))
     if not engine.rootObjects():

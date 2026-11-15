@@ -1,5 +1,7 @@
 # 注册后的候选视频追踪
 
+EdgeTAM现显式开启HF后处理`apply_non_overlapping_constraints=True`：同一像素仅归属于mask分数最高的对象，之后二值化，原object ID顺序保持。它不会自动纠正错误身份或保证恢复被吞并对象；真实视频效果仍待实测。
+
 首帧仍由现有 SAM3 点击分割、撤回、绑定 type，并一次保存 reference。可通过 `--tracker sam3|cutie|edgetam` 选择后续传播；默认 `edgetam`，显式选择 `sam3` 或 `cutie` 可作对照，LK 已移除。传播后端不要求预先认识本局兵种，只接收已注册实例的完整 mask 和 ID。默认运行前需准备下述 EdgeTAM 资产；此切换不表示取得了新的速度或准确率排名。
 
 ## EdgeTAM 单实例手动恢复

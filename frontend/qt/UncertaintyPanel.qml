@@ -11,7 +11,7 @@ Rectangle {
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 16; spacing: 12
         Text { text: "Needs attention"; color: "#203d50"; font.pixelSize: 18; font.weight: Font.DemiBold }
-        Text { text: "Mask / Facing · " + panel.viewData.count + " units\nSelect a unit to inspect."; color: "#647b8b"; font.pixelSize: 12 }
+        Text { text: (panel.viewData.showFacing ? "Mask / Facing" : "Mask") + " · " + panel.viewData.count + " units\nSelect a unit to inspect."; color: "#647b8b"; font.pixelSize: 12 }
         RowLayout {
             Layout.fillWidth: true; Layout.fillHeight: true; spacing: 10
             Repeater {

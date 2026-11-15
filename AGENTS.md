@@ -96,6 +96,37 @@ try local fitting before full fallback when refitting is required. Keep the
 baseline at the last actual fit so slow motion accumulates. Never reuse across
 identity/calibration/size changes, reset, missing masks or recovery targets.
 
+The 2026-11-13 follow-up authorizes Qt migration of existing recovery review,
+manual correction, B08 recalibration, unit/terrain editing and replay. Add a
+red correction action to the unit menu using isolated recovery of the original
+ID. Keep playback/history running. Audience/What-if remain TODO. Tray refit
+frequency/latency and ineffective automatic recovery are high-priority issues.
+The later 2026-11-13 P0 decision authorizes a 5% centroid-motion gate and exact
+image-space mask IoU (retain 0.90), removing independent area, normalized-shape
+and axis gates. Keep the last actual successful/failed attempt's mask baseline;
+failed fits wait for accumulated mask change rather than retrying unchanged masks.
+Use bounded asynchronous CPU tray batches, keep all model operations serial,
+and retain separate mask/geometry times, same-frame geometry queries, original-frame
+history and invalidation across tracking gaps, recovery, identity and calibration.
+Record the removed gates for rollback. The user will run this milestone's practical
+checks; do not delegate acceptance or add test files for it.
+
+The 2026-11-14 decision makes the Trays layer switch pause/resume rectangle
+fitting through the shared application boundary. Keep source/mask tracking running,
+skip geometry-dependent facing work while off, reject cancelled in-flight geometry,
+and never bridge movement history across this deliberate geometry pause.
+The later follow-up permits one-shot Distance queries while Trays is off:
+capture a matching accepted observation when selection is complete, fit/query once,
+show its source time, and keep the result fixed as playback continues. Query-only
+geometry must not enable background fits or write live geometry/facing/history.
+Distance fits only the selected pair. Off-mode LOS/Move show "Not implemented"
+and remain TODO; existing continuous queries when Trays is on are unchanged.
+The latest 2026-11-14 decision retains facing implementation but disables its
+runtime use by default: no DVMNet loading/checks/recovery or directed-front
+continuity updates. Keep initial registration evidence; do not carry it as live
+facing. Hide Missing and facing attention notices without changing internal
+failure, automatic recovery, identity or query-validity protections.
+
 The 2026-11-11 D36 follow-up separately authorized a minimal registration-only
 Qt preview and accepted its feasibility. Keep it isolated in
 `design/ui/registration`; it uses saved masks and sample catalogs without SAM,
@@ -184,6 +215,13 @@ requirement from 2026-10-27.
 
 ## Registration workflow
 
+The 2026-11-14 follow-up authorizes loading completed registration archives for
+repeat video checks. Restore original masks/IDs/catalog/calibration at the saved
+registration frame, then initialize tracking through existing supported mask APIs.
+Keep loaded registration locked, validate the matching video/frame, and publish
+fresh references/history per test without changing the source archive. Loading
+is an initial-session operation; an active match must be reset first.
+
 Point registration and undo take place on the initial frame before the first
 playback. Starting playback locks point editing, including while paused;
 explicit reset starts a new registration. Later corrections belong to future
@@ -210,6 +248,12 @@ Registration edits are drafts held in memory. Persist final references only
 when the user finishes registration (S, or the first playback action). Commit
 once per registration, then lock point and type editing. Undoing a draft unit
 releases its instance number for reuse without renumbering other units.
+
+The 2026-11-13 registration decision defers tray fitting until type assignment
+confirms the current mask. Point edits/undo invalidate only that object's tray;
+binding/refitting must preserve all other accepted trays. Reconfirm the type after
+editing a bound mask. Registration and Live share update_trays with an explicit
+target set; per-object versions reject stale registration fits.
 
 ## Design record for dissertation
 

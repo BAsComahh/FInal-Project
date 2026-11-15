@@ -68,6 +68,8 @@ class CurrentSnapshot:
     prediction_frame: object
     prediction_metadata: object
     view_revision: int
+    geometry_frame: object = None
+    geometry_revision: int = 0
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,7 @@ class RosterSnapshot:
 class RulesSnapshot:
     fronts: object
     terrain: object
+    track_facing: bool = True
 
 
 @dataclass(frozen=True)
@@ -137,3 +140,4 @@ class MatchSnapshot:
     note: str
     registration_prompts: object
     recovery: object
+    tray_fitting: bool = True

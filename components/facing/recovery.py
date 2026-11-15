@@ -18,10 +18,12 @@ class FacingRecovery:
         self.retry_change, self.retry_seconds, self.min_coverage = retry_change, retry_seconds, min_coverage
 
     def evaluate(self, estimator, prediction, raw_frame, metadata, context, references, fronts, states,
-                 excluded=(), targets=None, force=()):
+                 excluded=(), targets=None, force=(), cancelled=None):
         rows, updates = {}, {}
         masks = dict(zip(prediction["object_ids"], prediction["masks"]))
         for obj, reference in references.items():
+            if cancelled is not None and cancelled.is_set():
+                break
             if targets is not None and obj not in targets:
                 continue
             front = None if obj in force else fronts.get(obj)

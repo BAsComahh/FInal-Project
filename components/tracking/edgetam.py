@@ -158,6 +158,7 @@ class EdgeTamTracker:
             order = [output_ids.index(obj_id) for obj_id in object_ids]
             masks = self.processor.post_process_masks(
                 [outputs.pred_masks], original_sizes=inputs.original_sizes, binarize=True,
+                apply_non_overlapping_constraints=True,
             )[0]
             if tuple(masks.shape) != (len(object_ids), 1, *frame.shape[:2]):
                 raise RuntimeError(f"EdgeTAM returned unexpected mask shape {tuple(masks.shape)}")

@@ -1,6 +1,14 @@
 # 无窗口比赛应用
 
+当前`FACING_TRACKING_ENABLED=False`，保留实现但不构建／加载DVMNet，不更新实时有向正面。注册F资料仍可保存，开始播放后清除活动正面；重新开启Trays不会启用facing。`rules.track_facing`在快照中说明该状态，涉及正面的规则保持未知输入约束。
+
+`set_tray_fitting(bool)`暂停／恢复持续托盘拟合，状态在快照`tray_fitting`和`tray_status`中公开。Qt Trays复选框与旧客户端T共同调用此命令；关闭时mask继续，后台托盘及依赖它的正面检查停止。Distance仍可选齐两单位后做一次快照拟合，结果固定、带源时间，不写实时几何或历史；此模式下LOS／Move显示Not implemented。重新开启使用最新已接纳mask恢复连续查询；直播动作在暂停处中断，历史不跨该段补运动。在算的原生调用完成后停止处理剩余对象，过期结果不接纳。
+
 `MatchApplication` 拥有一份 GameData、一个源时钟与一个串行模型 worker。构造时即加载模型；`tick(now=None)` 接纳结果、推进源并调度，不等待模型 Future。`snapshot()` 返回冻结元数据和共享只读图像／mask，当前源帧与已接纳观测各有 FrameRef。反复读取同一 revision 不复制图像、不写历史。
+
+正常传播的 CPU 托盘拟合由 `tray_worker.py` 独立处理，最多一在算帧批次＋一最新待算批次。所有模型操作（包括几何完成后的 DVMNet）仍走原串行队列。`current.prediction_metadata` 是 mask 时间；`current.prediction.geometry_metadata` 和 `current.geometry_frame` 是托盘／正面的原始观测时间及图像。查询与历史使用几何时间，`geometry_revision` 独立于 mask 的显示 revision。迟到结果不倒退 mask，也不跨真实缺失、恢复、标定、尺寸、身份和重置边界接纳。注册与重标定／恢复提交仍作为完整事务处理。
+
+注册与Live共用`tray_worker.update_trays`，请求的`tray_ids`指定更新范围。注册正负点和撤点只使目标几何失效，`registration.bind()`确认当前mask后才排该ID的拟合；其他单位的结果保留。绑定后再次编辑需重新赋予类型确认。注册拟合携带逐对象`tray_versions`，接纳时按当前版本过滤，继续改点／改绑不会复活旧结果。
 
 默认 `seconds=None` 播放到视频结尾，`inference_fps=None` 表示 worker 空闲时处理最新未消费帧，不施加额外频率上限；显式正数可限定时长或调度频率。stride 参数已删除。快照的 `inference_fps` 与注册记录的 `inference_fps_limit` 无上限时对应 None／JSON null，串行、帧对齐和代次保护保持。
 
@@ -17,6 +25,8 @@ finally:
 ```
 
 业务入口为 `registration`、`calibration`、`recovery`、`geometry`、`scene_editing` 和 `replay`。公共命令返回 `CommandReceipt(status, reason, request_id, value)`；预期输入／文件错误是 rejected，内部合同违例仍抛出。pending 只说明已排队，后台成功状态由后续快照／对应流程结果提供。文件目录等同步结果在 value 中；历史、模型和可写业务对象不返回。
+
+`registration.load_archive(path)`（构造参数 `registration_archive=path`）载入已完成注册目录或其 `prompts.json`。`registration_archive.py` 独立读取并核对当前视频同帧像素、mask、ID绑定与标定，验证／发布成功后才更换会话；复用原ID和同帧tray。载入的新注册锁定，`startup_ready` 后调用 `start()`，串行后端通过公开 `initialize(..., masks, source_frame=...)` 重建记忆。源起点采用存档帧，显式seconds由该帧计算。新建reference和history，原文件不变；不续播旧历史／内部模型会话，换档先reset。
 
 - 注册：`point(object_id, source_point, FrameRef, positive=True)`、`undo_point()`、`bind(object_id, type_id)`、`unbind(object_id)`、目录导入／尺寸更新、`finish_registration(overlay=None)`。未提供 overlay 时导出源观测的 mask 着色图；S 锁定后只允许 R 开启新注册。
 - 启动：`start(overlay=None)` 在一次保存后初始化所选 tracker，再启动源；`reset()` 与 `close()` 统一作废旧工作及处理历史，关闭幂等。

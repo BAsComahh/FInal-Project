@@ -73,25 +73,31 @@ Item {
             }
         }
         Repeater {
-            model: [{tool: "distance", label: "Distance", key: "D"}, {tool: "los", label: "LOS", key: "L"}, {tool: "move", label: "Move", key: "V"}]
+            model: [{tool: "distance", label: "Distance", key: "D"}, {tool: "los", label: "LOS", key: "L"}, {tool: "move", label: "Move", key: "V"}, {tool: "correct", label: "Correct", key: ""}]
             ConsoleButton {
                 id: actionButton
                 required property var modelData
                 required property int index
                 objectName: "live_" + modelData.tool
                 visible: hud.viewData.tool === "select"
-                enabled: hud.viewData.canQuery
+                enabled: modelData.tool === "correct" ? hud.viewData.selected : hud.viewData.canQuery
                 width: 114
                 height: 39; cornerRadius: 24
-                x: 245 + (index === 1 ? 112 : 78) - 57
-                y: 132 + (index - 1) * 100 - 20
+                x: 245 + (index === 1 || index === 2 ? 105 : 60) - 57
+                y: 13 + index * 66
                 text: modelData.label
+                background: Rectangle {
+                    radius: 24
+                    color: actionButton.modelData.tool === "correct" ? (actionButton.hovered ? "#a92d37" : "#c63d49") : "white"
+                    border.color: actionButton.modelData.tool === "correct" ? "#a92d37" : "#cdd9e1"
+                    opacity: actionButton.enabled ? 1 : .45
+                }
                 contentItem: RowLayout {
                     spacing: 8
-                    Text { text: actionButton.modelData.label; color: "#233b49"; Layout.fillWidth: true; font.pixelSize: 13 }
+                    Text { text: actionButton.modelData.label; color: actionButton.modelData.tool === "correct" ? "white" : "#233b49"; Layout.fillWidth: true; font.pixelSize: 13 }
                     Text { text: actionButton.modelData.key; color: "#627985"; font.family: "Consolas"; font.pixelSize: 10 }
                 }
-                onClicked: ui.liveTool(modelData.tool)
+                onClicked: modelData.tool === "correct" ? flow.open("correct") : ui.liveTool(modelData.tool)
             }
         }
     }

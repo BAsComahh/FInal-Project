@@ -62,6 +62,7 @@ class VideoApplication:
         self.editor.clear()
 
     def render(self):
+        self.display.show_rectangles = self.state.tray_fitting
         if self.replay.active:
             image = self.replay_view.render(self.preview_size)
         elif self.stage in (Stage.TABLE, Stage.RECALIBRATE):
@@ -385,7 +386,8 @@ class VideoApplication:
             if key == ord("m"):
                 self.display.show_masks = not self.display.show_masks
             else:
-                self.display.show_rectangles = not self.display.show_rectangles
+                self.match.set_tray_fitting(not self.state.tray_fitting)
+                self.display.show_rectangles = self.state.tray_fitting
         elif key == 32:
             self._toggle_play()
         elif key == ord("n"):
