@@ -122,7 +122,6 @@ ColumnLayout {
                     LayerPill {
                         text: "Trays"
                         checkedState: controls.uiState.trays
-                        badgeText: controls.uiState.trays ? "" : "PAUSED"
                         onClicked: ui.setOverlay("trays", !controls.uiState.trays)
                     }
 

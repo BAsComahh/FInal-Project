@@ -10,10 +10,9 @@ def update_trays(request, prediction, *, search, stability, previous=None):
     """Fit requested IDs and merge their results, shared by registration and Live."""
     prediction = {**prediction, "geometry_pending": False}
     context, kind = request["tray_context"], request["kind"]
-    cancelled = request.get("tray_cancelled")
     if kind == "facing":
         prediction.pop("facing_results", None)
-    if context is None or cancelled is not None and cancelled.is_set():
+    if context is None:
         prediction.update(trays={}, tray_errors={}, tray_fit_stats={})
         return prediction
     corrected = (request.get("automatic_applied", []) if kind == "automatic_recovery" else
@@ -29,7 +28,7 @@ def update_trays(request, prediction, *, search, stability, previous=None):
             batch = {"object_ids": [prediction["object_ids"][i] for i in normal], "masks": prediction["masks"][normal]}
             trays, errors = fit_registered_trays(request["frame"], batch, context,
                 previous=old.get("trays", {}) if search != "full" else None, reuse_stable=search == "adaptive",
-                stability=stability, source_frame=request["metadata"]["frame_index"], cancelled=cancelled)
+                stability=stability, source_frame=request["metadata"]["frame_index"])
             old = {**old, "trays": trays, "tray_errors": errors}
             request["prediction"] = old
     if targets is not None:
@@ -42,7 +41,7 @@ def update_trays(request, prediction, *, search, stability, previous=None):
     attempts = {}
     trays, errors = fit_registered_trays(request["frame"], target, context,
         previous=previous if search != "full" else None, reuse_stable=search == "adaptive",
-        stability=stability, source_frame=request["metadata"]["frame_index"], attempts=attempts, cancelled=cancelled)
+        stability=stability, source_frame=request["metadata"]["frame_index"], attempts=attempts)
     if targets is not None:
         old = request.get("prediction") or {}
         prediction["trays"] = {**{obj: tray for obj, tray in old.get("trays", {}).items() if obj not in targets}, **trays}
@@ -80,7 +79,6 @@ class TrayWorker:
 
     def offer(self, request, prediction, tracking):
         self.pending = {**{key: request[key] for key in ("frame", "metadata", "raw_frame", "generation")},
-                        "tray_cancelled": request.get("tray_cancelled"),
                         "kind": "facing", "prediction": dict(prediction),
                         "tray_context": deepcopy(request["tray_context"]), "tray_epoch": self.epoch,
                         "tracking": deepcopy(tracking)}

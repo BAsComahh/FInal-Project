@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 import sys
 from time import perf_counter, time
-from threading import Event
 import cv2
 import numpy as np
 from components.video_io import VideoSource
@@ -95,44 +94,6 @@ class MatchSession:
     @property
     def inference_interval(self):
         return 0.0 if self.inference_fps is None else 1 / self.inference_fps
-
-    @property
-    def tray_fitting(self):
-        return not self.worker.tray_cancelled.is_set()
-
-    def _pause_geometry(self):
-        current = self.data.current
-        if current.prediction is not None:
-            current.prediction = {**current.prediction, "trays": {}, "tray_errors": {}, "facing_results": {}}
-            self.data.record_history(kind="interruption", source=self.source.metadata(), interruption="tray_fitting_paused")
-
-    def set_tray_fitting(self, enabled):
-        if enabled == self.tray_fitting:
-            return
-        self.trays.invalidate()
-        current = self.data.current
-        if not enabled:
-            self.worker.tray_cancelled.set()
-            request = self.worker.request
-            if request is not None and request["kind"] == "trays":
-                self.pending_trays.update(obj for obj, version in (request.get("tray_versions") or {}).items()
-                    if self.tray_versions.get(obj) == version and obj not in self.registration.unconfirmed)
-            if self.playback_started:
-                self.pending_trays.clear()
-                self._pause_geometry()
-        else:
-            self.worker.tray_cancelled = Event()
-            if self.playback_started:
-                self.pending_trays.clear()
-            if (self.playback_started and current.prediction is not None and
-                    current.prediction_metadata.get("calibration_version") == self.data.board.calibration_version):
-                request = dict(frame=current.prediction_frame, metadata=current.prediction_metadata,
-                    raw_frame=self.prediction_raw_frame, generation=self.generation, tray_context=self.worker.tray_context,
-                    tray_cancelled=self.worker.tray_cancelled)
-                self.trays.offer(request, current.prediction, self.data.tracking)
-        self.mark_changed()
-        self.note = ("Tray fitting resumed from the latest accepted masks." if enabled else
-                     "Tray fitting paused. Source playback and mask tracking continue.")
 
     def _write_diagnostics(self, event, *, request=None, error=None, extra=None):
         try:
@@ -276,8 +237,6 @@ class MatchSession:
                 "generation": self.generation, "raw_frame": self.source.frame}
 
     def tray_status(self):
-        if not self.tray_fitting:
-            return "OFF"
         if self.data.board.image_to_plane is None:
             return "NO CALIB"
         if not self.worker.tray_context["sizes"]:
@@ -296,9 +255,6 @@ class MatchSession:
     def start_stream(self, now=None):
         if not self.data.rules.track_facing:
             self.data.rules.fronts.clear()
-        if not self.tray_fitting:
-            self.pending_trays.clear()
-            self._pause_geometry()
         prediction = self.data.current.prediction or {}
         self._geometry_visible = {obj for obj, mask in zip(prediction.get("object_ids", ()), prediction.get("masks", ()))
                                   if mask.any() and obj not in prediction.get("unavailable_ids", ())}
@@ -337,7 +293,7 @@ class MatchSession:
         elif (request := registration.take_pending_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values, generation=self.generation, raw_frame=self.source.frame)
-        elif self.tray_fitting and self.pending_trays and self.data.current.prediction is not None:
+        elif self.pending_trays and self.data.current.prediction is not None:
             targets = tuple(sorted(self.pending_trays))
             self.pending_trays.clear()
             self.worker.submit("trays", frame=self.data.current.prediction_frame,
@@ -349,7 +305,7 @@ class MatchSession:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
                                previous_trays={**self.data.current.prediction.get("trays", {}), **self.trays.attempts})
-        elif self.tray_fitting and not self.model_failed and (ready := self.trays.take_ready()) is not None:
+        elif not self.model_failed and (ready := self.trays.take_ready()) is not None:
             request, prediction = ready
             self.worker.submit("facing", frame=request["frame"], metadata=request["metadata"],
                 raw_frame=request.get("raw_frame"), prediction=prediction, generation=request["generation"],
@@ -444,7 +400,7 @@ class MatchSession:
         current = self.data.current
         metadata = request["metadata"]
         previous = (current.prediction or {}).get("geometry_metadata")
-        valid = (self.tray_fitting and metadata.get("calibration_version") == self.data.board.calibration_version and
+        valid = (metadata.get("calibration_version") == self.data.board.calibration_version and
                  current.prediction is not None and metadata["frame_index"] <= current.prediction_metadata["frame_index"] and
                  (previous is None or metadata["frame_index"] >= previous["frame_index"]))
         if error is not None:
@@ -475,8 +431,8 @@ class MatchSession:
                     interruptions=[self.data.units.bindings[obj] for obj in lost if obj in self.data.units.bindings])
             self._geometry_visible = visible
             self.data.current.geometry_revision += 1
-        if self.tray_fitting and not self.pending_trays:
-            self.trays.offer({**request, "tray_cancelled": self.worker.tray_cancelled}, prediction, self.data.tracking)
+        if not self.pending_trays:
+            self.trays.offer(request, prediction, self.data.tracking)
 
     def advance(self, now=None):
         registration, calibration = self.registration, self.calibration
@@ -491,10 +447,6 @@ class MatchSession:
                 self._write_diagnostics("task_error" if diag_error is not None else request["kind"],
                                         request=request, error=diag_error)
             if request["generation"] == self.generation:
-                cancelled = request.get("tray_cancelled")
-                if prediction is not None and cancelled is not None and cancelled.is_set():
-                    prediction = {**prediction, "trays": {}, "tray_errors": {}, "facing_results": {},
-                                  "tray_fit_stats": {}, "geometry_pending": True}
                 if request["kind"] == "facing":
                     self._accept_geometry(request, prediction, error)
                     prediction = error = None
@@ -531,9 +483,6 @@ class MatchSession:
                     self.prediction_raw_frame = request.get("raw_frame")
                     if accepted and request["kind"] == "propagate":
                         self._queue_geometry(request)
-                        if not self.tray_fitting:
-                            self.data.record_history(source=self.source.metadata(),
-                                observation=(self.data.current.prediction, request["frame"], request["metadata"]))
                     if self.registration_locked and request["kind"] == "recalibrate":
                         self.data.record_history(
                             kind="recalibration" if request["kind"] == "recalibrate" else "observation",
@@ -581,8 +530,7 @@ class MatchSession:
             if target >= self.end_index:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
-        if self.tray_fitting:
-            self.trays.start((self.data.current.prediction or {}).get("trays", {}))
+        self.trays.start((self.data.current.prediction or {}).get("trays", {}))
         self.schedule(now)
         self._poll_history()
 

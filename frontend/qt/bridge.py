@@ -26,6 +26,7 @@ class MatchBridge(QObject):
         self.selected = 1
         self.mode = "Points"
         self.show_masks = True
+        self.show_trays = True
         self.table_mode = "detecting"
         self.corners, self.corner_points = None, []
         self.corner_method = "lsd"
@@ -134,7 +135,7 @@ class MatchBridge(QObject):
             self._image_revision += 1
 
         overlay_updated, overlay_rgba = self.renderer.sync_overlay(
-            state, selected=selected, masks=self.show_masks, trays=state.tray_fitting
+            state, selected=selected, masks=self.show_masks, trays=self.show_trays
         )
         if overlay_updated:
             self.images.publish(overlay_rgba, kind="overlay")
@@ -146,7 +147,7 @@ class MatchBridge(QObject):
             selected=selected,
             target=target,
             queries=queries,
-            trays=state.tray_fitting,
+            trays=self.show_trays,
             corners=self.corners if state.stage == "table" else None,
             points=self.corner_points if state.stage == "table" else (),
             flow=self.flow,
@@ -220,13 +221,13 @@ class MatchBridge(QObject):
             sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
             observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
             observationAge=f"{age:.2f}" if age is not None else "—",
-            geometryTime="OFF" if not state.tray_fitting else f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
+            geometryTime=f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
             playing=state.playing,
             pendingPlay=state.pending_play,
             console=self.live.data(state),
             reference=str(state.reference_folder or ""),
             masks=self.show_masks,
-            trays=state.tray_fitting,
+            trays=self.show_trays,
             trayStatus=state.tray_status,
             terrainCount=len(state.rules.terrain),
             inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString(),
@@ -475,8 +476,7 @@ class MatchBridge(QObject):
         if overlay == "masks":
             self.show_masks = enabled
         elif overlay == "trays":
-            self._refresh(self.match.set_tray_fitting(enabled))
-            return
+            self.show_trays = enabled
         self._refresh()
 
     @Slot()

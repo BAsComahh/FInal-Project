@@ -140,4 +140,3 @@ class MatchSnapshot:
     note: str
     registration_prompts: object
     recovery: object
-    tray_fitting: bool = True

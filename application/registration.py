@@ -333,7 +333,7 @@ class Registration:
         if self._data.reference_folder is not None:
             self._session.note = f"Registration already saved: {self._data.reference_folder}"
             return CommandReceipt("accepted", value=self._data.reference_folder)
-        if self._session.worker.busy or self.pending_clicks or (self._session.tray_fitting and self._session.pending_trays) or self.updating_points or self._session.needs_reset or self._session.needs_load or self._session.needs_prepare:
+        if self._session.worker.busy or self.pending_clicks or self._session.pending_trays or self.updating_points or self._session.needs_reset or self._session.needs_load or self._session.needs_prepare:
             raise ValueError("Wait for the point prompts to finish before completing registration")
         if self._session.model_failed:
             raise ValueError("Resolve the SAM3 error before completing registration; R resets")
@@ -409,10 +409,8 @@ class Registration:
         current = self._data.current.prediction or {}
         ids = set(prediction["object_ids"])
         if kind == "trays":
-            cancelled = request.get("tray_cancelled")
             valid = {obj for obj, version in (request.get("tray_versions") or {}).items()
-                     if self._session.tray_versions.get(obj) == version and obj not in self.unconfirmed
-                     and (cancelled is None or not cancelled.is_set())}
+                     if self._session.tray_versions.get(obj) == version and obj not in self.unconfirmed}
             request["tray_attempts"] = {obj: row for obj, row in (request.get("tray_attempts") or {}).items() if obj in valid}
         else:
             valid = set()

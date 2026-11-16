@@ -9,7 +9,6 @@ import hashlib
 import json
 from pathlib import Path
 from time import perf_counter
-from threading import Event
 import traceback
 from uuid import uuid4
 
@@ -140,7 +139,6 @@ class TaskWorker:
             print(f"Tracking timing log: {self.timing_dir}", flush=True)
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sam3-video")
         self.future = self.request = None
-        self.tray_cancelled = Event()
         self.prompts = []
         self.tray_context = None
         self.last_diagnostics = None
@@ -387,11 +385,7 @@ class TaskWorker:
         if prediction is not None:
             prediction = dict(prediction)
             operation_finished = perf_counter()
-            cancelled = request.get("tray_cancelled")
-            geometry_enabled = cancelled is None or not cancelled.is_set()
-            if not geometry_enabled:
-                prediction.update(trays={}, tray_errors={}, facing_results={}, tray_fit_stats={})
-            elif kind not in ("propagate", "facing", "click", "replace"):
+            if kind not in ("propagate", "facing", "click", "replace"):
                 from .tray_worker import update_trays
                 prediction = update_trays(request, prediction, search=self.tray_search, stability=self.tray_stability,
                     previous=request["previous_trays"] if kind == "start_tracker" else None)
@@ -399,8 +393,7 @@ class TaskWorker:
                 prediction.update(trays={}, tray_errors={}, geometry_pending=True)
             trays_finished = perf_counter()
             references = request.get("facing_references", {})
-            if (kind not in ("propagate", "click", "replace") and self.facing is not None and references
-                    and (cancelled is None or not cancelled.is_set())):
+            if kind not in ("propagate", "click", "replace") and self.facing is not None and references:
                 corrected = (request.get("automatic_applied", []) if kind == "automatic_recovery" else
                              [request["recovery_object_id"]] if kind == "recovery_commit" else None)
                 previous_faces = (request.get("prediction") or {}).get("facing_results", {}) if corrected else {}
@@ -410,7 +403,7 @@ class TaskWorker:
                 try:
                     faces, updates = self.facing_recovery.evaluate(self.facing, prediction, request.get("raw_frame"),
                         request["metadata"], request["tray_context"], references, request["facing_fronts"],
-                        request["facing_states"], excluded, corrected, force=corrected or (), cancelled=cancelled)
+                        request["facing_states"], excluded, corrected, force=corrected or ())
                     request["next_facing_states"] = updates
                 except Exception as error:
                     faces = {obj: {"status": "unknown", "reason": str(error), "unit_id": ref["unit_id"],
@@ -491,7 +484,6 @@ class TaskWorker:
                         "automatic_request": automatic_request, "automatic_candidates": tuple(automatic_candidates),
                         "tray_epoch": tray_epoch, "tray_attempts": tray_attempts, "tracking": tracking,
                         "tray_ids": tray_ids, "tray_versions": tray_versions,
-                        "tray_cancelled": self.tray_cancelled,
                         "facing_references": dict(self.facing_references), "facing_excluded": tuple(self.facing_excluded),
                         "facing_fronts": deepcopy(self.facing_fronts), "facing_states": deepcopy(self.facing_states),
                         "previous_trays": deepcopy({obj: tray for obj, tray in (previous_trays or {}).items()
@@ -502,9 +494,6 @@ class TaskWorker:
 
     def commit_facing(self, request, object_ids=None):
         """Owner-thread commit after generation/calibration and observation acceptance."""
-        cancelled = request.get("tray_cancelled")
-        if cancelled is not None and cancelled.is_set():
-            return
         for obj, state in request.get("next_facing_states", {}).items():
             if object_ids is not None and obj not in object_ids:
                 continue

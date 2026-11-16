@@ -2,7 +2,7 @@
 
 当前暂不使用实时facing，DVMNet不会加载，方向检查／恢复和矩形正面连续更新均停用；代码与初始注册F资料保留。直播侧栏隐藏facing和Missing提示，仅保留Estimated mask／可审核候选；后台失踪判定及自动／手动恢复不变。
 
-Trays复选框同时暂停／恢复后台矩形计算。关闭后视频与mask追踪继续，Distance选齐两单位后才按当时已接纳观测做一次拟合，显示固定距离／矩形及Snapshot时间，不连续更新；此模式下LOS／Move显示Not implemented。开启后恢复连续几何查询。已在执行的单次调用会先结束，旧结果不接纳。
+`Masks`／`Trays` 胶囊仅控制静态叠加层绘制可见性，关闭 `Trays` 时后台矩形拟合与连续 `Distance`／`LOS`／`Move` 几何查询照常运行，不再暂停计算或回退到定帧快照模式。
 
 客户端接入真实 MatchApplication，可重新注册，也可载入已完成注册的真实 mask／绑定再初始化追踪。保留 [独立注册预览](../../design/ui/registration/preview.py)；这里是新客户端入口。注册的部分受控接口与两页离屏加载已通过；新增 Live 单位菜单／信息与底部查询控制台，受控主路径已检查，真实模型与原生交互待验收，完整 UI 尚未迁移。
 
@@ -44,7 +44,7 @@ Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，
 
 mask／facing 不确定信息现在集中在右侧 A／B 双栏，只有需要关注的条目才占用侧栏。正常 facing recovery_phase=tracking 不因连续性／DVMNet 来源而一直告警；pending／failed／waiting、无可用正面和没有监测状态的旧估计仍列出。选择列表单位只是查看信息，不确认恢复，也不重新绑定；侧栏底部另提供进入恢复视图的快捷按钮。信息卡和视频单位名不重复显示这些标签，后端来源及规则警告保留。
 
-正式客户端固定 adaptive，不再提供 `--tray-search`：质心相对上次实际拟合移动 ≤5% 且原图像坐标二值 mask IoU ≥0.90 时复用矩形（旧面积／32×32 轮廓／长轴条件已于 2026-11-13 P0 移除）；明显变化先局部拟合、失败再完整拟合，失败记录同样以尝试帧压缩 mask 为基准等待明显变化。底层 full／local 接口保留作无窗口对照。门槛在 application/config.py 中，是试验值；空 mask、恢复目标、标定／尺寸变化及新注册不复用旧解。状态栏显示 Source／Mask／Geom 时间（Trays 关闭时 Geom 标为 OFF）。如上方第 5 行所述，Trays 复选框同时暂停／恢复后台矩形拟合（关闭期间仅支持 Distance 按需定帧快照）。
+正式客户端固定 adaptive，不再提供 `--tray-search`：质心相对上次实际拟合移动 ≤5% 且原图像坐标二值 mask IoU ≥0.90 时复用矩形（旧面积／32×32 轮廓／长轴条件已于 2026-11-13 P0 移除）；明显变化先局部拟合、失败再完整拟合，失败记录同样以尝试帧压缩 mask 为基准等待明显变化。底层 full／local 接口保留作无窗口对照。门槛在 application/config.py 中，是试验值；空 mask、恢复目标、标定／尺寸变化及新注册不复用旧解。状态栏显示 Source／Mask／Geom 时间。
 
 窗口工厂：`frontend.qt.window.create_window(qgui_app, match, visible=True, preview_width=960)`，返回 `(engine, bridge)`。调用方保留两者至窗口结束；可传入已构造的 MatchApplication。`bridge.close()` 幂等关闭定时器、检测任务和应用。正常入口不创建第二份比赛状态。
 

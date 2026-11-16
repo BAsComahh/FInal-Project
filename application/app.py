@@ -93,16 +93,6 @@ class MatchApplication:
     def set_note(self, note):
         self._session.note = note
 
-    @command
-    def set_tray_fitting(self, enabled):
-        if self._session.closed:
-            raise ValueError("Match is closed.")
-        if not isinstance(enabled, bool):
-            raise ValueError("Tray fitting must be enabled or disabled.")
-        self._session.set_tray_fitting(enabled)
-        self.geometry.invalidate()
-        return CommandReceipt("accepted")
-
     def snapshot(self):
         session, data = self._session, self._session.data
         worker = session.worker
@@ -136,8 +126,7 @@ class MatchApplication:
             session.inference_fps, session.history_warning, session.tray_status(), session.note, freeze(self.registration.clicks),
             freeze({"active": recovery.active, "busy": recovery.busy, "committing": recovery.committing,
                     "candidate_generation": recovery.candidate_generation, "preview": recovery._preview,
-                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}),
-            tray_fitting=session.tray_fitting)
+                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}))
         self._snapshot_key = key
         return self._snapshot
 

@@ -1,8 +1,8 @@
 # 无窗口比赛应用
 
-当前`FACING_TRACKING_ENABLED=False`，保留实现但不构建／加载DVMNet，不更新实时有向正面。注册F资料仍可保存，开始播放后清除活动正面；重新开启Trays不会启用facing。`rules.track_facing`在快照中说明该状态，涉及正面的规则保持未知输入约束。
+当前`FACING_TRACKING_ENABLED=False`，保留实现但不构建／加载DVMNet，不更新实时有向正面。注册F资料仍可保存，开始播放后清除活动正面。`rules.track_facing`在快照中说明该状态，涉及正面的规则保持未知输入约束。
 
-`set_tray_fitting(bool)`暂停／恢复持续托盘拟合，状态在快照`tray_fitting`和`tray_status`中公开。Qt Trays复选框与旧客户端T共同调用此命令；关闭时mask继续，后台托盘及依赖它的正面检查停止。Distance仍可选齐两单位后做一次快照拟合，结果固定、带源时间，不写实时几何或历史；此模式下LOS／Move显示Not implemented。重新开启使用最新已接纳mask恢复连续查询；直播动作在暂停处中断，历史不跨该段补运动。在算的原生调用完成后停止处理剩余对象，过期结果不接纳。
+前端 `Trays`／`T` 开关仅控制托盘轮廓的显示可见性（与 `Masks`／`M` 相同）；后台托盘拟合与连续几何查询始终保持运行，不再暂停或使用一次性定帧快照。
 
 `MatchApplication` 拥有一份 GameData、一个源时钟与一个串行模型 worker。构造时即加载模型；`tick(now=None)` 接纳结果、推进源并调度，不等待模型 Future。`snapshot()` 返回冻结元数据和共享只读图像／mask，当前源帧与已接纳观测各有 FrameRef。反复读取同一 revision 不复制图像、不写历史。
 

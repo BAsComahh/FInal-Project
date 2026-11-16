@@ -693,9 +693,8 @@ ApplicationWindow {
                         Layout.fillWidth: true
                     }
                     Text {
-                        text: "Src " + s.sourceTime + "s · Mask " + s.observationTime + "s · Geom "
-                              + (s.geometryTime === "OFF" ? "OFF" : s.geometryTime + "s")
-                        color: s.geometryTime === "OFF" ? theme.warning : theme.inkMuted
+                        text: "Src " + s.sourceTime + "s · Mask " + s.observationTime + "s · Geom " + s.geometryTime + "s"
+                        color: theme.inkMuted
                         font.family: theme.fontMono
                         font.pixelSize: 11
                     }

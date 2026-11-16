@@ -87,9 +87,6 @@ class QueryLayers:
             scale = np.asarray(preview.shape[1::-1]) / np.asarray(view.current.frame.shape[1::-1])
             inverse = np.linalg.inv(request["image_to_plane"])
             project = lambda points: np.rint(transform_points(points, inverse) * scale).astype(np.int32)
-            for corners in request.get("rectangles", {}).values():
-                polygon = np.rint(np.asarray(corners) * scale).astype(np.int32)
-                cv2.polylines(self._overlay, [polygon], True, (100, 220, 240), 2, cv2.LINE_AA)
             line = result.get("line_mm")
             if "point_a_mm" in result:
                 line = [result["point_a_mm"], result["point_b_mm"]]

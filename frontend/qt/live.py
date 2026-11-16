@@ -67,7 +67,7 @@ class LiveSelection:
             return "This unit has no accepted tracking position."
         if obj in prediction.get("estimated_ids", ()):
             return "Confirm the Estimated mask before querying this unit."
-        if state.tray_fitting and obj not in prediction.get("trays", {}):
+        if obj not in prediction.get("trays", {}):
             return "No accepted tray geometry is available for this unit."
         return ""
 
@@ -128,12 +128,6 @@ class LiveSelection:
             self.request(state)
 
     def request(self, state):
-        if not state.tray_fitting and self.tool in ("los", "move"):
-            ids = [self.unit_id] if self.unit_id else []
-            self.match.geometry.query(self.order if self.tool == "move" else self.tool,
-                                      ids, state.observation_ref, state.current.view_revision)
-            self.note = "Not implemented"
-            return
         self.note = self.unavailable(state, self.unit_id)
         if self.note or self.tool == "select":
             self.match.geometry.clear()
@@ -181,12 +175,11 @@ class LiveSelection:
     def query_view(self, state):
         title = {"distance": "Distance", "los": "Line of sight", "move": "Movement preview"}.get(self.tool, "")
         reason = self.note or ("Click a second unit." if self.tool in ("distance", "los") and self.target_id is None
-                               else "Fitting snapshot distance…" if not state.tray_fitting and self.tool == "distance"
                                else "Waiting for the current observation…")
         result = self.match.geometry.result
         request = self.match.geometry.result_request
         current = result is not None and (request is None or self.match.geometry.result_current(state))
-        view = dict(title=title, status="waiting", metric="", reason=reason, warnings=[], observed="—", fixed=False,
+        view = dict(title=title, status="waiting", metric="", reason=reason, warnings=[], observed="—",
                     showDistance=False, labelX=0.5, labelY=0.5)
         if not current:
             return view
@@ -203,7 +196,6 @@ class LiveSelection:
             view["metric"] = f"{len(result.get('poses', ()))} sampled poses"
         if request is not None:
             view["observed"] = f"{request['metadata']['timestamp_seconds']:.2f}s"
-            view["fixed"] = bool(request.get("fixed"))
         return view
 
     def data(self, state):

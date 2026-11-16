@@ -111,16 +111,12 @@ history and invalidation across tracking gaps, recovery, identity and calibratio
 Record the removed gates for rollback. The user will run this milestone's practical
 checks; do not delegate acceptance or add test files for it.
 
-The 2026-11-14 decision makes the Trays layer switch pause/resume rectangle
-fitting through the shared application boundary. Keep source/mask tracking running,
-skip geometry-dependent facing work while off, reject cancelled in-flight geometry,
-and never bridge movement history across this deliberate geometry pause.
-The later follow-up permits one-shot Distance queries while Trays is off:
-capture a matching accepted observation when selection is complete, fit/query once,
-show its source time, and keep the result fixed as playback continues. Query-only
-geometry must not enable background fits or write live geometry/facing/history.
-Distance fits only the selected pair. Off-mode LOS/Move show "Not implemented"
-and remain TODO; existing continuous queries when Trays is on are unchanged.
+The 2026-11-16 decision restores the Trays/T switch to display visibility
+only (superseding the 2026-11-14 pause/snapshot-Distance exception now that
+async CPU tray batches and three-layer overlay rendering resolved GUI stutter).
+Background tray fitting continues uninterrupted when Trays is hidden, and
+Distance/LOS/Move queries always run continuously against accepted trays
+without one-shot snapshot fitting or "Not implemented" placeholders.
 The latest 2026-11-14 decision retains facing implementation but disables its
 runtime use by default: no DVMNet loading/checks/recovery or directed-front
 continuity updates. Keep initial registration evidence; do not carry it as live

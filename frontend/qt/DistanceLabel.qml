@@ -29,7 +29,6 @@ Item {
         Column {
             id: contentCol
             anchors.centerIn: parent
-            spacing: 2
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: overlay.query.metric
@@ -37,14 +36,6 @@ Item {
                 font.family: overlay.theme.fontBody
                 font.pixelSize: 13
                 font.weight: Font.DemiBold
-            }
-            Text {
-                visible: overlay.query.fixed
-                anchors.horizontalCenter: parent.horizontalCenter
-                text: "Snapshot · " + overlay.query.observed
-                color: overlay.theme.inkMuted
-                font.family: overlay.theme.fontMono
-                font.pixelSize: 10
             }
         }
     }
