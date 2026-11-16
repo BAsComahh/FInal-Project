@@ -30,6 +30,12 @@ Terra 的同一批验收检查注册／Live 加载、实际点选与 Distance �
 
 右侧不确定列表后续修订已由独立 Terra-medium 检查正常 tracking、pending／failed／waiting、Unknown、旧 unchecked 及 queued／searching／inactive 过滤，两个尺寸根窗口加载与原 ID 点选通过。双栏溢出已修正，主实现定向复查 260／300 px 均在内边距内且无 QML 错误；完整 Live 场景中的侧栏显隐及动态布局仍未完整覆盖。证据在 `outputs/refactor_checks/qt_uncertainty_adaptive_terra_20261111`（含 `panel_fix.json`）。
 
+## 2026-11-16 视觉层级、标签避让与视频/叠加真分离
+
+保留上述竖排单位卡片＋右侧半环菜单、底部 LOS／Move 抽屉与 Distance 连线标签约定，在不修改 `application/` 与 `components/` 后端算法的前提下优化了 Qt 客户端的显示效果与交互细节：引入 `Theme.qml` 集中管理字体与配色；顶部栏压缩为 54 px 并随 `Live / Replay / Recovery / Recalibrate / Terrain` 动态切换徽标、主舞台边框及 `Live | Replay` 分段控制，避免回放误标为 LIVE；将工具行与图层开关收拢进单行卡片，为 `Unit information` 增加选中门控与卡片内快捷 `Info` 入口，为 `Undo terrain` 增加地形数量门控与二次确认；修正 `UnitHud.qml` 半环四按钮在真实椭圆弧上的角度分布、双层阴影及阵营色条；隔离表单校验错误 `formError` 并为 `unit_kind`／地形 `kind` 提供下拉选择；将注册目录拆为独立的 `catalogA`/`catalogB` 信号防止状态刷新打断拖放；在 `board.py`／`bridge.py`／`Main.qml` 中将显示拆为“原视频 `board` + 后台线程 `qt-overlay` 异步烘焙的透明静态层 `boardOverlay`（地形／mask／托盘／自动避让已占区域与提示点的胶囊名牌）+ 瞬时透明交互层 `boardInteractive`（选框／查询／提示点／桌角／恢复候选）”，并在 `workflows.py` 中为 Replay 补齐深色棋盘绘制与完整步骤元数据。
+
+在真实 24 对象存档帧（`1528×1019`，`frame_5b58dfca4481`）的隔离 CPU 基准中，静态叠加烘焙耗时由同步全图扫描的 `187.21 ms` 降至后台线程的 `13.94 ms`，播放期 GUI 主线程每帧发布与调度降至 `0.65 ms`；另通过模拟上下文完成 Qt `offscreen`＋`software` 三层加载及 `1180×820`／`820×640` 截图检查（零 QML 错误／警告）。真实 `MatchApplication` 连续视频播放、GPU 并发与原生桌面交互仍待实机验收。
+
 ## 集中验收要求
 
 公开入口仍为 `python -m frontend.qt VIDEO`；窗口工厂见 Qt README。使用 CPU 受控模型输出、真实视频解码和 Qt offscreen/software，不新增测试文件、不操作原生桌面；实际 GPU 非本节点必需。

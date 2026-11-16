@@ -8,9 +8,22 @@ from PySide6.QtQuickControls2 import QQuickStyle
 
 from .bridge import MatchBridge
 
+_WINDOWS_FONTS = (
+    "segoeui.ttf",
+    "segoeuib.ttf",
+    "seguisb.ttf",
+    "consola.ttf",
+    "consolab.ttf",
+    "bahnschrift.ttf",
+)
+
 
 def create_window(app, match, *, visible=True, preview_width=960):
-    QFontDatabase.addApplicationFont("C:/Windows/Fonts/segoeui.ttf")
+    fonts_dir = Path("C:/Windows/Fonts")
+    for filename in _WINDOWS_FONTS:
+        font_path = fonts_dir / filename
+        if font_path.is_file():
+            QFontDatabase.addApplicationFont(str(font_path))
     QQuickStyle.setStyle("Basic")
     bridge = MatchBridge(match)
     engine = QQmlApplicationEngine()

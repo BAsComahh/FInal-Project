@@ -110,7 +110,8 @@ class LiveSelection:
                 unit = state.units.units[unit_id]
                 catalog = state.units.types[unit["type_id"]]
                 rows[catalog.get("list_id", "A")].append(dict(
-                    unitId=unit_id, name=catalog.get("unit_name", catalog.get("name", unit["type_id"])),
+                    unitId=unit_id,
+                    name=catalog.get("classification") or catalog.get("unit_name") or catalog.get("name") or unit["type_id"],
                     details="\n".join(f"{kind.title()}: {status}" for kind, status in issues.items())))
         return dict(rowsA=rows["A"], rowsB=rows["B"], count=len(rows["A"]) + len(rows["B"]),
                     showFacing=state.rules.track_facing)
@@ -214,12 +215,24 @@ class LiveSelection:
         speed = profile.get("speed_in")
         center = self.center(state, obj) if obj is not None else None
         unavailable = self.unavailable(state, self.unit_id) if self.unit_id else "Select a unit on the board."
+        side = catalog.get("list_id", "A") if unit else ""
+        if self.tool == "distance":
+            caption = (f"Distance · {self.unit_id} → {self.target_id}" if self.target_id
+                       else f"Distance · {self.unit_id} · Click a second unit · Esc cancels")
+        elif self.tool == "los":
+            caption = (f"LOS · {self.unit_id} → {self.target_id}" if self.target_id
+                       else f"LOS · {self.unit_id} · Click target unit · Esc cancels")
+        elif self.tool == "move":
+            caption = f"Move · {self.unit_id} · {dict(MOVE_ORDERS).get(self.order, self.order)} · Esc cancels"
+        elif self.unit_id:
+            caption = f"{self.unit_id} selected · D distance · L LOS · V move · Esc clears"
+        else:
+            caption = "Click a unit on the board · D distance · L LOS · V move"
         return dict(selected=unit is not None, unitId=self.unit_id or "", targetId=self.target_id or "",
-                    name=catalog.get("unit_name", catalog.get("name", "")), damage=text(profile.get("damage")),
+                    side=side, name=catalog.get("unit_name", catalog.get("name", "")),
+                    damage=text(profile.get("damage")),
                     speed="—" if speed is None else f"{speed}″", tool=self.tool, order=self.order,
                     anchorX=self.anchor[0], anchorY=self.anchor[1], centerX=center[0] if center else 0,
                     centerY=center[1] if center else 0, hasPosition=center is not None,
                     canQuery=unit is not None and not unavailable, queryBlock=unavailable,
-                    query=self.query_view(state),
-                    caption=(f"{self.tool.title()} · {self.unit_id}" if self.tool != "select" else
-                             f"{self.unit_id} selected · Esc clears" if self.unit_id else "Select a unit on the board"))
+                    query=self.query_view(state), caption=caption)

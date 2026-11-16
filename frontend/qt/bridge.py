@@ -15,6 +15,7 @@ from .workflows import Workflows
 class MatchBridge(QObject):
     changed = Signal()
     uncertaintyChanged = Signal()
+    catalogChanged = Signal()
 
     def __init__(self, match, parent=None):
         super().__init__(parent)
@@ -30,9 +31,16 @@ class MatchBridge(QObject):
         self.corner_method = "lsd"
         self.notice = ""
         self._view = {}
+        self._catalog_a = []
+        self._catalog_b = []
+        self._catalog_key = None
         self._uncertainty = dict(rowsA=[], rowsB=[], count=0, showFacing=False)
-        self._shown = self._image_key = self._published_key = None
+        self._shown = self._video_key = self._published_key = None
         self._image_revision = 0
+        self._overlay_revision = 0
+        self._interactive_revision = 0
+        self._has_overlay = False
+        self._has_interactive = False
         self._local_revision = 0
         self._closed = False
         self._detection = None
@@ -49,6 +57,14 @@ class MatchBridge(QObject):
     @Property("QVariantMap", notify=changed)
     def state(self):
         return self._view
+
+    @Property("QVariantList", notify=catalogChanged)
+    def catalogA(self):
+        return self._catalog_a
+
+    @Property("QVariantList", notify=catalogChanged)
+    def catalogB(self):
+        return self._catalog_b
 
     @Property("QVariantList", constant=True)
     def moveOrders(self):
@@ -75,6 +91,12 @@ class MatchBridge(QObject):
                 self.notice = ("Check TL / TR / BR / BL before continuing." if self.corners else
                                "Automatic table boundary detection failed. Click four table corners manually.")
                 self._local_revision += 1
+        overlay_done, overlay_rgba = self.renderer.poll_overlay(self.match.snapshot().source_ref.generation)
+        if overlay_done:
+            self.images.publish(overlay_rgba, kind="overlay")
+            self._has_overlay = overlay_rgba is not None
+            self._overlay_revision += 1
+            self._local_revision += 1
         self._publish()
 
     def _publish(self):
@@ -94,29 +116,61 @@ class MatchBridge(QObject):
         selected = self.live.object_id(state, self.live.unit_id) if live else self.selected
         target = self.live.object_id(state, self.live.target_id) if live else None
         queries = self.match.geometry if live and self.flow.kind(state) == "live" and self.live.tool != "select" else None
-        image_key = (state.source_ref, state.current.view_revision, selected, target, self.show_masks, state.tray_fitting,
-                     self._local_revision, self.flow.kind(state), self.match.replay.selected,
-                     state.revision if self.flow.kind(state) != "live" else None,
-                     id(queries.result) if queries is not None else None,
-                     tuple(prompt["click_id"] for prompt in state.registration_prompts),
-                     repr(self.corners), tuple(map(tuple, self.corner_points)), state.stage)
-        if image_key != self._image_key:
-            frame = self.renderer.render(state, selected=selected, target=target, queries=queries,
-                                             masks=self.show_masks, trays=state.tray_fitting,
-                                             corners=self.corners if state.stage == "table" else None,
-                                             points=self.corner_points if state.stage == "table" else ())
-            frame = self.flow.render(state, frame)
-            self.images.publish(frame)
-            self._display_size = frame.shape[1::-1]
+        flow_kind = self.flow.kind(state)
+
+        video_key = (
+            state.source_ref,
+            flow_kind,
+            self.match.replay.selected if flow_kind == "replay" else None,
+            state.revision if flow_kind == "replay" else None,
+        )
+        if video_key != self._video_key:
+            video_frame = self.flow.render_video(state, state.current.frame)
+            self.images.publish(video_frame, kind="video")
+            self._display_size = video_frame.shape[1::-1]
             self.match.present(state.source_ref)
             self._shown = state
-            self._image_key = image_key
+            self._video_key = video_key
             self._image_revision += 1
-        types = []
-        for type_id, row in state.units.types.items():
-            title = row.get("classification") or row.get("unit_name") or row.get("name") or type_id
-            side = row.get("list_id", "A")
-            types.append(dict(id=type_id, side=side, title=title))
+
+        overlay_updated, overlay_rgba = self.renderer.sync_overlay(
+            state, selected=selected, masks=self.show_masks, trays=state.tray_fitting
+        )
+        if overlay_updated:
+            self.images.publish(overlay_rgba, kind="overlay")
+            self._has_overlay = overlay_rgba is not None
+            self._overlay_revision += 1
+
+        int_updated, int_rgba = self.renderer.render_interactive(
+            state,
+            selected=selected,
+            target=target,
+            queries=queries,
+            trays=state.tray_fitting,
+            corners=self.corners if state.stage == "table" else None,
+            points=self.corner_points if state.stage == "table" else (),
+            flow=self.flow,
+        )
+        if int_updated:
+            self.images.publish(int_rgba, kind="interactive")
+            self._has_interactive = int_rgba is not None
+            self._interactive_revision += 1
+
+        catalog_key = (state.stage, id(state.units.types), tuple(
+            (type_id, row.get("list_id", "A"), row.get("classification") or row.get("unit_name") or row.get("name") or type_id)
+            for type_id, row in state.units.types.items()
+        ))
+        if catalog_key != self._catalog_key:
+            types = []
+            for type_id, row in state.units.types.items():
+                title = row.get("classification") or row.get("unit_name") or row.get("name") or type_id
+                side = row.get("list_id", "A")
+                types.append(dict(id=type_id, side=side, title=title))
+            self._catalog_a = [row for row in types if row["side"] == "A"]
+            self._catalog_b = [row for row in types if row["side"] == "B"]
+            self._catalog_key = catalog_key
+            self.catalogChanged.emit()
+
         prediction = state.current.prediction
         object_ids = set(prediction["object_ids"]) if prediction is not None else set()
         selected_unit = state.units.bindings.get(self.selected)
@@ -129,28 +183,54 @@ class MatchBridge(QObject):
                if observation is not None else None)
         geometry = (prediction or {}).get("geometry_metadata")
         editable = state.stage == "register" and not state.registration_locked
-        self._view = dict(stage=state.stage, locked=state.registration_locked, editable=editable,
-                          ready=state.startup_ready and not state.model_failed, mode=self.mode, selected=self.selected,
-                          selectedLabel=selected_unit or f"Mask {self.selected}", hasSelection=self.selected in object_ids,
-                          canFront=bool(editable and selected_unit and prediction is not None and
-                                        self.selected in prediction.get("trays", {})),
-                          assigned=len(state.units.bindings), total=len(object_ids), undo=bool(state.registration_prompts),
-                          typesA=[row for row in types if row["side"] == "A"],
-                          typesB=[row for row in types if row["side"] == "B"], types=types,
-                          imageRevision=self._image_revision, imageWidth=self._display_size[0],
-                          imageHeight=self._display_size[1], tableMode=self.table_mode,
-                          cornerCount=len(self.corner_points), canConfirmCorners=self.corners is not None,
-                          boardWidth=f"{state.board.board_size_mm[0] / 25.4:g}", boardDepth=f"{state.board.board_size_mm[1] / 25.4:g}",
-                          modelLabel=model_label, loading=not state.startup_ready and not state.model_failed,
-                          progress=(progress[1] / progress[2] if progress and progress[1] is not None and progress[2] else -1),
-                          note=self.notice or state.note, historyWarning=state.history_warning or "",
-                          sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
-                          observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
-                          observationAge=f"{age:.2f}" if age is not None else "—",
-                          geometryTime="OFF" if not state.tray_fitting else f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
-                          playing=state.playing, pendingPlay=state.pending_play, console=self.live.data(state),
-                          reference=str(state.reference_folder or ""), masks=self.show_masks, trays=state.tray_fitting,
-                          inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString())
+        self._view = dict(
+            stage=state.stage,
+            locked=state.registration_locked,
+            editable=editable,
+            ready=state.startup_ready and not state.model_failed,
+            mode=self.mode,
+            selected=self.selected,
+            selectedLabel=selected_unit or f"Mask {self.selected}",
+            hasSelection=self.selected in object_ids,
+            canFront=bool(editable and selected_unit and prediction is not None and
+                          self.selected in prediction.get("trays", {})),
+            assigned=len(state.units.bindings),
+            total=len(object_ids),
+            undo=bool(state.registration_prompts),
+            typesA=self._catalog_a,
+            typesB=self._catalog_b,
+            types=self._catalog_a + self._catalog_b,
+            imageRevision=self._image_revision,
+            overlayRevision=self._overlay_revision,
+            hasOverlay=self._has_overlay,
+            interactiveRevision=self._interactive_revision,
+            hasInteractive=self._has_interactive,
+            imageWidth=self._display_size[0],
+            imageHeight=self._display_size[1],
+            tableMode=self.table_mode,
+            cornerCount=len(self.corner_points),
+            canConfirmCorners=self.corners is not None,
+            boardWidth=f"{state.board.board_size_mm[0] / 25.4:g}",
+            boardDepth=f"{state.board.board_size_mm[1] / 25.4:g}",
+            modelLabel=model_label,
+            loading=not state.startup_ready and not state.model_failed,
+            progress=(progress[1] / progress[2] if progress and progress[1] is not None and progress[2] else -1),
+            note=self.notice or state.note,
+            historyWarning=state.history_warning or "",
+            sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
+            observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
+            observationAge=f"{age:.2f}" if age is not None else "—",
+            geometryTime="OFF" if not state.tray_fitting else f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
+            playing=state.playing,
+            pendingPlay=state.pending_play,
+            console=self.live.data(state),
+            reference=str(state.reference_folder or ""),
+            masks=self.show_masks,
+            trays=state.tray_fitting,
+            trayStatus=state.tray_status,
+            terrainCount=len(state.rules.terrain),
+            inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString(),
+        )
         self._view["archivesFolder"] = QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "outputs/sam3_registration")).toString()
         self.changed.emit()
 
@@ -408,4 +488,5 @@ class MatchBridge(QObject):
         if self._detection is not None:
             self._detection.cancel()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self.renderer.close()
         self.match.close()
