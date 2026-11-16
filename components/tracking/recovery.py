@@ -37,8 +37,16 @@ class RecoveryCandidate:
     def cancel(self):
         self.cancelled.set()
 
+    def release(self):
+        if self.backend is not None and getattr(self.backend, "session", None) is not None:
+            if self.backend.session.processed_frames is not None:
+                self.backend.session.processed_frames.clear()
+            self.backend.session.reset_inference_session()
+            self.backend.session = None
+
     def _check(self):
         if self.cancelled.is_set():
+            self.release()
             raise ValueError("Recovery draft was cancelled")
 
     def seed(self, predictor, tracker, frame, point, source_frame):
@@ -71,6 +79,7 @@ class RecoveryCandidate:
             self.prediction = self.backend.propagate(frame, source_frame=source_frame)
         if self.requires_continuity and not self.prediction["masks"][0].any():
             self.cancel()
+            self.release()
             raise ValueError("Recovery candidate disappeared. Clear / Retry on the current frame.")
         self._check()
         return self.prediction

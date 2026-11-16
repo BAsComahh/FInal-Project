@@ -1,8 +1,10 @@
 """Source clock, one serial model queue and accepted observations/history."""
 from copy import deepcopy
+import faulthandler
+import json
 from pathlib import Path
 import sys
-from time import perf_counter
+from time import perf_counter, time
 from threading import Event
 import cv2
 import numpy as np
@@ -16,7 +18,7 @@ from .tray_worker import TrayWorker
 
 class MatchSession:
     def __init__(self, video, data, *, model_id="facebook/sam3", device=None, start=0, seconds=None,
-                 inference_fps=None, output_dir=None,
+                 inference_fps=config.DEFAULT_INFERENCE_FPS, output_dir=None,
                  profile=False, tray_search=config.DEFAULT_TRAY_SEARCH, tracker=config.DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
         if seconds is not None and (seconds <= 0 or not np.isfinite(seconds)):
             raise ValueError("seconds must be positive")
@@ -28,6 +30,15 @@ class MatchSession:
         self.data.motion_recorder = MotionRecorder(position_tolerance_mm=config.MOTION_POSITION_TOLERANCE_MM,
                                                    rotation_tolerance_deg=config.MOTION_ROTATION_TOLERANCE_DEG,
                                                    settle_seconds=config.MOTION_SETTLE_SECONDS)
+        self.output_dir = (Path(output_dir) if output_dir is not None else
+                           config.PROJECT_ROOT / "outputs/sam3_registration")
+        self._fault_file = None
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self._fault_file = (self.output_dir / "crash_traceback.log").open("a", encoding="utf-8")
+            faulthandler.enable(file=self._fault_file, all_threads=True)
+        except Exception:
+            self._fault_file = None
         self.worker = TaskWorker(model_id, device, profile=profile, tray_search=tray_search,
                                  tracker=tracker, tracker_model=tracker_model, tracker_cache=tracker_cache)
         self.trays = TrayWorker(tray_search, self.worker.tray_stability)
@@ -41,6 +52,9 @@ class MatchSession:
                 self.source.close()
             self.worker.close()
             self.trays.close()
+            if self._fault_file is not None:
+                self._fault_file.close()
+                self._fault_file = None
             raise
         self.initial_frame = self.data.current.frame
         self.registration_start_frame = self.source.frame_index
@@ -51,8 +65,6 @@ class MatchSession:
         if seconds is not None:
             self.end_index = min(self.end_index, int((start + seconds) * self.source.fps) - 1)
         self.inference_fps = inference_fps
-        self.output_dir = (Path(output_dir) if output_dir is not None else
-                           config.PROJECT_ROOT / "outputs/sam3_registration")
         self.load_progress = None
         self.pending_trays = set()
         self.tray_versions = {}
@@ -122,6 +134,34 @@ class MatchSession:
         self.note = ("Tray fitting resumed from the latest accepted masks." if enabled else
                      "Tray fitting paused. Source playback and mask tracking continue.")
 
+    def _write_diagnostics(self, event, *, request=None, error=None, extra=None):
+        try:
+            folder = Path(self.data.reference_folder) if self.data.reference_folder is not None else self.output_dir
+            folder.mkdir(parents=True, exist_ok=True)
+            metadata = (request or {}).get("metadata") or {}
+            payload = {
+                "wall_time": time(),
+                "event": event,
+                "generation": self.generation if request is None else request.get("generation", self.generation),
+                "kind": None if request is None else request.get("kind"),
+                "backend": self.worker.tracker_name,
+                "source_frame_index": metadata.get("frame_index", self.source.frame_index if self.source is not None else None),
+                "source_timestamp_seconds": metadata.get("timestamp_seconds"),
+                "diagnostics": ((request or {}).get("runtime_diagnostics")
+                                or (self.worker.diagnostics(request) if not self.worker.busy else self.worker.last_diagnostics)),
+            }
+            if error is not None:
+                payload["error"] = str(error)
+                payload["error_type"] = type(error).__name__ if isinstance(error, BaseException) else "Error"
+            if request is not None and request.get("error_traceback"):
+                payload["traceback"] = request["error_traceback"]
+            if extra:
+                payload.update(extra)
+            with (folder / "runtime_diagnostics.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
     def _history_stores(self):
         current = [self.data.history_store] if self.data.history_store is not None else []
         return current + self.retired_histories
@@ -145,6 +185,7 @@ class MatchSession:
         if errors != self._history_errors:
             for path, error in errors:
                 print(f"History not saved: {path}: {error}. Retrying; pending data retained in RAM.", file=sys.stderr, flush=True)
+                self._write_diagnostics("history_error", error=error, extra={"history_path": path})
             if not errors and self._history_errors:
                 print("History writes resumed; any remaining queued updates are draining.", flush=True)
             self._history_errors = errors
@@ -445,6 +486,10 @@ class MatchSession:
         completed = self.worker.poll()
         if completed is not None:
             request, prediction, error = completed
+            diag_error = error or request.get("automatic_error") or request.get("candidate_error")
+            if diag_error is not None or request.get("runtime_diagnostics") is not None:
+                self._write_diagnostics("task_error" if diag_error is not None else request["kind"],
+                                        request=request, error=diag_error)
             if request["generation"] == self.generation:
                 cancelled = request.get("tray_cancelled")
                 if prediction is not None and cancelled is not None and cancelled.is_set():
@@ -603,3 +648,11 @@ class MatchSession:
             if not store.close():
                 print(f"History not saved on exit: {store.path}: {store.pending_count} updates remain in RAM; "
                       f"they will be lost when the process exits. {store.error}", file=sys.stderr, flush=True)
+        self._write_diagnostics("session_closed")
+        if self._fault_file is not None:
+            try:
+                faulthandler.disable()
+                self._fault_file.close()
+            except Exception:
+                pass
+            self._fault_file = None

@@ -1,7 +1,5 @@
 # Requirements 对照 TODO
 
-当前工作现场、启动入口和排查优先级见 [接手说明](接手说明.md)（2026-11-15）；该文件是交接导航，需求与实施状态仍以核心记录为准。
-
 - [ ] 2026-11-14 已接入完成注册存档载入，待用户实际播放：Qt注册页Load registration选择prompts.json，两客户端共用--registration；恢复原mask／ID／类型／属性／标定／地形／同帧tray，自动定位存档帧并锁定注册。新建reference／history，不覆盖原档，不恢复中途追踪进度。CPU受控后端配合真实24对象存档／视频确认45:00定位、20秒区间重算、就绪／播放交接、原ID和24份几何保留；未加载真实模型或运行GPU／桌面交互。
 
 - [ ] 2026-11-14 EdgeTAM已开启官方apply_non_overlapping_constraints=True，初始化／传播／恢复共用输出入口，保留原ID顺序和恢复规则。CPU合成分数检查确认HF实际接口按像素分数消除重叠、保持对象轴／尺寸／背景及单对象结果；未加载模型权重或运行GPU／视频。待用户实测对mask吞并的影响；它只消除输出像素重叠，不保证身份或被吞单位恢复。
@@ -15,7 +13,7 @@
 
 ## 2026-11-13 重要：真实运行性能与恢复
 
-- [ ] P0 2026-11-14长跑原生崩溃待定位：frame_83cdb0ce313e的28对象EdgeTAM从50:00记录至55:29.35，共508条历史；18:38:20 Windows记录python/ucrtbase原生终止0xc0000409。用户仅观察mask，无闪黑或工具操作；日志为c10_hip/SetDevice及Tensor.to相关C++栈，缺首次HIP错误码，不能据此判定OOM／驱动故障。对应时段未查到系统驱动重置事件；后台曾自动恢复，最后候选结束约10秒后仍有正常历史。静态检查发现HF会话持续保留processed_frames和逐对象逐帧输出，项目未做时间淘汰，是长跑内存增长风险；尚无本次RAM／VRAM采样，不能认定它就是崩溃原因。后续先持久记录首次错误、任务／帧和内存趋势，再定位异步GPU故障；本轮未重跑GPU或修改追踪算法。
+- [ ] P0 2026-11-15 长跑原生崩溃根因已定位并接入有界会话／运行期诊断与 SDPA 优化，待用户复测帧率与长局：反汇编 `torch_hip.dll` 崩溃偏移（`+0xA78F`／`+0xB1C5`）确认，`frame_83cdb0ce313e` 的 `0xc0000409` 源于 `ATen/hip/CachingHostAllocator.cpp:80`（`allocate_host_memory_slowpath` 的 `hipHostMalloc`）失败后，局部守卫析构调用 `c10::cuda::SetDevice` 在栈展开中抛出二次 C++ 异常触发 `ucrtbase.dll!terminate`。本机 HF `5.18.0` 的 `Sam2VideoInferenceSession` 对 CPU 状态卸载硬编码 `non_blocking=True`（触发 `pin_memory=True` 锁页分配）且不淘汰历史帧／输出（28 对象每步累积 ~14 MiB 锁页内存 + 12 MiB 输入帧，508 步锁页达 ~7.1 GiB），同时 `sam3-video` 线程未调用 `torch.cuda.set_device` 而默认停在 `cuda:0`（核显）。现已：（1）在模型加载及 worker 入口显式绑定所选独显（`cuda:1` RX 7900 XT），并在 `EdgeTamTracker._infer` 使用 `sdpa_kernel([SDPBackend.MATH])` 避免 `set_device(1)` 触发 ROCm 慢速 `EFFICIENT_ATTENTION` 分支（28 对象单帧从 `1345 ms` 降至 `511 ms`）；（2）单帧视觉特征缓存留推理设备，`store_output` 改为 `non_blocking=False` 可分页内存（`pinned_mib=0`）；（3）按 HF `5.18.0` 实际读取窗口（`num_maskmem-1=6`、`max_object_pointers_in_encoder-1=15`）淘汰过期 `processed_frames`、`non_cond_frame_outputs`、已消费 `mask_inputs_per_obj` 及历史 `pred_masks`/`high_res_masks`，修复同帧 `update_mask` 写入 `cond_frame_outputs`；（4）交接后释放注册 SAM3 会话、取消／消失候选立即释放会话，启用 `crash_traceback.log`（`faulthandler`）与 `runtime_diagnostics.jsonl`，并按用户决定将 `DEFAULT_INFERENCE_FPS` 设为 `1.0`（默认 1.0 秒传播间隔，使预训练固定的 6 个非条件空间记忆槽覆盖约 6 秒抗遮挡窗口）。用户已在 `frame_3fe3022f7627`（180000～192162 帧）实测确认会话恒定在 `CPU 75 MiB / GPU 100.47 MiB / Pinned 0 MiB`、进程 WorkingSet 稳定在 `~2.82 GiB`。
 
 - [ ] P0 注册拟合边界已接入，待用户实测：正负点／撤点不调用tray拟合，只使目标旧几何失效；点击／拖放类型确认后按目标ID拟合，保留其他单位的tray。绑定后再改点需重新确认类型。注册与Live共用application/tray_worker.py的update_trays；逐对象版本阻止在途旧拟合复活，军表／尺寸修改仅失效受影响对象。CPU定向检查覆盖点选无拟合、单ID确认／拟合、无关几何保留及旧版本拒绝；未跑真实模型／GPU／桌面操作，不新增测试文件、不委派subagent。
 

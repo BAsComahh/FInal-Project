@@ -9,6 +9,7 @@ without generating another set of click prompts or editing tracking history.
 from numbers import Integral
 from pathlib import Path
 import sys
+import types
 
 import numpy as np
 
@@ -16,6 +17,188 @@ import numpy as np
 _MODEL_ID = "yonigozlan/EdgeTAM-hf"
 _REVISION = "c266ce53b3fc00f0f495b583f6a116c4e57f53bb"
 _DOCUMENTATION = "https://huggingface.co/docs/transformers/model_doc/edgetam_video"
+
+
+def bind_cuda_device(device):
+    """Ensure the calling worker thread's active HIP/CUDA device matches the selected GPU."""
+    import torch
+
+    if device is not None and torch.cuda.is_available():
+        target = torch.device(device)
+        if target.type == "cuda":
+            torch.cuda.set_device(target)
+
+
+def _store_output_pageable(
+    self,
+    obj_idx,
+    frame_idx,
+    output_key=None,
+    output_value=None,
+    is_conditioning_frame=True,
+):
+    import torch
+
+    storage_key = "cond_frame_outputs" if is_conditioning_frame else "non_cond_frame_outputs"
+    if output_key is None and isinstance(output_value, dict):
+        self.output_dict_per_obj[obj_idx][storage_key][frame_idx] = {}
+        for key, value in output_value.items():
+            self.store_output(obj_idx, frame_idx, key, value, is_conditioning_frame)
+        return
+    if output_key in ("object_pointer", "object_score_logits"):
+        self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value
+    elif isinstance(output_value, torch.Tensor):
+        self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value.detach().to(
+            self.inference_state_device, non_blocking=False
+        )
+    else:
+        self.output_dict_per_obj[obj_idx][storage_key][frame_idx][output_key] = output_value
+
+
+def _cache_vision_features_pageable(self, frame_idx, features):
+    import torch
+
+    if len(self._vision_features) >= self.max_vision_features_cache_size:
+        self._vision_features.pop(min(self._vision_features.keys()))
+    cached = {}
+    for key, value in features.items():
+        if isinstance(value, torch.Tensor):
+            cached[key] = value.detach().to(self.inference_state_device, non_blocking=False)
+        elif isinstance(value, (list, tuple)) and value and isinstance(value[0], torch.Tensor):
+            cached[key] = [v.detach().to(self.inference_state_device, non_blocking=False) for v in value]
+        else:
+            cached[key] = value
+    self._vision_features[frame_idx] = cached
+
+
+def configure_video_session(session, device):
+    """Avoid hipHostMalloc pinned-memory accumulation and redundant 1-frame feature transfers."""
+    if session is None:
+        return None
+    if hasattr(session, "cache") and session.cache is not None:
+        session.cache.inference_state_device = device
+        session.cache.cache_vision_features = types.MethodType(_cache_vision_features_pageable, session.cache)
+    session.store_output = types.MethodType(_store_output_pageable, session)
+    return session
+
+
+def prune_video_session(session, model, current_idx):
+    """Bound streaming session state to the exact windows read by Transformers 5.18.0."""
+    import torch
+
+    if session is None or model is None or current_idx is None:
+        return
+    if session.processed_frames:
+        for k in [k for k in session.processed_frames if k < current_idx]:
+            session.processed_frames.pop(k, None)
+    mem_window = max(0, int(getattr(model, "num_maskmem", getattr(model.config, "num_maskmem", 7))) - 1)
+    ptr_window = max(0, int(getattr(model.config, "max_object_pointers_in_encoder", 16)) - 1)
+    max_window = max(mem_window, ptr_window)
+    min_mem_idx = current_idx - mem_window
+    min_ptr_idx = current_idx - max_window
+    pending_objs = set(getattr(session, "obj_with_new_inputs", ()))
+    state_device = getattr(session, "inference_state_device", "cpu")
+
+    for obj_idx, obj_id in list(getattr(session, "_obj_idx_to_id", {}).items()):
+        if obj_id not in pending_objs:
+            mask_inputs = session.mask_inputs_per_obj.get(obj_idx)
+            if mask_inputs:
+                for k in [k for k in mask_inputs if k <= current_idx]:
+                    mask_inputs.pop(k, None)
+            point_inputs = session.point_inputs_per_obj.get(obj_idx)
+            if point_inputs:
+                for k in [k for k in point_inputs if k < current_idx]:
+                    point_inputs.pop(k, None)
+        od = session.output_dict_per_obj.get(obj_idx)
+        if not od:
+            continue
+        for k, entry in list(od.get("cond_frame_outputs", {}).items()):
+            entry.pop("high_res_masks", None)
+            if k < current_idx:
+                entry.pop("pred_masks", None)
+            for tk, tv in list(entry.items()):
+                if isinstance(tv, torch.Tensor):
+                    if tk in ("maskmem_features", "maskmem_pos_enc") and str(tv.device) != str(state_device):
+                        entry[tk] = tv.detach().to(state_device, non_blocking=False).clone()
+                    elif not tv.is_cuda and tv.is_pinned():
+                        entry[tk] = tv.detach().clone()
+        non_cond = od.get("non_cond_frame_outputs", {})
+        for k in list(non_cond):
+            if k < min_ptr_idx:
+                non_cond.pop(k, None)
+                continue
+            entry = non_cond[k]
+            entry.pop("high_res_masks", None)
+            if k < current_idx:
+                entry.pop("pred_masks", None)
+            if k < min_mem_idx:
+                entry.pop("maskmem_features", None)
+                entry.pop("maskmem_pos_enc", None)
+            for tk, tv in list(entry.items()):
+                if isinstance(tv, torch.Tensor):
+                    if tk in ("maskmem_features", "maskmem_pos_enc") and str(tv.device) != str(state_device):
+                        entry[tk] = tv.detach().to(state_device, non_blocking=False).clone()
+                    elif not tv.is_cuda and tv.is_pinned():
+                        entry[tk] = tv.detach().clone()
+        tracked = session.frames_tracked_per_obj.get(obj_idx)
+        if tracked and len(tracked) > max_window + 1:
+            for k in [k for k in tracked if k < min_ptr_idx]:
+                tracked.pop(k, None)
+
+
+def video_session_diagnostics(session):
+    """Return lightweight counts and byte totals for a Transformers video inference session."""
+    import torch
+
+    if session is None:
+        return {"active": False, "processed_frames": 0, "cond_frames": 0, "non_cond_frames": 0,
+                "cpu_mib": 0.0, "gpu_mib": 0.0, "pinned_mib": 0.0}
+    cpu_bytes = gpu_bytes = pinned_bytes = 0
+
+    def _account(tensor):
+        nonlocal cpu_bytes, gpu_bytes, pinned_bytes
+        if not isinstance(tensor, torch.Tensor):
+            return
+        nbytes = tensor.numel() * tensor.element_size()
+        if tensor.is_cuda:
+            gpu_bytes += nbytes
+        else:
+            cpu_bytes += nbytes
+            if tensor.is_pinned():
+                pinned_bytes += nbytes
+
+    processed = session.processed_frames or {}
+    for tensor in processed.values():
+        _account(tensor)
+    cache_entries = getattr(getattr(session, "cache", None), "_vision_features", {}) or {}
+    for vf in cache_entries.values():
+        for val in vf.values():
+            for tensor in (val if isinstance(val, (list, tuple)) else (val,)):
+                _account(tensor)
+    cond_frames = set()
+    non_cond_frames = set()
+    for od in (session.output_dict_per_obj or {}).values():
+        for k, entry in od.get("cond_frame_outputs", {}).items():
+            cond_frames.add(k)
+            for tensor in entry.values():
+                _account(tensor)
+        for k, entry in od.get("non_cond_frame_outputs", {}).items():
+            non_cond_frames.add(k)
+            for tensor in entry.values():
+                _account(tensor)
+    for md in (session.mask_inputs_per_obj or {}).values():
+        for tensor in md.values():
+            _account(tensor)
+    return {
+        "active": True,
+        "objects": len(getattr(session, "obj_ids", ())),
+        "processed_frames": len(processed),
+        "cond_frames": len(cond_frames),
+        "non_cond_frames": len(non_cond_frames),
+        "cpu_mib": round(cpu_bytes / (1024 ** 2), 2),
+        "gpu_mib": round(gpu_bytes / (1024 ** 2), 2),
+        "pinned_mib": round(pinned_bytes / (1024 ** 2), 2),
+    }
 
 
 class EdgeTamTracker:
@@ -106,6 +289,7 @@ class EdgeTamTracker:
                 raise ValueError("The checkpoint is missing compatible EdgeTAM video weights")
             self.load_progress = (f"Moving EdgeTAM to {self.device}", None, None)
             try:
+                bind_cuda_device(self.device)
                 model = model.to(device=self.device, dtype=torch.float32).eval().requires_grad_(False)
             except RuntimeError as error:
                 raise RuntimeError(
@@ -119,6 +303,8 @@ class EdgeTamTracker:
     def reset(self):
         """Discard the official per-video session while retaining loaded weights."""
         if self.session is not None:
+            if self.session.processed_frames is not None:
+                self.session.processed_frames.clear()
             self.session.reset_inference_session()
         self.session = None
         self.object_ids = []
@@ -141,13 +327,21 @@ class EdgeTamTracker:
         return int(value)
 
     def _infer(self, frame, session, object_ids, index, source_frame):
+        from contextlib import nullcontext
         import torch
+        from torch.nn.attention import SDPBackend, sdpa_kernel
         from PIL import Image
 
+        bind_cuda_device(self.device)
         inputs = self.processor(
             images=Image.fromarray(np.ascontiguousarray(frame[..., ::-1])), return_tensors="pt",
         )
-        with torch.inference_mode():
+        attn_ctx = (
+            sdpa_kernel([SDPBackend.MATH])
+            if self.device is not None and torch.cuda.is_available() and torch.device(self.device).type == "cuda"
+            else nullcontext()
+        )
+        with torch.inference_mode(), attn_ctx:
             outputs = self.model(
                 inference_session=session, frame_idx=index, frame=inputs.pixel_values[0],
             )
@@ -173,6 +367,7 @@ class EdgeTamTracker:
                 if logits.numel() != len(object_ids):
                     raise RuntimeError("EdgeTAM returned inconsistent object presence scores")
                 prediction["object_score_logits"] = logits[order].detach().float().cpu().tolist()
+            prune_video_session(session, self.model, index)
         return prediction
 
     def initialize(self, frame, object_ids, masks, *, source_frame=None):
@@ -193,9 +388,13 @@ class EdgeTamTracker:
         import torch
 
         self.reset()
-        session = self.processor.init_video_session(
-            inference_device=self.device, inference_state_device="cpu",
-            video_storage_device="cpu", processing_device="cpu", dtype=torch.float32,
+        bind_cuda_device(self.device)
+        session = configure_video_session(
+            self.processor.init_video_session(
+                inference_device=self.device, inference_state_device="cpu",
+                video_storage_device="cpu", processing_device="cpu", dtype=torch.float32,
+            ),
+            self.device,
         )
         with torch.inference_mode():
             self.processor.add_inputs_to_inference_session(
@@ -248,6 +447,9 @@ class EdgeTamTracker:
                 or mask.dtype != np.bool_ or mask.shape != frame.shape[:2] or not mask.any()):
             raise ValueError("Recovery requires a nonempty mask for an existing object")
         try:
+            obj_idx = self.session.obj_id_to_idx(object_id)
+            self.session.frames_tracked_per_obj.get(obj_idx, {}).pop(index, None)
+            self.session.output_dict_per_obj.get(obj_idx, {}).get("non_cond_frame_outputs", {}).pop(index, None)
             self.processor.add_inputs_to_inference_session(
                 inference_session=self.session, frame_idx=index, obj_ids=[object_id],
                 input_masks=[mask], original_size=frame.shape[:2],

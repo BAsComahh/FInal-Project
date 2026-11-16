@@ -10,7 +10,7 @@
 
 注册与Live共用`tray_worker.update_trays`，请求的`tray_ids`指定更新范围。注册正负点和撤点只使目标几何失效，`registration.bind()`确认当前mask后才排该ID的拟合；其他单位的结果保留。绑定后再次编辑需重新赋予类型确认。注册拟合携带逐对象`tray_versions`，接纳时按当前版本过滤，继续改点／改绑不会复活旧结果。
 
-默认 `seconds=None` 播放到视频结尾，`inference_fps=None` 表示 worker 空闲时处理最新未消费帧，不施加额外频率上限；显式正数可限定时长或调度频率。stride 参数已删除。快照的 `inference_fps` 与注册记录的 `inference_fps_limit` 无上限时对应 None／JSON null，串行、帧对齐和代次保护保持。
+默认 `seconds=None` 播放到视频结尾，`inference_fps=config.DEFAULT_INFERENCE_FPS`（`1.0` Hz，即 `1.0` 秒最小传播间隔，兼顾单帧快速完成与 6 帧非条件空间记忆的时间跨度）；显式传入 `None` 表示 worker 空闲时立即处理最新未消费帧，显式正数可调整上限。stride 参数已删除。快照的 `inference_fps` 与注册记录的 `inference_fps_limit` 无上限时对应 None／JSON null，串行、帧对齐和代次保护保持。
 
 ```python
 from application.app import MatchApplication
@@ -36,6 +36,6 @@ finally:
 - 资料：`update_unit_profile(unit_id, values, FrameRef)`、`set_front(unit_id, source_point, observation_ref)`、`add_terrain(source_vertices, values, FrameRef)`；表单与屏幕草稿留 frontend。
 - 回放：`open()`／`refresh()`／`navigate(delta)`／`clear()`，通过只读 scene 与 steps 展示。它不暂停源，也不进入模型队列。
 
-`present(source_ref)` 只固定实际显示的交互采样帧，不负责驱动追踪。点输入可使用该帧；过期代次／标定或已无法取得的帧明确拒绝。模型若已越过被点击帧，也不能回退记忆或把点击改解释到最新帧。采样帧／在途请求之外不缓存整段视频。
+`present(source_ref)` 只固定实际显示的交互采样帧，不负责驱动追踪。点输入可使用该帧；过期代次／标定或已无法取得的帧明确拒绝。模型若已越过被点击帧，也不能回退记忆或把点击改解释到最新帧。采样帧／在途请求之外不缓存整段视频。`start_tracker` 交接独立追踪后端后立即释放首帧注册 SAM3 会话；运行期在输出目录启用 `crash_traceback.log`（`faulthandler`），并在当前会话目录持久记录 `runtime_diagnostics.jsonl`（阶段事件、每 30 步传播及首次异常的进程 RAM、物理 GPU 名称与显存、会话帧／锁页内存统计及完整 traceback）。
 
 UI 只导入此层，application 只调用 components；没有 GUI 框架、事件总线、网络服务器或第二份比赛状态。配置在 config.py；现有 CLI 参数和保存格式保持。I14 的剩余验收见根目录重构计划。

@@ -5,6 +5,7 @@ from pathlib import Path
 # Source-video seconds of consecutive missing-mask observations before failure.
 TRACKING_DISAPPEARANCE_SECONDS = 10.0
 DEFAULT_TRACKER = "edgetam"
+DEFAULT_INFERENCE_FPS = 1.0
 DEFAULT_TRAY_SEARCH = "adaptive"
 # Trial mask-stability gates, relative to the last actual rectangle fit.
 TRAY_STABLE_CENTROID_PCT = 5.0

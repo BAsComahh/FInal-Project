@@ -43,6 +43,8 @@ Cutie 使用官方 `CUTIE`／`InferenceCore.step`；初始标签背景为 0，�
 
 EdgeTAM 使用已安装 `Sam2VideoProcessor` 的 `input_masks` API 和持久流式 session。原 Meta `.pt` 不能直接当 HF checkpoint 使用。本机 5.18.0 的配置格式化会临时构造默认 vision config，触发额外 Hub 查询；适配器读取完整 checkpoint 配置，并对本次配置实例设置公开的 `has_no_defaults_at_init` 标记避免该查询。这是本项目的离线兼容处理，不是 Meta 要求；未修改已安装库或模型结构。传入 session 的 ID 列表使用副本，因为实际 forward 会消费提示 ID 列表。
 
+针对本机 HF 5.18.0 `Sam2VideoInferenceSession` 默认无限保留历史帧且对 CPU 状态卸载使用 `non_blocking=True`（在 PyTorch/HIP 下触发 `hipHostMalloc` 锁页内存累积）的问题，适配器在推理线程显式绑定所选 CUDA 设备，将容量为 1 的当前帧视觉特征缓存留在推理设备，并将 `store_output` 向 CPU 的卸载改为可分页内存（`non_blocking=False`）。每步推理后按 HF 5.18.0 实际读取窗口（`num_maskmem - 1 = 6` 帧空间记忆、`max_object_pointers_in_encoder - 1 = 15` 帧对象指针）裁剪过期的 `processed_frames`、`non_cond_frame_outputs`、已消费 `mask_inputs_per_obj` 及历史帧 `pred_masks`，保留全部条件帧记忆与当前帧点提示；同帧 `update_mask` 先清理该对象同帧旧非条件记录，确保恢复帧统一写入 `cond_frame_outputs`。
+
 两个适配器都保留原实例 ID、输出原分辨率 bool mask，内部处理帧号连续，原视频帧号另记；拒绝向后传播，reset 丢弃记忆而保留模型。存在 logits 只作为质量信号，不解释为身份正确概率；Cutie 不伪造该分数。
 
 ## 验证边界

@@ -37,6 +37,8 @@ class Sam3Segmenter:
         from transformers import Sam3Model, Sam3Processor
 
         device = self.device or _pick_device()
+        if torch.cuda.is_available() and torch.device(device).type == "cuda":
+            torch.cuda.set_device(torch.device(device))
         processor = Sam3Processor.from_pretrained(self.model_id, local_files_only=True)
         model = Sam3Model.from_pretrained(self.model_id, local_files_only=True)
         model = model.to(device=device, dtype=torch.float32).eval()
@@ -58,6 +60,8 @@ class Sam3Segmenter:
         self._load_model()
         import torch
 
+        if torch.cuda.is_available() and self.model.device.type == "cuda":
+            torch.cuda.set_device(self.model.device)
         pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         inputs = self.processor(images=pil_image, text=prompt, return_tensors="pt").to(self.model.device)
         with torch.inference_mode():

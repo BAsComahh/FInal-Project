@@ -2,12 +2,15 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy, deepcopy
+import ctypes
+from ctypes import wintypes
 import importlib.metadata
 import hashlib
 import json
 from pathlib import Path
 from time import perf_counter
 from threading import Event
+import traceback
 from uuid import uuid4
 
 import numpy as np
@@ -16,7 +19,64 @@ from .config import DEFAULT_TRACKER, PROJECT_ROOT, AUTO_RECOVERY_ENABLED
 from . import config
 from components.sam3.video import VideoPredictor
 from components.tracking import create_tracker
+from components.tracking.edgetam import bind_cuda_device, video_session_diagnostics
 from components.boundary_detection.tray.temporal import TrayStability
+
+
+def _process_memory_mib():
+    try:
+        class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("cb", wintypes.DWORD),
+                ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(_PROCESS_MEMORY_COUNTERS), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        counters = _PROCESS_MEMORY_COUNTERS(cb=ctypes.sizeof(_PROCESS_MEMORY_COUNTERS))
+        if psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return {
+                "working_set_mib": round(counters.WorkingSetSize / (1024 ** 2), 2),
+                "peak_working_set_mib": round(counters.PeakWorkingSetSize / (1024 ** 2), 2),
+                "commit_mib": round(counters.PagefileUsage / (1024 ** 2), 2),
+                "peak_commit_mib": round(counters.PeakPagefileUsage / (1024 ** 2), 2),
+                "nonpaged_pool_kib": round(counters.QuotaNonPagedPoolUsage / 1024, 2),
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def _gpu_memory_diagnostics(device):
+    try:
+        import torch
+
+        if not torch.cuda.is_available():
+            return {"available": False, "device": str(device or "cpu")}
+        target = torch.device(device) if device and str(device).startswith("cuda") else torch.device(f"cuda:{torch.cuda.current_device()}")
+        idx = target.index if target.index is not None else torch.cuda.current_device()
+        return {
+            "available": True,
+            "device": f"cuda:{idx}",
+            "thread_current_device": f"cuda:{torch.cuda.current_device()}",
+            "gpu_name": torch.cuda.get_device_name(idx),
+            "allocated_mib": round(torch.cuda.memory_allocated(idx) / (1024 ** 2), 2),
+            "reserved_mib": round(torch.cuda.memory_reserved(idx) / (1024 ** 2), 2),
+            "max_allocated_mib": round(torch.cuda.max_memory_allocated(idx) / (1024 ** 2), 2),
+        }
+    except Exception as error:
+        return {"available": False, "device": str(device), "error": str(error)}
 
 
 def _point_ids(clicks):
@@ -83,6 +143,8 @@ class TaskWorker:
         self.tray_cancelled = Event()
         self.prompts = []
         self.tray_context = None
+        self.last_diagnostics = None
+        bind_cuda_device(device)
 
     @property
     def busy(self):
@@ -159,136 +221,169 @@ class TaskWorker:
             request["automatic_error"] = str(error)
             return None
 
+    def diagnostics(self, request=None):
+        device = self.predictor.device or (getattr(self.tracker, "device", None) if self.tracker is not None else None)
+        candidates = () if request is None else request.get("automatic_candidates", ())
+        manual = None if request is None else request.get("recovery_candidate")
+        return {
+            "process_memory": _process_memory_mib(),
+            "gpu": _gpu_memory_diagnostics(device),
+            "predictor_session": video_session_diagnostics(getattr(self.predictor, "session", None)),
+            "tracker_session": video_session_diagnostics(getattr(self.tracker, "session", None)) if self.tracker is not None else None,
+            "automatic_candidates": len(candidates),
+            "manual_candidate": bool(manual is not None and getattr(getattr(manual, "backend", None), "session", None) is not None),
+        }
+
     def _run(self, request):
         started = perf_counter()
         kind = request["kind"]
-        if kind == "load":
-            self.predictor.load()
-            if self.tracker is not None:
-                self.tracker.load()
-            if self.automatic is not None:
-                self.automatic_progress = ("Loading recovery SAM text and DINO models", None, None)
-                try:
-                    self.automatic.load()
-                except Exception as error:
-                    print(f"Automatic recovery unavailable; manual recovery retained: {error}", flush=True)
-                finally:
-                    self.automatic_progress = None
-            if self.facing is not None:
-                self.facing_progress = ("Loading and warming DVMNet facing", None, None)
-                try:
-                    self.facing.device = self.predictor.device
-                    self.facing.load()
-                except Exception as error:
-                    self.facing.error = str(error)
-                    self.facing.model = None
-                    print(f"DVMNet facing unavailable; tracking retained: {error}", flush=True)
-                finally:
-                    self.facing_progress = None
-            return None
-        if kind == "prepare":
-            self.predictor.prepare_initial_frame(request["frame"], source_frame=request["metadata"]["frame_index"])
-            return None
-        if kind == "reset":
-            self.predictor.reset()
-            if self.tracker is not None:
-                self.tracker.reset()
-                self.tracker_initialized = False
-            self.prompts.clear()
-            if self.automatic is not None:
-                self.automatic.references.clear()
-            self.facing_references.clear()
-            self.facing_states.clear()
-            self.facing_fronts.clear()
-            return None
-        if kind == "replace":
-            old, new = _point_ids(self.prompts), _point_ids(request["clicks"])
-            changed = [obj for obj in new if new[obj] != old.get(obj)]
-            prediction = self.predictor.replace_initial_points(
-                request["frame"], request["clicks"], changed_ids=changed,
-                source_frame=request["metadata"]["frame_index"])
-            self.prompts = deepcopy(request["clicks"])
-            for click in request["clicks"]:
-                click["session_frame"] = self.predictor.index
-        elif kind == "click":
-            prompt = request["prompt"]
-            prediction = self.predictor.click(request["frame"], prompt["point"],
-                object_id=prompt["object_id"], positive=prompt["positive"],
-                source_frame=request["metadata"]["frame_index"])
-            self.prompts.append(deepcopy(prompt))
-        elif kind == "start_tracker":
-            initial = request["prediction"]
-            backend = self.tracker if self.tracker is not None else self.predictor
-            prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
-                                            source_frame=request["metadata"]["frame_index"])
-            self.tracker_initialized = True
-        elif kind == "recalibrate":
-            backend = copy(self.tracker if self.tracker is not None else self.predictor)
-            # Detach the session before reset: the old backend remains valid until commit.
-            if hasattr(backend, "session"):
-                backend.session = None
-            backend.reset()
-            initial = request["prediction"]
-            prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
-                                            source_frame=request["metadata"]["frame_index"])
-            request["new_backend"] = backend
-        elif kind == "propagate":
-            if not self.tracker_initialized:
-                raise ValueError("Finish the registered-mask handoff before tracking")
-            backend = self.tracker if self.tracker is not None else self.predictor
-            prediction = backend.propagate(request["frame"],
-                source_frame=request["metadata"]["frame_index"])
-            candidate = request.get("recovery_candidate")
-            if candidate is not None and not candidate.cancelled.is_set():
-                try:
-                    request["candidate_result"] = candidate.advance(request["frame"], request["metadata"]["frame_index"])
-                except Exception as error:
-                    request["candidate_error"] = error
-            request["automatic_updates"] = []
-            for candidate in request.get("automatic_candidates", ()):
-                if candidate.cancelled.is_set():
-                    continue
-                try:
-                    result = candidate.advance(request["frame"], request["metadata"]["frame_index"])
-                    request["automatic_updates"].append((candidate, result, None))
-                except Exception as error:
-                    request["automatic_updates"].append((candidate, None, error))
-        elif kind == "automatic_recovery":
-            prediction = self._automatic_recovery(request)
-        elif kind in ("recovery_seed", "recovery_point", "recovery_advance"):
-            candidate = request["recovery_candidate"]
-            source_frame = request["metadata"]["frame_index"]
-            if kind == "recovery_seed":
-                return candidate.seed(self.predictor, self.tracker, request["frame"], request["prompt"]["point"], source_frame)
-            if kind == "recovery_point":
-                return candidate.correct(request["frame"], request["prompt"]["point"], request["prompt"]["positive"], source_frame)
-            return candidate.advance(request["frame"], source_frame)
-        elif kind == "recovery_commit":
-            candidate = request["recovery_candidate"]
-            result = candidate.advance(request["frame"], request["metadata"]["frame_index"])
-            mask = result["masks"][0]
-            if not mask.any():
-                raise ValueError("Candidate disappeared before confirmation. Retry on a visible target.")
-            candidate._check()
-            normal_ids = (request.get("prompt") or {}).get("normal_ids", [])
-            if normal_ids:
-                if self.tracker.source_frame != request["metadata"]["frame_index"] or request.get("prediction") is None:
-                    raise ValueError("Wait for matching normal-unit observations before confirming recovery")
-                occupied = np.zeros(mask.shape, bool)
-                for obj, other in zip(request["prediction"]["object_ids"], request["prediction"]["masks"]):
-                    if obj in normal_ids:
-                        occupied |= other
-                if np.any(mask & occupied):
-                    raise ValueError("Candidate overlaps another normally tracked unit. Clear / Retry.")
-            request["recovery_applied"] = True
-            prediction = self.tracker.update_mask(request["frame"], request["recovery_object_id"], mask,
-                                                  source_frame=request["metadata"]["frame_index"])
-        elif kind in ("trays", "facing"):
-            prediction = dict(request["prediction"])
-            if kind == "trays":
-                prediction["timings_seconds"] = {}
-        else:
-            raise ValueError(f"Unknown SAM3 operation: {kind}")
+        bind_cuda_device(self.predictor.device or (getattr(self.tracker, "device", None) if self.tracker is not None else None))
+        try:
+            if kind == "load":
+                self.predictor.load()
+                if self.tracker is not None:
+                    self.tracker.load()
+                if self.automatic is not None:
+                    self.automatic_progress = ("Loading recovery SAM text and DINO models", None, None)
+                    try:
+                        self.automatic.load()
+                    except Exception as error:
+                        print(f"Automatic recovery unavailable; manual recovery retained: {error}", flush=True)
+                    finally:
+                        self.automatic_progress = None
+                if self.facing is not None:
+                    self.facing_progress = ("Loading and warming DVMNet facing", None, None)
+                    try:
+                        self.facing.device = self.predictor.device
+                        self.facing.load()
+                    except Exception as error:
+                        self.facing.error = str(error)
+                        self.facing.model = None
+                        print(f"DVMNet facing unavailable; tracking retained: {error}", flush=True)
+                    finally:
+                        self.facing_progress = None
+                request["runtime_diagnostics"] = self.last_diagnostics = self.diagnostics(request)
+                return None
+            if kind == "prepare":
+                self.predictor.prepare_initial_frame(request["frame"], source_frame=request["metadata"]["frame_index"])
+                request["runtime_diagnostics"] = self.last_diagnostics = self.diagnostics(request)
+                return None
+            if kind == "reset":
+                self.predictor.reset()
+                if self.tracker is not None:
+                    self.tracker.reset()
+                    self.tracker_initialized = False
+                self.prompts.clear()
+                if self.automatic is not None:
+                    self.automatic.references.clear()
+                self.facing_references.clear()
+                self.facing_states.clear()
+                self.facing_fronts.clear()
+                request["runtime_diagnostics"] = self.last_diagnostics = self.diagnostics(request)
+                return None
+            if kind == "replace":
+                old, new = _point_ids(self.prompts), _point_ids(request["clicks"])
+                changed = [obj for obj in new if new[obj] != old.get(obj)]
+                prediction = self.predictor.replace_initial_points(
+                    request["frame"], request["clicks"], changed_ids=changed,
+                    source_frame=request["metadata"]["frame_index"])
+                self.prompts = deepcopy(request["clicks"])
+                for click in request["clicks"]:
+                    click["session_frame"] = self.predictor.index
+            elif kind == "click":
+                prompt = request["prompt"]
+                prediction = self.predictor.click(request["frame"], prompt["point"],
+                    object_id=prompt["object_id"], positive=prompt["positive"],
+                    source_frame=request["metadata"]["frame_index"])
+                self.prompts.append(deepcopy(prompt))
+            elif kind == "start_tracker":
+                initial = request["prediction"]
+                backend = self.tracker if self.tracker is not None else self.predictor
+                prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
+                                                source_frame=request["metadata"]["frame_index"])
+                if self.tracker is not None:
+                    self.predictor.reset()
+                self.tracker_initialized = True
+            elif kind == "recalibrate":
+                backend = copy(self.tracker if self.tracker is not None else self.predictor)
+                # Detach the session before reset: the old backend remains valid until commit.
+                if hasattr(backend, "session"):
+                    backend.session = None
+                backend.reset()
+                initial = request["prediction"]
+                prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
+                                                source_frame=request["metadata"]["frame_index"])
+                request["new_backend"] = backend
+            elif kind == "propagate":
+                if not self.tracker_initialized:
+                    raise ValueError("Finish the registered-mask handoff before tracking")
+                backend = self.tracker if self.tracker is not None else self.predictor
+                prediction = backend.propagate(request["frame"],
+                    source_frame=request["metadata"]["frame_index"])
+                candidate = request.get("recovery_candidate")
+                if candidate is not None:
+                    if candidate.cancelled.is_set():
+                        candidate.release()
+                    else:
+                        try:
+                            request["candidate_result"] = candidate.advance(request["frame"], request["metadata"]["frame_index"])
+                        except Exception as error:
+                            request["candidate_error"] = error
+                request["automatic_updates"] = []
+                for candidate in request.get("automatic_candidates", ()):
+                    if candidate.cancelled.is_set():
+                        candidate.release()
+                        continue
+                    try:
+                        result = candidate.advance(request["frame"], request["metadata"]["frame_index"])
+                        request["automatic_updates"].append((candidate, result, None))
+                    except Exception as error:
+                        request["automatic_updates"].append((candidate, None, error))
+            elif kind == "automatic_recovery":
+                prediction = self._automatic_recovery(request)
+            elif kind in ("recovery_seed", "recovery_point", "recovery_advance"):
+                candidate = request["recovery_candidate"]
+                source_frame = request["metadata"]["frame_index"]
+                if kind == "recovery_seed":
+                    return candidate.seed(self.predictor, self.tracker, request["frame"], request["prompt"]["point"], source_frame)
+                if kind == "recovery_point":
+                    return candidate.correct(request["frame"], request["prompt"]["point"], request["prompt"]["positive"], source_frame)
+                return candidate.advance(request["frame"], source_frame)
+            elif kind == "recovery_commit":
+                candidate = request["recovery_candidate"]
+                result = candidate.advance(request["frame"], request["metadata"]["frame_index"])
+                mask = result["masks"][0]
+                if not mask.any():
+                    raise ValueError("Candidate disappeared before confirmation. Retry on a visible target.")
+                candidate._check()
+                normal_ids = (request.get("prompt") or {}).get("normal_ids", [])
+                if normal_ids:
+                    if self.tracker.source_frame != request["metadata"]["frame_index"] or request.get("prediction") is None:
+                        raise ValueError("Wait for matching normal-unit observations before confirming recovery")
+                    occupied = np.zeros(mask.shape, bool)
+                    for obj, other in zip(request["prediction"]["object_ids"], request["prediction"]["masks"]):
+                        if obj in normal_ids:
+                            occupied |= other
+                    if np.any(mask & occupied):
+                        raise ValueError("Candidate overlaps another normally tracked unit. Clear / Retry.")
+                request["recovery_applied"] = True
+                prediction = self.tracker.update_mask(request["frame"], request["recovery_object_id"], mask,
+                                                      source_frame=request["metadata"]["frame_index"])
+                candidate.release()
+            elif kind in ("trays", "facing"):
+                prediction = dict(request["prediction"])
+                if kind == "trays":
+                    prediction["timings_seconds"] = {}
+            else:
+                raise ValueError(f"Unknown SAM3 operation: {kind}")
+            self.last_diagnostics = self.diagnostics(request)
+            if kind in ("start_tracker", "recalibrate", "automatic_recovery", "recovery_commit") or (
+                    kind == "propagate" and prediction is not None and prediction.get("frame_idx", 0) % 30 == 0):
+                request["runtime_diagnostics"] = self.last_diagnostics
+        except Exception:
+            request["error_traceback"] = traceback.format_exc()
+            request["runtime_diagnostics"] = self.last_diagnostics = self.diagnostics(request)
+            raise
         if prediction is not None:
             prediction = dict(prediction)
             operation_finished = perf_counter()

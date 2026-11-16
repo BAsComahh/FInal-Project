@@ -39,11 +39,17 @@ class VideoPredictor:
             if info.get("missing_keys") or info.get("mismatched_keys"):
                 raise ValueError("The checkpoint is missing SAM3 video weights")
             self.load_progress = (f"Moving weights to {self.device}", None, None)
+            from components.tracking.edgetam import bind_cuda_device
+            bind_cuda_device(self.device)
             self.model = model.to(device=self.device, dtype=torch.float32).eval()
         finally:
             self.load_progress = None
 
     def reset(self):
+        if self.session is not None:
+            if self.session.processed_frames is not None:
+                self.session.processed_frames.clear()
+            self.session.reset_inference_session()
         self.session = None
         self.index = 0
         self.source_frame = None
@@ -62,12 +68,17 @@ class VideoPredictor:
 
     def _session(self):
         import torch
+        from components.tracking.edgetam import bind_cuda_device, configure_video_session
 
         self.load()
+        bind_cuda_device(self.device)
         if self.session is None:
-            self.session = self.processor.init_video_session(
-                inference_device=self.device, inference_state_device="cpu",
-                video_storage_device="cpu", processing_device="cpu", dtype=torch.float32,
+            self.session = configure_video_session(
+                self.processor.init_video_session(
+                    inference_device=self.device, inference_state_device="cpu",
+                    video_storage_device="cpu", processing_device="cpu", dtype=torch.float32,
+                ),
+                self.device,
             )
 
     def prepare_initial_frame(self, frame, *, source_frame=None):
@@ -100,7 +111,9 @@ class VideoPredictor:
 
     def _infer(self, frame):
         import torch
+        from components.tracking.edgetam import bind_cuda_device, prune_video_session
 
+        bind_cuda_device(self.device)
         def sync():
             if self.profile and torch.device(self.device).type == "cuda":
                 torch.cuda.synchronize(self.device)
@@ -114,6 +127,7 @@ class VideoPredictor:
             sync()
             inferred = perf_counter()
             masks = self.processor.post_process_masks([outputs.pred_masks], original_sizes=inputs.original_sizes)[0]
+            prune_video_session(self.session, self.model, self.index)
         height, width = frame.shape[:2]
         masks = masks.detach().cpu().numpy().astype(bool).reshape(-1, height, width)
         logits = outputs.object_score_logits
