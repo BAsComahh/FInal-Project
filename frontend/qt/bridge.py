@@ -16,6 +16,7 @@ class MatchBridge(QObject):
     changed = Signal()
     uncertaintyChanged = Signal()
     catalogChanged = Signal()
+    badgesChanged = Signal()
 
     def __init__(self, match, parent=None):
         super().__init__(parent)
@@ -35,6 +36,7 @@ class MatchBridge(QObject):
         self._catalog_a = []
         self._catalog_b = []
         self._catalog_key = None
+        self._badges = []
         self._uncertainty = dict(rowsA=[], rowsB=[], count=0, showFacing=False)
         self._shown = self._video_key = self._published_key = None
         self._image_revision = 0
@@ -74,6 +76,10 @@ class MatchBridge(QObject):
     @Property("QVariantMap", notify=uncertaintyChanged)
     def uncertainty(self):
         return self._uncertainty
+
+    @Property("QVariantList", notify=badgesChanged)
+    def badges(self):
+        return self._badges
 
     @Slot()
     def advance(self):
@@ -156,6 +162,15 @@ class MatchBridge(QObject):
             self.images.publish(int_rgba, kind="interactive")
             self._has_interactive = int_rgba is not None
             self._interactive_revision += 1
+
+        active_badges = (
+            self.flow.replay_badges if flow_kind == "replay"
+            else self.renderer.badges if (self._has_overlay and (not live or flow_kind in ("live", "recovery")))
+            else []
+        )
+        if active_badges != self._badges:
+            self._badges = active_badges
+            self.badgesChanged.emit()
 
         catalog_key = (state.stage, id(state.units.types), tuple(
             (type_id, row.get("list_id", "A"), row.get("classification") or row.get("unit_name") or row.get("name") or type_id)

@@ -36,6 +36,10 @@ Terra 的同一批验收检查注册／Live 加载、实际点选与 Distance �
 
 在真实 24 对象存档帧（`1528×1019`，`frame_5b58dfca4481`）的隔离 CPU 基准中，静态叠加烘焙耗时由同步全图扫描的 `187.21 ms` 降至后台线程的 `13.94 ms`，播放期 GUI 主线程每帧发布与调度降至 `0.65 ms`；另通过模拟上下文完成 Qt `offscreen`＋`software` 三层加载及 `1180×820`／`820×640` 截图检查（零 QML 错误／警告）。真实 `MatchApplication` 连续视频播放、GPU 并发与原生桌面交互仍待实机验收。
 
+## 2026-11-17 深色控制台、矢量 QML 胶囊与 Replay 轨迹改造
+
+按审美与交互评价大纲在 `frontend/qt/` 与 `frontend/shared/layers.py` 完成视觉升级：`Theme.qml` 转为深色战术控制台并补齐 `textXs..textXl` 与 `radiusXs..radiusLg` 刻度；模式提示收敛为 2 px 顶线、胶囊徽标与 3 px 工具栏左侧色条；`ConsoleButton.qml` 改用 `visualFocus`；选中与轨迹高亮统一为电光青 `#4ce8ff`（与 Replay 琥珀色分离）并收束 Side B 为纯红/珊瑚色系；单位与地形名牌由后台避让引擎输出归一化坐标交 `BoardBadges.qml` 原生矢量渲染（Replay 与地形标签均纳入避让，且降低 mask 与 Replay 托盘填充遮挡）；Replay 增加 Move 起点虚影＋轨迹箭头与 Rotate 起点虚影＋弧形转向箭头，并将技术遥测默认收进 `Details` 折叠开关；`UnitHud`、`DistanceLabel` 与 `QueryLayers` 升级为雪地高对比深色玻璃与深色包边线段。已在 `offscreen/software` + 真实 24 对象存档/SQLite 历史下验证 10 种界面截图与 `820×640` 零 QML 警告；真实视频与原生桌面交互仍待实测。
+
 ## 集中验收要求
 
 公开入口仍为 `python -m frontend.qt VIDEO`；窗口工厂见 Qt README。使用 CPU 受控模型输出、真实视频解码和 Qt offscreen/software，不新增测试文件、不操作原生桌面；实际 GPU 非本节点必需。

@@ -9,9 +9,9 @@ Item {
     visible: query.showDistance
 
     Rectangle {
-        x: pill.x; y: pill.y + 3
+        x: pill.x; y: pill.y + 4
         width: pill.width; height: pill.height
-        radius: pill.radius; color: "#26131d24"
+        radius: pill.radius; color: overlay.theme.bgShadow
     }
 
     Rectangle {
@@ -21,10 +21,10 @@ Item {
         height: contentCol.implicitHeight + 12
         x: Math.max(6, Math.min(overlay.width - width - 6, overlay.imageRect.x + overlay.query.labelX * overlay.imageRect.width - width / 2))
         y: Math.max(6, Math.min(overlay.height - height - 6, overlay.imageRect.y + overlay.query.labelY * overlay.imageRect.height - height / 2))
-        radius: 10
-        color: "#fcffffff"
-        border.color: overlay.theme.accentBorder
-        border.width: 1
+        radius: height / 2
+        color: overlay.theme.bgGlass
+        border.color: overlay.theme.selection
+        border.width: 1.5
 
         Column {
             id: contentCol
@@ -32,9 +32,9 @@ Item {
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 text: overlay.query.metric
-                color: overlay.theme.accent
+                color: overlay.theme.selection
                 font.family: overlay.theme.fontBody
-                font.pixelSize: 13
+                font.pixelSize: overlay.theme.textMd
                 font.weight: Font.DemiBold
             }
         }

@@ -9,7 +9,7 @@ Rectangle {
     signal importRequested(string side)
     readonly property Theme theme: Theme {}
 
-    radius: 10
+    radius: theme.radiusLg
     color: theme.bgSurface
     border.color: theme.border
 
@@ -24,16 +24,18 @@ Rectangle {
                 text: "Assign a type"
                 color: panel.theme.ink
                 font.family: panel.theme.fontDisplay
-                font.pixelSize: 17
+                font.pixelSize: panel.theme.textLg
                 font.weight: Font.DemiBold
                 Layout.fillWidth: true
             }
             Rectangle {
                 implicitWidth: countBadge.implicitWidth + 14
                 implicitHeight: 22
-                radius: 11
+                radius: height / 2
                 color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
                        ? panel.theme.successSoft : panel.theme.bgTrack
+                border.color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
+                              ? panel.theme.successBorder : panel.theme.borderSoft
                 Text {
                     id: countBadge
                     anchors.centerIn: parent
@@ -41,7 +43,7 @@ Rectangle {
                     color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
                            ? panel.theme.success : panel.theme.inkSecondary
                     font.family: panel.theme.fontMono
-                    font.pixelSize: 11
+                    font.pixelSize: panel.theme.textXs
                     font.weight: Font.DemiBold
                 }
             }
@@ -50,7 +52,7 @@ Rectangle {
         Text {
             text: "Select a mask, then click or drag a type onto it."
             color: panel.theme.inkMuted
-            font.pixelSize: 11
+            font.pixelSize: panel.theme.textXs
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -87,20 +89,20 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 6
                         Rectangle {
-                            width: 22; height: 22; radius: 6
+                            width: 22; height: 22; radius: panel.theme.radiusSm
                             color: sideColumn.sideColor
                             Text {
                                 anchors.centerIn: parent
                                 text: sideColumn.side
-                                color: "white"
-                                font.pixelSize: 11
+                                color: "#ffffff"
+                                font.pixelSize: panel.theme.textXs
                                 font.weight: Font.DemiBold
                             }
                         }
                         Text {
                             text: "List " + sideColumn.side
                             color: panel.theme.inkSecondary
-                            font.pixelSize: 12
+                            font.pixelSize: panel.theme.textSm
                             font.weight: Font.DemiBold
                             Layout.fillWidth: true
                         }
@@ -135,7 +137,7 @@ Rectangle {
                                     required property var modelData
                                     width: parent.width
                                     height: 48
-                                    radius: 6
+                                    radius: panel.theme.radiusSm
                                     color: pointer.containsMouse ? sideColumn.sideSoft : panel.theme.bgSubtle
                                     border.color: pointer.containsMouse ? sideColumn.sideColor : panel.theme.border
                                     opacity: panel.state.ready && panel.state.editable ? 1 : 0.52
@@ -156,7 +158,7 @@ Rectangle {
                                         anchors.bottomMargin: 6
                                         text: card.modelData.title
                                         color: panel.theme.ink
-                                        font.pixelSize: 11
+                                        font.pixelSize: panel.theme.textXs
                                         wrapMode: Text.WordWrap
                                         maximumLineCount: 2
                                         verticalAlignment: Text.AlignVCenter
@@ -185,12 +187,12 @@ Rectangle {
                                         parent: panel.dragLayer
                                         width: card.width
                                         height: 48
-                                        radius: 6
+                                        radius: panel.theme.radiusSm
                                         z: 100
                                         visible: pointer.drag.active
                                         color: sideColumn.sideColor
                                         opacity: 0.94
-                                        border.color: "white"
+                                        border.color: "#ffffff"
                                         border.width: 1
                                         property string typeId: card.modelData.id
                                         Drag.active: pointer.drag.active
@@ -202,8 +204,8 @@ Rectangle {
                                             anchors.fill: parent
                                             anchors.margins: 9
                                             text: card.modelData.title
-                                            color: "white"
-                                            font.pixelSize: 11
+                                            color: "#ffffff"
+                                            font.pixelSize: panel.theme.textXs
                                             font.weight: Font.DemiBold
                                             wrapMode: Text.WordWrap
                                             maximumLineCount: 2
@@ -220,7 +222,7 @@ Rectangle {
                                 text: "Import a PDF or JSON list."
                                 color: panel.theme.inkMuted
                                 wrapMode: Text.WordWrap
-                                font.pixelSize: 11
+                                font.pixelSize: panel.theme.textXs
                             }
                         }
                     }
@@ -234,11 +236,11 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             height: 5
-            radius: 3
+            radius: panel.theme.radiusXs
             color: panel.theme.bgTrack
             Rectangle {
                 height: parent.height
-                radius: 3
+                radius: panel.theme.radiusXs
                 width: panel.state.total > 0 ? parent.width * Math.min(1, panel.state.assigned / panel.state.total) : 0
                 color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
                        ? panel.theme.success : panel.theme.accent
@@ -251,9 +253,9 @@ Rectangle {
             Rectangle {
                 implicitWidth: selText.implicitWidth + 16
                 implicitHeight: 28
-                radius: 7
+                radius: panel.theme.radiusSm
                 color: panel.state.hasSelection ? panel.theme.accentSoft : panel.theme.bgSubtle
-                border.color: panel.state.hasSelection ? panel.theme.accentBorder : panel.theme.borderSoft
+                border.color: panel.state.hasSelection ? panel.theme.accentBorder : panel.theme.border
                 Layout.fillWidth: true
                 Text {
                     id: selText
@@ -262,8 +264,8 @@ Rectangle {
                     elide: Text.ElideRight
                     horizontalAlignment: Text.AlignHCenter
                     text: panel.state.selectedLabel
-                    color: panel.state.hasSelection ? panel.theme.accent : panel.theme.inkMuted
-                    font.pixelSize: 12
+                    color: panel.state.hasSelection ? panel.theme.selection : panel.theme.inkMuted
+                    font.pixelSize: panel.theme.textSm
                     font.weight: Font.DemiBold
                 }
             }

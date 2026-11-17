@@ -1,74 +1,104 @@
 import QtQuick
 
 QtObject {
+    // Typography families & unified size scale
     readonly property string fontBody: "Segoe UI"
     readonly property string fontDisplay: "Bahnschrift"
     readonly property string fontMono: "Consolas"
 
-    readonly property color bgCanvas: "#ecf1f5"
-    readonly property color bgHeader: "#ffffff"
-    readonly property color bgSurface: "#ffffff"
-    readonly property color bgSubtle: "#f4f7fa"
-    readonly property color bgTrack: "#e7eef3"
-    readonly property color bgFooter: "#f3f7fa"
-    readonly property color bgStage: "#131d24"
+    readonly property int textXs: 11
+    readonly property int textSm: 12
+    readonly property int textMd: 13
+    readonly property int textLg: 16
+    readonly property int textXl: 20
 
-    readonly property color border: "#d6e0e7"
-    readonly property color borderSoft: "#e4ebf0"
-    readonly property color borderStrong: "#bccbd6"
+    // Unified corner radius scale
+    readonly property real radiusXs: 4
+    readonly property real radiusSm: 6
+    readonly property real radiusMd: 8
+    readonly property real radiusLg: 12
 
-    readonly property color ink: "#172b3a"
-    readonly property color inkSecondary: "#486274"
-    readonly property color inkMuted: "#6b8293"
+    // Dark tactical console surfaces
+    readonly property color bgCanvas: "#0d141a"
+    readonly property color bgHeader: "#121b23"
+    readonly property color bgSurface: "#16212b"
+    readonly property color bgSubtle: "#1c2a36"
+    readonly property color bgElevated: "#223341"
+    readonly property color bgHover: "#283c4c"
+    readonly property color bgTrack: "#101820"
+    readonly property color bgFooter: "#0f171e"
+    readonly property color bgStage: "#090e13"
+    readonly property color bgGlass: "#eb111b23"
+    readonly property color bgGlassHover: "#f51a2936"
+    readonly property color bgShadow: "#6604080c"
+    readonly property color scrim: "#99060b10"
 
-    readonly property color accent: "#246b89"
-    readonly property color accentHover: "#1b536b"
-    readonly property color accentSoft: "#e7f2f7"
-    readonly property color accentBorder: "#a9cfdf"
+    // Borders
+    readonly property color border: "#263847"
+    readonly property color borderSoft: "#1d2c38"
+    readonly property color borderStrong: "#3b5468"
+    readonly property color borderGlass: "#4d7fa8c2"
 
-    readonly property color sideA: "#276c9c"
-    readonly property color sideASoft: "#ebf3fa"
-    readonly property color sideABorder: "#b7d4e9"
+    // Typography inks
+    readonly property color ink: "#edf3f7"
+    readonly property color inkSecondary: "#a7bdcd"
+    readonly property color inkMuted: "#738c9e"
+    readonly property color keycapBg: "#121c24"
+    readonly property color keycapBorder: "#2d4152"
 
-    readonly property color sideB: "#b64c59"
-    readonly property color sideBSoft: "#fcedef"
-    readonly property color sideBBorder: "#e7bfc4"
+    // Primary accent & unified selection highlight (distinct from Replay amber)
+    readonly property color accent: "#2d9dc4"
+    readonly property color accentHover: "#39b1da"
+    readonly property color accentSoft: "#183848"
+    readonly property color accentBorder: "#347896"
+    readonly property color selection: "#4ce8ff"
 
-    readonly property color modeLive: "#187059"
-    readonly property color modeLiveDot: "#1ca17b"
-    readonly property color modeLiveSoft: "#e5f5ef"
-    readonly property color modeLiveBorder: "#9fd8c5"
+    // Side A (Blue) & Side B (Crimson)
+    readonly property color sideA: "#4ca6e0"
+    readonly property color sideASoft: "#173145"
+    readonly property color sideABorder: "#336c94"
 
-    readonly property color modeReplay: "#9c6112"
-    readonly property color modeReplayDot: "#d98a1e"
-    readonly property color modeReplaySoft: "#fdf2dc"
-    readonly property color modeReplayBorder: "#e4be73"
+    readonly property color sideB: "#e0626f"
+    readonly property color sideBSoft: "#3a1c22"
+    readonly property color sideBBorder: "#8c3d47"
 
-    readonly property color modeRecovery: "#b1363f"
-    readonly property color modeRecoveryDot: "#d64550"
-    readonly property color modeRecoverySoft: "#fdedee"
-    readonly property color modeRecoveryBorder: "#e7a7ad"
+    // Semantic workflow mode tokens
+    readonly property color modeLive: "#36d399"
+    readonly property color modeLiveDot: "#18b87e"
+    readonly property color modeLiveSoft: "#123026"
+    readonly property color modeLiveBorder: "#24644d"
 
-    readonly property color modeRecalibrate: "#38579e"
-    readonly property color modeRecalibrateDot: "#4f72c4"
-    readonly property color modeRecalibrateSoft: "#ebf0fa"
-    readonly property color modeRecalibrateBorder: "#aebfe8"
+    readonly property color modeReplay: "#f0b44c"
+    readonly property color modeReplayDot: "#e8a23a"
+    readonly property color modeReplaySoft: "#2b2113"
+    readonly property color modeReplayBorder: "#705124"
 
-    readonly property color modeTerrain: "#1f7254"
-    readonly property color modeTerrainDot: "#279670"
-    readonly property color modeTerrainSoft: "#e7f5ef"
-    readonly property color modeTerrainBorder: "#a3dac3"
+    readonly property color modeRecovery: "#f06a76"
+    readonly property color modeRecoveryDot: "#e04856"
+    readonly property color modeRecoverySoft: "#33181c"
+    readonly property color modeRecoveryBorder: "#7a3038"
 
-    readonly property color success: "#1d7859"
-    readonly property color successSoft: "#e7f5ef"
-    readonly property color successBorder: "#aadac7"
+    readonly property color modeRecalibrate: "#7aa2f7"
+    readonly property color modeRecalibrateDot: "#5a86eb"
+    readonly property color modeRecalibrateSoft: "#17253e"
+    readonly property color modeRecalibrateBorder: "#385694"
 
-    readonly property color warning: "#986415"
-    readonly property color warningSoft: "#fcf3df"
-    readonly property color warningBorder: "#e7cb8b"
+    readonly property color modeTerrain: "#45d49f"
+    readonly property color modeTerrainDot: "#29b882"
+    readonly property color modeTerrainSoft: "#132e24"
+    readonly property color modeTerrainBorder: "#27694f"
 
-    readonly property color danger: "#c03843"
-    readonly property color dangerHover: "#9f2933"
-    readonly property color dangerSoft: "#fcecef"
-    readonly property color dangerBorder: "#e6b3b8"
+    // Status tokens
+    readonly property color success: "#36d399"
+    readonly property color successSoft: "#123026"
+    readonly property color successBorder: "#24644d"
+
+    readonly property color warning: "#f0b44c"
+    readonly property color warningSoft: "#2b2113"
+    readonly property color warningBorder: "#705124"
+
+    readonly property color danger: "#d94552"
+    readonly property color dangerHover: "#c23542"
+    readonly property color dangerSoft: "#33181c"
+    readonly property color dangerBorder: "#7a3038"
 }

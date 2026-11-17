@@ -5,7 +5,7 @@ import QtQuick.Layouts
 Rectangle {
     id: panel
     readonly property Theme theme: Theme {}
-    radius: 10
+    radius: theme.radiusLg
     color: theme.bgSurface
     border.color: theme.border
 
@@ -25,7 +25,7 @@ Rectangle {
                 text: "Recover unit IDs"
                 color: panel.theme.ink
                 font.family: panel.theme.fontDisplay
-                font.pixelSize: 17
+                font.pixelSize: panel.theme.textLg
                 font.weight: Font.DemiBold
                 Layout.fillWidth: true
             }
@@ -34,7 +34,7 @@ Rectangle {
         Text {
             text: "Click a unit to review its auto candidate, or drag an ID onto the yellow mask."
             color: panel.theme.inkMuted
-            font.pixelSize: 11
+            font.pixelSize: panel.theme.textXs
             wrapMode: Text.WordWrap
             Layout.fillWidth: true
         }
@@ -60,7 +60,7 @@ Rectangle {
                         readonly property color sideSoft: isA ? panel.theme.sideASoft : panel.theme.sideBSoft
                         width: parent.width
                         height: 54
-                        radius: 8
+                        radius: panel.theme.radiusMd
                         color: pointer.containsMouse ? sideSoft : panel.theme.bgSubtle
                         border.color: pointer.containsMouse ? sideColor : panel.theme.border
                         opacity: flow.state.busy ? 0.55 : 1.0
@@ -80,13 +80,13 @@ Rectangle {
                             spacing: 8
 
                             Rectangle {
-                                width: 22; height: 22; radius: 6
+                                width: 22; height: 22; radius: panel.theme.radiusSm
                                 color: row.sideColor
                                 Text {
                                     anchors.centerIn: parent
                                     text: row.modelData.side
-                                    color: "white"
-                                    font.pixelSize: 11
+                                    color: "#ffffff"
+                                    font.pixelSize: panel.theme.textXs
                                     font.weight: Font.DemiBold
                                 }
                             }
@@ -97,13 +97,13 @@ Rectangle {
                                 Text {
                                     text: row.modelData.id
                                     color: panel.theme.ink
-                                    font.pixelSize: 13
+                                    font.pixelSize: panel.theme.textMd
                                     font.weight: Font.DemiBold
                                 }
                                 Text {
                                     text: row.modelData.name || ""
                                     color: panel.theme.inkMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: panel.theme.textXs
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
                                 }
@@ -111,9 +111,9 @@ Rectangle {
 
                             Rectangle {
                                 visible: row.modelData.status === "review"
-                                implicitWidth: badgeTxt.implicitWidth + 10
+                                implicitWidth: badgeTxt.implicitWidth + 12
                                 implicitHeight: 20
-                                radius: 10
+                                radius: height / 2
                                 color: panel.theme.warningSoft
                                 border.color: panel.theme.warningBorder
                                 Text {
@@ -121,7 +121,7 @@ Rectangle {
                                     anchors.centerIn: parent
                                     text: "Review"
                                     color: panel.theme.warning
-                                    font.pixelSize: 10
+                                    font.pixelSize: panel.theme.textXs
                                     font.weight: Font.DemiBold
                                 }
                             }
@@ -151,9 +151,9 @@ Rectangle {
                             width: 148
                             height: 38
                             z: 100
-                            radius: 8
+                            radius: panel.theme.radiusMd
                             color: row.sideColor
-                            border.color: "white"
+                            border.color: "#ffffff"
                             border.width: 1
                             visible: pointer.drag.active
                             property string unitId: row.modelData.id
@@ -166,8 +166,8 @@ Rectangle {
                             Text {
                                 anchors.centerIn: parent
                                 text: "Confirm " + ghost.unitId
-                                color: "white"
-                                font.pixelSize: 12
+                                color: "#ffffff"
+                                font.pixelSize: panel.theme.textSm
                                 font.weight: Font.DemiBold
                             }
                         }
@@ -179,7 +179,7 @@ Rectangle {
                     visible: flow.state.rows.length === 0
                     text: "No failed units listed. Select a unit on the board and use Correct to report a tracking error."
                     color: panel.theme.inkMuted
-                    font.pixelSize: 11
+                    font.pixelSize: panel.theme.textXs
                     wrapMode: Text.WordWrap
                 }
             }

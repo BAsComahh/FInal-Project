@@ -7,7 +7,7 @@ Button {
     property bool primary: false
     property string variant: primary ? "primary" : "default"
     property bool active: false
-    property real cornerRadius: 8
+    property real cornerRadius: theme.radiusMd
     property string shortcut: ""
     property string tooltipText: ""
     readonly property Theme theme: Theme {}
@@ -32,64 +32,70 @@ Button {
                 return control.hovered ? control.theme.dangerHover : control.theme.danger
             }
             if (control.variant === "dangerSubtle") {
-                return control.hovered ? control.theme.dangerSoft : control.theme.bgSurface
+                return control.hovered ? control.theme.dangerSoft : control.theme.bgSubtle
             }
             if (control.variant === "subtle") {
                 if (control.active) return control.theme.accentSoft
-                return control.hovered ? "#e7eef4" : control.theme.bgSubtle
+                return control.hovered ? control.theme.bgHover : control.theme.bgSubtle
             }
             if (control.variant === "ghost") {
                 if (control.active) return control.theme.accentSoft
-                return control.hovered ? "#e9eff4" : "transparent"
+                return control.hovered ? control.theme.bgElevated : "transparent"
             }
             if (control.active) return control.theme.accentSoft
-            return control.hovered ? "#eef4f8" : control.theme.bgSurface
+            return control.hovered ? control.theme.bgElevated : control.theme.bgSubtle
         }
-        border.width: control.activeFocus ? 2 : 1
+        border.width: control.visualFocus ? 2 : 1
         border.color: {
-            if (control.activeFocus) return control.theme.accent
-            if (control.variant === "primary") return control.theme.accent
+            if (control.visualFocus) return control.theme.selection
+            if (control.variant === "primary") return control.hovered ? control.theme.accentHover : control.theme.accentBorder
             if (control.variant === "danger") return control.theme.dangerHover
-            if (control.variant === "dangerSubtle") return control.hovered ? control.theme.dangerBorder : control.theme.border
+            if (control.variant === "dangerSubtle") return control.hovered ? control.theme.danger : control.theme.dangerBorder
             if (control.variant === "ghost" && !control.active && !control.hovered) return "transparent"
             if (control.active) return control.theme.accentBorder
             return control.hovered ? control.theme.borderStrong : control.theme.border
         }
-        opacity: control.enabled ? 1 : 0.44
+        opacity: control.enabled ? 1 : 0.42
     }
 
     contentItem: RowLayout {
         spacing: 7
         Text {
             text: control.text
-            font: control.font
+            font.family: control.theme.fontBody
+            font.pixelSize: control.theme.textSm
+            font.weight: (control.variant === "primary" || control.variant === "danger" || control.active)
+                         ? Font.DemiBold : Font.Medium
             color: {
-                if (control.variant === "primary" || control.variant === "danger") return "white"
-                if (control.variant === "dangerSubtle") return control.theme.danger
-                if (control.active) return control.theme.accent
+                if (control.variant === "primary" || control.variant === "danger") return "#ffffff"
+                if (control.variant === "dangerSubtle") return control.theme.modeRecovery
+                if (control.active) return control.theme.selection
                 return control.theme.ink
             }
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
             Layout.fillWidth: true
             elide: Text.ElideRight
-            opacity: control.enabled ? 1 : 0.44
+            opacity: control.enabled ? 1 : 0.42
         }
         Rectangle {
             visible: control.shortcut.length > 0
-            implicitWidth: keyLabel.implicitWidth + 8
-            implicitHeight: 17
-            radius: 4
-            color: (control.variant === "primary" || control.variant === "danger") ? "#30ffffff" : control.theme.bgTrack
-            border.color: (control.variant === "primary" || control.variant === "danger") ? "transparent" : control.theme.borderSoft
-            opacity: control.enabled ? 1 : 0.44
+            implicitWidth: keyLabel.implicitWidth + 10
+            implicitHeight: 18
+            radius: control.theme.radiusXs
+            color: (control.variant === "primary" || control.variant === "danger")
+                   ? "#28000000" : control.theme.keycapBg
+            border.color: (control.variant === "primary" || control.variant === "danger")
+                          ? "#40ffffff" : control.theme.keycapBorder
+            opacity: control.enabled ? 1 : 0.42
             Text {
                 id: keyLabel
                 anchors.centerIn: parent
                 text: control.shortcut
                 font.family: control.theme.fontMono
-                font.pixelSize: 10
-                color: (control.variant === "primary" || control.variant === "danger") ? "white" : control.theme.inkMuted
+                font.pixelSize: control.theme.textXs
+                color: (control.variant === "primary" || control.variant === "danger")
+                       ? "#ffffff" : control.theme.inkMuted
             }
         }
     }

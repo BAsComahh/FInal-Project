@@ -1,50 +1,77 @@
 """Owned Qt images and decoupled video / async mask-overlay / fast interactive rendering."""
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+from pathlib import Path
 from threading import Lock
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw, ImageFont
 from PySide6.QtGui import QImage
 from PySide6.QtQuick import QQuickImageProvider
 
 from components.homography import transform_points
-from frontend.shared.drawing import draw_text
 from frontend.shared.layers import QueryLayers
 
+# Tightly harmonized team palettes in BGR so adjacent units remain distinguishable
+# without drifting into Replay amber (#e8a23a) or Recovery yellow-gold.
 _SIDE_A_BGR = (
-    (208, 138, 42),
-    (188, 114, 38),
-    (186, 162, 52),
-    (224, 158, 78),
-    (168, 128, 46),
-    (200, 174, 88),
+    (224, 166, 76),
+    (212, 146, 60),
+    (232, 184, 96),
+    (196, 130, 52),
+    (216, 174, 114),
+    (184, 152, 68),
 )
 
 _SIDE_B_BGR = (
-    (92, 82, 214),
-    (78, 116, 230),
-    (110, 74, 192),
-    (74, 146, 224),
-    (124, 98, 224),
-    (94, 108, 184),
+    (112, 94, 226),
+    (102, 76, 210),
+    (130, 108, 236),
+    (122, 82, 232),
+    (142, 98, 218),
+    (108, 86, 222),
 )
 
 _UNBOUND_BGR = (
-    (176, 152, 46),
-    (98, 176, 86),
-    (208, 128, 72),
-    (90, 174, 218),
-    (186, 108, 168),
-    (140, 182, 92),
+    (194, 174, 72),
+    (126, 194, 110),
+    (212, 148, 86),
+    (124, 184, 214),
+    (188, 130, 182),
+    (152, 194, 112),
 )
 
 _TERRAIN_KIND_BGR = {
-    "blocking": (82, 92, 196),
-    "difficult": (54, 166, 224),
-    "obstacle": (182, 120, 88),
-    "hill": (96, 168, 102),
-    "decorative": (154, 164, 172),
+    "blocking": (108, 104, 214),
+    "difficult": (74, 178, 232),
+    "obstacle": (196, 138, 92),
+    "hill": (122, 188, 114),
+    "decorative": (162, 174, 184),
 }
+
+# Unified high-contrast selection highlight (Ice Cyan #4ce8ff in BGR)
+_SELECTION_BGR = (255, 232, 76)
+_TARGET_BGR = (153, 211, 54)
+_RECOVERY_BGR = (64, 208, 250)
+
+
+@lru_cache(maxsize=16)
+def _ui_font(size, bold=True):
+    fonts_dir = Path("C:/Windows/Fonts")
+    candidates = ("seguisb.ttf", "segoeui.ttf", "msyhbd.ttc", "msyh.ttc") if bold else ("segoeui.ttf", "msyh.ttc")
+    for name in candidates:
+        path = fonts_dir / name
+        if path.is_file():
+            try:
+                return ImageFont.truetype(str(path), size)
+            except OSError:
+                continue
+    return ImageFont.load_default()
+
+
+def _bgr_hex(bgr):
+    return f"#{int(bgr[2]):02x}{int(bgr[1]):02x}{int(bgr[0]):02x}"
 
 
 def _empty_argb():
@@ -68,47 +95,55 @@ def _object_color(object_id, side):
     return palette[(object_id - 1) % len(palette)]
 
 
-def _measure_badge(text, scale, has_dot):
+def measure_pill_box(text, scale, has_dot=True):
+    """Measure frame-space capsule bounds matching QML BoardBadges proportions."""
     text = str(text)
-    font_scale = max(0.40, 0.45 * scale)
-    thickness = max(1, round(1.25 * scale))
-    pad_x = max(5, round(6 * scale))
-    pad_y = max(3, round(4 * scale))
-    dot_r = max(3, round(3.3 * scale)) if has_dot else 0
-    dot_gap = max(5, round(5 * scale)) if has_dot else 0
-
-    if text.isascii():
-        (text_w, text_h), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
-    else:
-        text_h = max(13, round(14 * scale))
-        text_w = max(22, round(len(text) * text_h * 0.85))
-        baseline = max(3, round(3 * scale))
-
-    box_w = pad_x * 2 + text_w + (dot_r * 2 + dot_gap if has_dot else 0)
-    box_h = pad_y * 2 + text_h + baseline // 2
-    return box_w, box_h, font_scale, thickness, pad_x, pad_y, dot_r, dot_gap, text_h
+    font_px = max(14, round(15.5 * scale))
+    font = _ui_font(font_px, bold=True)
+    bbox = font.getbbox(text)
+    text_w = max(14, bbox[2] - bbox[0])
+    pad_x = max(8, round(9.0 * scale))
+    dot_d = max(7, round(8.0 * scale)) if has_dot else 0
+    dot_gap = max(5, round(5.5 * scale)) if has_dot else 0
+    box_w = pad_x * 2 + text_w + (dot_d + dot_gap if has_dot else 0) + 4
+    box_h = max(22, round(24.0 * scale))
+    return int(box_w), int(box_h)
 
 
-def _draw_badge_at(rgba, text, box, metrics, scale, *, dot_bgr=None, fill_rgba=(20, 32, 42, 222)):
-    x, y, x2, y2 = box
-    _, _, font_scale, thickness, pad_x, pad_y, dot_r, dot_gap, text_h = metrics
-    cv2.rectangle(rgba, (x, y), (x2, y2), fill_rgba, -1)
-    cv2.rectangle(rgba, (x, y), (x2, y2), (214, 228, 238, 175), max(1, round(scale)))
-
-    text_x = x + pad_x
-    if dot_bgr is not None:
-        dot_cx = x + pad_x + dot_r
-        dot_cy = (y + y2) // 2
-        cv2.circle(rgba, (dot_cx, dot_cy), dot_r, (*dot_bgr, 255), -1, cv2.LINE_AA)
-        text_x += dot_r * 2 + dot_gap
-
-    text_y = y + pad_y + text_h
+def draw_pill_tag(rgba, text, x, y, scale, *, border_bgr=(255, 232, 76), fill_bgra=(34, 25, 16, 235), text_bgra=(247, 243, 237, 255)):
+    """Draw a crisp anti-aliased rounded pill tag directly onto a BGRA canvas ROI."""
     text = str(text)
-    if text.isascii():
-        cv2.putText(rgba, text, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                    (248, 251, 255, 255), thickness, cv2.LINE_AA)
-    else:
-        draw_text(rgba, text, (text_x, text_y), (248, 251, 255, 255), size=max(13, round(14 * scale)))
+    font_px = max(14, round(15.5 * scale))
+    font = _ui_font(font_px, bold=True)
+    bbox = font.getbbox(text)
+    tw = max(10, bbox[2] - bbox[0])
+    th = max(12, bbox[3] - bbox[1])
+    pad_x = max(8, round(8.5 * scale))
+    pad_y = max(5, round(5.5 * scale))
+    bw = tw + pad_x * 2
+    bh = th + pad_y * 2
+    h, w = rgba.shape[:2]
+    x0 = max(4, min(w - bw - 4, int(round(x))))
+    y0 = max(4, min(h - bh - 4, int(round(y))))
+    x1 = min(w - 1, x0 + bw)
+    y1 = min(h - 1, y0 + bh)
+    if x1 <= x0 or y1 <= y0:
+        return
+    roi = rgba[y0:y1, x0:x1]
+    pil_roi = Image.fromarray(roi, "RGBA")
+    draw = ImageDraw.Draw(pil_roi)
+    radius = min((x1 - x0) // 2, (y1 - y0) // 2)
+    draw.rounded_rectangle(
+        [0, 0, x1 - x0 - 1, y1 - y0 - 1],
+        radius=radius,
+        fill=fill_bgra,
+        outline=(*border_bgr, 245),
+        width=max(1, round(1.3 * scale)),
+    )
+    tx = (x1 - x0 - tw) // 2 - bbox[0]
+    ty = (y1 - y0 - th) // 2 - bbox[1]
+    draw.text((tx, ty), text, font=font, fill=text_bgra)
+    rgba[y0:y1, x0:x1] = np.asarray(pil_roi)
 
 
 def _rect_overlap(a, b):
@@ -125,7 +160,7 @@ def _rect_distance(box, target):
     return float((dx * dx + dy * dy) ** 0.5)
 
 
-def _nearest_points(box, target):
+def nearest_rect_points(box, target):
     bx = min(max((box[0] + box[2]) / 2.0, target[0]), target[2])
     by = min(max((box[1] + box[3]) / 2.0, target[1]), target[3])
     px = min(max(bx, box[0]), box[2])
@@ -139,7 +174,7 @@ def _place_label_box(unit_box, box_w, box_h, frame_w, frame_h, scale, integral, 
     umy = (uy0 + uy1) * 0.5
     max_x = max(4, frame_w - box_w - 4)
     max_y = max(4, frame_h - box_h - 4)
-    margin = max(3, round(3.5 * scale))
+    margin = max(4, round(4.5 * scale))
     ih, iw = integral.shape[0] - 1, integral.shape[1] - 1
 
     def occ_score(x, y):
@@ -153,7 +188,7 @@ def _place_label_box(unit_box, box_w, box_h, frame_w, frame_h, scale, integral, 
 
     best_box = None
     best_score = None
-    gaps = (round(6 * scale), round(14 * scale), round(26 * scale), round(42 * scale), round(64 * scale), round(92 * scale))
+    gaps = (round(7 * scale), round(16 * scale), round(28 * scale), round(44 * scale), round(66 * scale), round(94 * scale))
 
     for ring_idx, gap in enumerate(gaps):
         candidates = (
@@ -193,19 +228,43 @@ def _place_label_box(unit_box, box_w, box_h, frame_w, frame_h, scale, integral, 
                 best_box = cand
             if lbl_overlap == 0 and occ_blocks == 0:
                 found_clean_in_ring = True
-        if found_clean_in_ring and ring_idx == 0:
-            break
         if found_clean_in_ring:
             break
 
     if best_box is None:
         x = int(max(4, min(max_x, round(umx - box_w * 0.5))))
-        y = int(max(4, min(max_y, round(uy0 - round(6 * scale) - box_h))))
+        y = int(max(4, min(max_y, round(uy0 - round(7 * scale) - box_h))))
         best_box = (x, y, x + box_w, y + box_h)
     return best_box
 
 
-def _draw_corner_brackets(frame, x, y, right, bottom, color, thickness, span):
+def place_badges(entries, occ, frame_w, frame_h, scale, *, pre_placed=()):
+    """Place unit badges with 1/4-res integral occupancy & collision avoidance.
+
+    Each entry is (area, unit_box, label, dot_bgr, border_bgr, object_id, active).
+    Returns list of (box, entry, leader_dist).
+    """
+    if not entries:
+        return []
+    ds = 4
+    small_w, small_h = max(1, frame_w // ds), max(1, frame_h // ds)
+    occ_small = cv2.resize(occ, (small_w, small_h), interpolation=cv2.INTER_AREA)
+    integral = cv2.integral((occ_small > 0).astype(np.uint8))
+
+    placed_boxes = list(pre_placed)
+    results = []
+    # Smaller / inner cluster units claim close open pockets first.
+    for entry in sorted(entries, key=lambda item: (item[0], item[1][1], item[1][0])):
+        _, unit_box, label, dot_bgr, _, _, _ = entry
+        bw, bh = measure_pill_box(label, scale, has_dot=dot_bgr is not None)
+        box = _place_label_box(unit_box, bw, bh, frame_w, frame_h, scale, integral, ds, placed_boxes)
+        placed_boxes.append(box)
+        dist = _rect_distance(box, unit_box)
+        results.append((box, entry, dist))
+    return results
+
+
+def draw_corner_brackets(frame, x, y, right, bottom, color, thickness, span):
     span = max(6, min(span, (right - x) // 3, (bottom - y) // 3))
     for cx, cy, dx, dy in (
         (x, y, 1, 1),
@@ -217,15 +276,34 @@ def _draw_corner_brackets(frame, x, y, right, bottom, color, thickness, span):
         cv2.line(frame, (cx, cy), (cx, cy + dy * span), color, thickness, cv2.LINE_AA)
 
 
+def _badge_dict(box, width, height, label, dot_bgr, border_bgr, *, kind="unit", object_id=-1, unit_id="", active=False):
+    return {
+        "x": box[0] / width,
+        "y": box[1] / height,
+        "w": (box[2] - box[0]) / width,
+        "h": (box[3] - box[1]) / height,
+        "text": str(label),
+        "dot": _bgr_hex(dot_bgr) if dot_bgr is not None else "",
+        "border": _bgr_hex(border_bgr),
+        "kind": kind,
+        "objectId": int(object_id),
+        "unitId": str(unit_id),
+        "active": bool(active),
+    }
+
+
 def _bake_static_overlay(state, size, *, selected, masks, trays):
-    """Build transparent BGRA overlay (terrain + masks + trays + smart name tags) off the hot video path."""
+    """Build transparent BGRA overlay (terrain + masks + trays + leader lines) & crisp QML badge coords."""
     width, height = size
     scale = max(1.0, height / 720.0)
     rgba = np.zeros((height, width, 4), np.uint8)
     has_terrain = state.stage in ("register", "playback") and state.board.homography is not None and bool(state.rules.terrain)
     prediction = state.current.prediction
     if not has_terrain and (prediction is None or (not masks and not trays)):
-        return None
+        return None, []
+
+    badges = []
+    pre_placed = []
 
     if has_terrain:
         matrix = state.board.homography["matrix"]
@@ -234,21 +312,21 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
                        if item.get("polygon_source") is not None else np.asarray(item["polygon_image"]))
             points = np.clip(np.rint(polygon), -1_000_000_000, 1_000_000_000).astype(np.int32)
             if len(points) >= 3:
-                bgr = _TERRAIN_KIND_BGR.get(item.get("kind"), (154, 164, 172))
-                cv2.fillPoly(rgba, [points], (*bgr, 52))
-                cv2.polylines(rgba, [points], True, (22, 32, 42, 185), max(3, round(3.2 * scale)), cv2.LINE_AA)
-                cv2.polylines(rgba, [points], True, (*bgr, 230), max(1, round(1.8 * scale)), cv2.LINE_AA)
+                bgr = _TERRAIN_KIND_BGR.get(item.get("kind"), (162, 174, 184))
+                cv2.fillPoly(rgba, [points], (*bgr, 40))
+                cv2.polylines(rgba, [points], True, (14, 22, 28, 195), max(3, round(3.4 * scale)), cv2.LINE_AA)
+                cv2.polylines(rgba, [points], True, (*bgr, 235), max(1, round(1.8 * scale)), cv2.LINE_AA)
                 center = points.mean(axis=0)
                 label = item.get("label") or item.get("terrain_id") or "Terrain"
-                metrics = _measure_badge(label, scale * 0.88, True)
-                bw, bh = metrics[0], metrics[1]
+                bw, bh = measure_pill_box(label, scale * 0.92, has_dot=True)
                 bx = int(max(4, min(width - bw - 4, round(center[0] - bw * 0.5))))
                 by = int(max(4, min(height - bh - 4, round(center[1] - bh * 0.5))))
-                _draw_badge_at(rgba, label, (bx, by, bx + bw, by + bh), metrics, scale * 0.88,
-                               dot_bgr=bgr, fill_rgba=(20, 32, 42, 185))
+                t_box = (bx, by, bx + bw, by + bh)
+                pre_placed.append(t_box)
+                badges.append(_badge_dict(t_box, width, height, label, bgr, bgr, kind="terrain"))
 
     if prediction is None or (not masks and not trays):
-        return rgba
+        return rgba, badges
 
     occ = np.zeros((height, width), np.uint8)
     bindings = state.units.bindings
@@ -267,22 +345,26 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
         ys = np.flatnonzero(mask_arr.any(axis=1))
         xs = np.flatnonzero(mask_arr.any(axis=0))
         x0 = y0 = x1 = y1 = None
-        contours = None
         if len(xs):
             x0, y0, x1, y1 = int(xs[0]), int(ys[0]), int(xs[-1]) + 1, int(ys[-1]) + 1
             sub = mask_arr[y0:y1, x0:x1].astype(np.uint8)
             occ[y0:y1, x0:x1][sub != 0] = 1
             if masks:
-                fill_alpha = 122 if is_reg_selected else 90
+                if state.stage == "register":
+                    fill_alpha = 88 if is_reg_selected else 56
+                else:
+                    fill_alpha = 40 if trays else 58
                 roi = rgba[y0:y1, x0:x1]
                 roi[sub != 0] = (*color, fill_alpha)
                 contours, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, offset=(x0, y0))
                 if is_reg_selected:
-                    cv2.drawContours(rgba, contours, -1, (255, 255, 255, 245), max(3, round(3.4 * scale)), cv2.LINE_AA)
-                cv2.drawContours(rgba, contours, -1, (*color, 235), max(1, round(1.8 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, (16, 24, 32, 235), max(4, round(4.8 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, (*_SELECTION_BGR, 255), max(2, round(2.6 * scale)), cv2.LINE_AA)
+                else:
+                    cv2.drawContours(rgba, contours, -1, (14, 22, 28, 170), max(2, round(2.8 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, (*color, 235), max(1, round(1.8 * scale)), cv2.LINE_AA)
 
         tray = pred_trays.get(object_id)
-        polygon = None
         if tray is not None:
             polygon = np.clip(np.rint(np.asarray(tray["corners_image"])), -1_000_000_000, 1_000_000_000).astype(np.int32)
             if len(polygon):
@@ -294,50 +376,40 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
                 x1 = tx1 if x1 is None else max(x1, tx1)
                 y1 = ty1 if y1 is None else max(y1, ty1)
             if trays and len(polygon):
-                cv2.polylines(rgba, [polygon], True, (18, 28, 36, 180), max(3, round(3.6 * scale)), cv2.LINE_AA)
+                cv2.polylines(rgba, [polygon], True, (12, 20, 26, 215), max(3, round(3.8 * scale)), cv2.LINE_AA)
                 cv2.polylines(rgba, [polygon], True, (*color, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
 
         if x0 is not None:
             unit_box = (max(0, x0), max(0, y0), min(width, x1), min(height, y1))
             area = max(1, (unit_box[2] - unit_box[0]) * (unit_box[3] - unit_box[1]))
-            label = bindings.get(object_id, f"Mask {object_id}")
-            dot = (196, 138, 48) if side == "A" else (92, 82, 212) if side == "B" else None
-            items.append((area, unit_box, label, dot, color))
+            unit_id = bindings.get(object_id, "")
+            label = unit_id or f"Mask {object_id}"
+            dot = _SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0] if side == "B" else None
+            items.append((area, unit_box, label, dot, _SELECTION_BGR if is_reg_selected else color, object_id, is_reg_selected))
 
     # Avoid covering registration prompt pins as well.
     if state.stage == "register":
-        pin_occ_r = max(11, round(13 * scale))
+        pin_occ_r = max(12, round(14 * scale))
         for prompt in state.registration_prompts:
             if prompt["object_id"] == selected:
                 px, py = (int(round(v)) for v in prompt["point"])
                 cv2.circle(occ, (px, py), pin_occ_r, 1, -1)
 
-    if not items:
-        return rgba
-
-    ds = 4
-    small_w, small_h = max(1, width // ds), max(1, height // ds)
-    occ_small = cv2.resize(occ, (small_w, small_h), interpolation=cv2.INTER_AREA)
-    integral = cv2.integral((occ_small > 0).astype(np.uint8))
-
-    placed_boxes = []
-    # Place smaller / tighter cluster units first so inner units claim close open pockets cleanly.
-    for _, unit_box, label, dot, color in sorted(items, key=lambda entry: (entry[0], entry[1][1], entry[1][0])):
-        metrics = _measure_badge(label, scale, dot is not None)
-        bw, bh = metrics[0], metrics[1]
-        box = _place_label_box(unit_box, bw, bh, width, height, scale, integral, ds, placed_boxes)
-        placed_boxes.append(box)
-
-        dist = _rect_distance(box, unit_box)
+    placed = place_badges(items, occ, width, height, scale, pre_placed=pre_placed)
+    for box, entry, dist in placed:
+        _, unit_box, label, dot, border_bgr, object_id, is_active = entry
         if dist > round(9 * scale):
-            p_lbl, p_unit = _nearest_points(box, unit_box)
-            cv2.line(rgba, p_lbl, p_unit, (18, 28, 36, 200), max(3, round(3.0 * scale)), cv2.LINE_AA)
-            cv2.line(rgba, p_lbl, p_unit, (*color, 240), max(1, round(1.5 * scale)), cv2.LINE_AA)
-            cv2.circle(rgba, p_unit, max(3, round(3.2 * scale)), (248, 251, 255, 245), -1, cv2.LINE_AA)
+            p_lbl, p_unit = nearest_rect_points(box, unit_box)
+            cv2.line(rgba, p_lbl, p_unit, (12, 20, 26, 220), max(3, round(3.2 * scale)), cv2.LINE_AA)
+            cv2.line(rgba, p_lbl, p_unit, (*border_bgr, 245), max(1, round(1.6 * scale)), cv2.LINE_AA)
+            cv2.circle(rgba, p_unit, max(3, round(3.5 * scale)), (12, 20, 26, 240), -1, cv2.LINE_AA)
+            cv2.circle(rgba, p_unit, max(2, round(2.5 * scale)), (237, 243, 247, 255), -1, cv2.LINE_AA)
+        badges.append(_badge_dict(
+            box, width, height, label, dot, border_bgr,
+            kind="unit", object_id=object_id, unit_id=bindings.get(object_id, ""), active=is_active,
+        ))
 
-        _draw_badge_at(rgba, label, box, metrics, scale, dot_bgr=dot)
-
-    return rgba
+    return rgba, badges
 
 
 class BoardImages(QQuickImageProvider):
@@ -378,6 +450,7 @@ class BoardRenderer:
         self._bounds_key = None
         self._selection = self._target = None
         self._interactive_key = None
+        self.badges = []
         self.query_layers = QueryLayers()
 
     def close(self):
@@ -417,10 +490,11 @@ class BoardRenderer:
     @staticmethod
     def _bake_task(key, args):
         state, size, selected, masks, trays = args
-        return key, _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+        rgba, badges = _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+        return key, rgba, badges
 
     def sync_overlay(self, state, *, selected, masks, trays):
-        """Return (updated, has_overlay, overlay_rgba_or_None). Heavy builds run off the GUI thread while playing."""
+        """Return (updated, overlay_rgba_or_None); updates self.badges in lockstep."""
         key = self.overlay_key(state, selected=selected, masks=masks, trays=trays)
         if key == self._overlay_key:
             return False, None
@@ -428,7 +502,9 @@ class BoardRenderer:
         if not state.playing:
             self._pending_overlay = None
             self._overlay_key = key
-            return True, _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+            rgba, badges = _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+            self.badges = badges
+            return True, rgba
         if key != self._in_flight_key:
             self._pending_overlay = (key, (state, size, selected, masks, trays))
             self._start_pending()
@@ -440,7 +516,7 @@ class BoardRenderer:
         future, self._future = self._future, None
         self._in_flight_key = None
         try:
-            key, rgba = future.result()
+            key, rgba, badges = future.result()
         except Exception:
             self._start_pending()
             return False, None
@@ -451,6 +527,7 @@ class BoardRenderer:
             self._start_pending()
             return False, None
         self._overlay_key = key
+        self.badges = badges
         self._start_pending()
         return True, rgba
 
@@ -513,18 +590,18 @@ class BoardRenderer:
 
         if self._selection is not None:
             x, y, right, bottom = self._selection
-            pad = max(4, round(5 * scale))
+            pad = max(5, round(5.5 * scale))
             bx1, by1, bx2, by2 = x - pad, y - pad, right + pad, bottom + pad
-            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (58, 42, 23, 240), max(4, round(4.8 * scale)), cv2.LINE_AA)
-            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (255, 255, 255, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
-            _draw_corner_brackets(rgba, bx1, by1, bx2, by2, (230, 195, 70, 255), max(2, round(2.4 * scale)), round(14 * scale))
+            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (14, 22, 28, 235), max(4, round(5.0 * scale)), cv2.LINE_AA)
+            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (*_SELECTION_BGR, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
+            draw_corner_brackets(rgba, bx1, by1, bx2, by2, (255, 255, 255, 255), max(2, round(2.4 * scale)), round(14 * scale))
 
         if self._target is not None:
             x, y, right, bottom = self._target
-            pad = max(3, round(4 * scale))
+            pad = max(4, round(4.5 * scale))
             bx1, by1, bx2, by2 = x - pad, y - pad, right + pad, bottom + pad
-            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (48, 88, 32, 240), max(4, round(4.2 * scale)), cv2.LINE_AA)
-            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (160, 235, 115, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
+            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (14, 26, 22, 235), max(4, round(4.4 * scale)), cv2.LINE_AA)
+            cv2.rectangle(rgba, (bx1, by1), (bx2, by2), (*_TARGET_BGR, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
 
         if has_query:
             q_bgr = np.zeros((height, width, 3), np.uint8)
@@ -532,7 +609,7 @@ class BoardRenderer:
             q_mask = q_bgr.any(axis=2)
             if np.any(q_mask):
                 rgba[q_mask, :3] = np.clip(q_bgr[q_mask].astype(np.float32) / 0.6, 0, 255).astype(np.uint8)
-                rgba[q_mask, 3] = 205
+                rgba[q_mask, 3] = 230
 
         if has_fronts:
             trays_map = state.current.prediction.get("trays", {})
@@ -541,9 +618,9 @@ class BoardRenderer:
                 front = state.rules.fronts.get(object_id)
                 if front is not None and front.get("source_ray") is not None:
                     ray = np.rint(transform_points(front["source_ray"], matrix)).astype(int)
-                    cv2.arrowedLine(rgba, tuple(ray[0]), tuple(ray[1]), (24, 42, 32, 220),
+                    cv2.arrowedLine(rgba, tuple(ray[0]), tuple(ray[1]), (14, 24, 20, 230),
                                     max(4, round(4.4 * scale)), cv2.LINE_AA, tipLength=0.3)
-                    cv2.arrowedLine(rgba, tuple(ray[0]), tuple(ray[1]), (90, 235, 155, 255),
+                    cv2.arrowedLine(rgba, tuple(ray[0]), tuple(ray[1]), (153, 211, 54, 255),
                                     max(2, round(2.4 * scale)), cv2.LINE_AA, tipLength=0.3)
 
         if has_prompts:
@@ -553,8 +630,8 @@ class BoardRenderer:
             for prompt in state.registration_prompts:
                 if prompt["object_id"] == selected:
                     cx, cy = (int(round(v)) for v in prompt["point"])
-                    fill = (96, 123, 25, 255) if prompt["positive"] else (67, 57, 194, 255)
-                    cv2.circle(rgba, (cx, cy), pin_r + 1, (20, 28, 34, 240), -1, cv2.LINE_AA)
+                    fill = (153, 211, 54, 255) if prompt["positive"] else (82, 74, 217, 255)
+                    cv2.circle(rgba, (cx, cy), pin_r + 2, (14, 22, 28, 245), -1, cv2.LINE_AA)
                     cv2.circle(rgba, (cx, cy), pin_r, fill, -1, cv2.LINE_AA)
                     cv2.circle(rgba, (cx, cy), pin_r, (255, 255, 255, 255), stroke, cv2.LINE_AA)
                     cv2.line(rgba, (cx - arm, cy), (cx + arm, cy), (255, 255, 255, 255), stroke, cv2.LINE_AA)
@@ -563,37 +640,41 @@ class BoardRenderer:
 
         if corners:
             polygon = np.rint(list(corners.values())).astype(np.int32)
-            cv2.polylines(rgba, [polygon], True, (18, 32, 44, 230), max(5, round(5.0 * scale)), cv2.LINE_AA)
-            cv2.polylines(rgba, [polygon], True, (242, 196, 68, 255), max(2, round(2.6 * scale)), cv2.LINE_AA)
+            cv2.polylines(rgba, [polygon], True, (14, 22, 28, 235), max(5, round(5.2 * scale)), cv2.LINE_AA)
+            cv2.polylines(rgba, [polygon], True, (*_SELECTION_BGR, 255), max(2, round(2.6 * scale)), cv2.LINE_AA)
             node_r = max(6, round(7.5 * scale))
             for name, point in corners.items():
                 px, py = (int(round(v)) for v in point)
-                cv2.circle(rgba, (px, py), node_r + 2, (20, 34, 46, 240), -1, cv2.LINE_AA)
+                cv2.circle(rgba, (px, py), node_r + 2, (14, 22, 28, 245), -1, cv2.LINE_AA)
                 cv2.circle(rgba, (px, py), node_r, (255, 255, 255, 255), -1, cv2.LINE_AA)
-                cv2.circle(rgba, (px, py), max(3, round(3.8 * scale)), (137, 107, 36, 255), -1, cv2.LINE_AA)
-                font_scale = max(0.48, 0.55 * scale)
-                thick = max(1, round(1.5 * scale))
-                (tw, th), _ = cv2.getTextSize(name, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thick)
-                bx = max(4, min(width - tw - 16, px + node_r + 6))
-                by = max(4, min(height - th - 14, py - th - 10))
-                cv2.rectangle(rgba, (bx, by), (bx + tw + 12, by + th + 10), (20, 32, 42, 230), -1)
-                cv2.rectangle(rgba, (bx, by), (bx + tw + 12, by + th + 10), (242, 196, 68, 255), max(1, round(scale)))
-                cv2.putText(rgba, name, (bx + 6, by + th + 5), cv2.FONT_HERSHEY_SIMPLEX, font_scale,
-                            (255, 255, 255, 255), thick, cv2.LINE_AA)
+                cv2.circle(rgba, (px, py), max(3, round(3.8 * scale)), (*_SELECTION_BGR, 255), -1, cv2.LINE_AA)
+                bx = max(6, min(width - 44, px + node_r + 6))
+                by = max(6, min(height - 32, py - round(24 * scale)))
+                draw_pill_tag(rgba, name, bx, by, scale, border_bgr=_SELECTION_BGR)
         elif points:
             pts = np.rint(list(points)).astype(np.int32)
             if len(pts) >= 2:
-                cv2.polylines(rgba, [pts], False, (18, 32, 44, 220), max(4, round(4.2 * scale)), cv2.LINE_AA)
-                cv2.polylines(rgba, [pts], False, (242, 196, 68, 255), max(2, round(2.2 * scale)), cv2.LINE_AA)
-            node_r = max(9, round(10.5 * scale))
+                cv2.polylines(rgba, [pts], False, (14, 22, 28, 230), max(4, round(4.4 * scale)), cv2.LINE_AA)
+                cv2.polylines(rgba, [pts], False, (*_SELECTION_BGR, 255), max(2, round(2.2 * scale)), cv2.LINE_AA)
+            node_r = max(10, round(11.0 * scale))
+            font = _ui_font(max(13, round(14 * scale)), bold=True)
             for idx, (px, py) in enumerate(pts, start=1):
-                cv2.circle(rgba, (int(px), int(py)), node_r + 2, (20, 32, 42, 240), -1, cv2.LINE_AA)
-                cv2.circle(rgba, (int(px), int(py)), node_r, (242, 196, 68, 255), -1, cv2.LINE_AA)
+                cv2.circle(rgba, (int(px), int(py)), node_r + 2, (14, 22, 28, 245), -1, cv2.LINE_AA)
+                cv2.circle(rgba, (int(px), int(py)), node_r, (*_SELECTION_BGR, 255), -1, cv2.LINE_AA)
                 label = str(idx)
-                font_scale = max(0.45, 0.5 * scale)
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, max(1, round(1.5 * scale)))
-                cv2.putText(rgba, label, (int(px - tw / 2), int(py + th / 2)), cv2.FONT_HERSHEY_SIMPLEX,
-                            font_scale, (20, 32, 42, 255), max(1, round(1.5 * scale)), cv2.LINE_AA)
+                bbox = font.getbbox(label)
+                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                x0 = max(0, int(px - node_r))
+                y0 = max(0, int(py - node_r))
+                x1 = min(width, x0 + node_r * 2)
+                y1 = min(height, y0 + node_r * 2)
+                if x1 > x0 and y1 > y0:
+                    pil_roi = Image.fromarray(rgba[y0:y1, x0:x1], "RGBA")
+                    ImageDraw.Draw(pil_roi).text(
+                        ((x1 - x0 - tw) // 2 - bbox[0], (y1 - y0 - th) // 2 - bbox[1]),
+                        label, font=font, fill=(28, 22, 14, 255),
+                    )
+                    rgba[y0:y1, x0:x1] = np.asarray(pil_roi)
 
         if has_flow:
             flow.draw_interactive(state, rgba)

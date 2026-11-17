@@ -58,20 +58,20 @@ Item {
                 ctx.beginPath()
                 ctx.moveTo(edgeX, edgeY)
                 ctx.lineTo(unitX, unitY)
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.78)"
-                ctx.lineWidth = 3.2
+                ctx.strokeStyle = "rgba(9, 14, 19, 0.88)"
+                ctx.lineWidth = 4.0
                 ctx.stroke()
 
-                ctx.strokeStyle = "#246b89"
-                ctx.lineWidth = 1.5
+                ctx.strokeStyle = "#4ce8ff"
+                ctx.lineWidth = 1.8
                 ctx.stroke()
 
                 ctx.beginPath()
-                ctx.arc(unitX, unitY, 4, 0, Math.PI * 2)
-                ctx.fillStyle = "#ffffff"
+                ctx.arc(unitX, unitY, 4.5, 0, Math.PI * 2)
+                ctx.fillStyle = "#4ce8ff"
                 ctx.fill()
-                ctx.lineWidth = 1.8
-                ctx.strokeStyle = "#246b89"
+                ctx.lineWidth = 2.0
+                ctx.strokeStyle = "#090e13"
                 ctx.stroke()
                 ctx.restore()
             }
@@ -85,19 +85,22 @@ Item {
                 // Primary query arc (-62 deg to +26 deg)
                 ctx.beginPath()
                 ctx.arc(0, 0, hud.arcRx, -62 * Math.PI / 180, 26 * Math.PI / 180)
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.65)"
-                ctx.lineWidth = 3.2
+                ctx.strokeStyle = "rgba(9, 14, 19, 0.72)"
+                ctx.lineWidth = 3.8
                 ctx.stroke()
-                ctx.strokeStyle = "rgba(36, 107, 137, 0.58)"
-                ctx.lineWidth = 1.5
+                ctx.strokeStyle = "rgba(76, 232, 255, 0.72)"
+                ctx.lineWidth = 1.6
                 ctx.stroke()
 
                 // Lower dashed branch (+30 deg to +60 deg) leading to Correct
                 ctx.setLineDash([4, 4])
                 ctx.beginPath()
                 ctx.arc(0, 0, hud.arcRx, 30 * Math.PI / 180, 60 * Math.PI / 180)
-                ctx.strokeStyle = "rgba(192, 56, 67, 0.48)"
-                ctx.lineWidth = 1.4
+                ctx.strokeStyle = "rgba(9, 14, 19, 0.65)"
+                ctx.lineWidth = 3.0
+                ctx.stroke()
+                ctx.strokeStyle = "rgba(240, 106, 118, 0.78)"
+                ctx.lineWidth = 1.5
                 ctx.stroke()
                 ctx.restore()
             }
@@ -113,16 +116,11 @@ Item {
         scale: hud.menuScale
         transformOrigin: Item.TopLeft
 
-        // Layered soft shadow under the unit card
+        // Layered soft shadow under the dark glass unit card
         Rectangle {
-            x: brief.x; y: brief.y + 4
+            x: brief.x; y: brief.y + 5
             width: brief.width; height: brief.height
-            radius: 13; color: "#1c131d24"
-        }
-        Rectangle {
-            x: brief.x; y: brief.y + 1
-            width: brief.width; height: brief.height
-            radius: 13; color: "#14131d24"
+            radius: hud.theme.radiusLg + 1; color: hud.theme.bgShadow
         }
 
         Rectangle {
@@ -132,9 +130,9 @@ Item {
             height: information.implicitHeight + 22
             x: 0
             y: hud.arcCy - height / 2
-            radius: 12
-            color: "#faffffff"
-            border.color: hud.theme.border
+            radius: hud.theme.radiusLg
+            color: hud.theme.bgGlass
+            border.color: hud.theme.borderGlass
             clip: true
 
             MouseArea { anchors.fill: parent }
@@ -143,7 +141,7 @@ Item {
                 x: 8; y: 11
                 width: 3.5
                 height: Math.max(0, parent.height - 22)
-                radius: 2
+                radius: hud.theme.radiusXs
                 color: hud.sideColor
             }
 
@@ -163,7 +161,7 @@ Item {
                         text: hud.viewData.unitId
                         color: hud.theme.ink
                         font.family: hud.theme.fontDisplay
-                        font.pixelSize: 16
+                        font.pixelSize: hud.theme.textLg
                         font.weight: Font.DemiBold
                         Layout.fillWidth: true
                         elide: Text.ElideRight
@@ -171,24 +169,24 @@ Item {
                     Button {
                         id: quickEdit
                         visible: typeof flow !== "undefined"
-                        implicitWidth: editLabel.implicitWidth + 12
+                        implicitWidth: editLabel.implicitWidth + 14
                         implicitHeight: 22
                         onClicked: flow.open("profile")
                         ToolTip.visible: hovered
                         ToolTip.text: "Edit unit rule attributes"
                         ToolTip.delay: 400
                         background: Rectangle {
-                            radius: 6
+                            radius: hud.theme.radiusSm
                             color: quickEdit.hovered ? hud.theme.accentSoft : hud.theme.bgSubtle
-                            border.color: quickEdit.hovered ? hud.theme.accentBorder : hud.theme.borderSoft
+                            border.color: quickEdit.hovered ? hud.theme.selection : hud.theme.borderStrong
                         }
                         contentItem: Text {
                             id: editLabel
                             text: "Info"
                             font.family: hud.theme.fontBody
-                            font.pixelSize: 10
+                            font.pixelSize: hud.theme.textXs
                             font.weight: Font.DemiBold
-                            color: quickEdit.hovered ? hud.theme.accent : hud.theme.inkSecondary
+                            color: quickEdit.hovered ? hud.theme.selection : hud.theme.inkSecondary
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -198,7 +196,7 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     height: 1
-                    color: hud.theme.borderSoft
+                    color: hud.theme.border
                 }
 
                 GridLayout {
@@ -207,20 +205,22 @@ Item {
                     columnSpacing: 12
                     rowSpacing: 5
 
-                    Text { text: "Damage"; color: hud.theme.inkMuted; font.pixelSize: 12 }
+                    Text { text: "Damage"; color: hud.theme.inkMuted; font.pixelSize: hud.theme.textSm }
                     Text {
                         objectName: "unitDamage"
                         text: hud.viewData.damage
                         color: hud.theme.ink
+                        font.pixelSize: hud.theme.textMd
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignRight
                         Layout.fillWidth: true
                     }
-                    Text { text: "Speed"; color: hud.theme.inkMuted; font.pixelSize: 12 }
+                    Text { text: "Speed"; color: hud.theme.inkMuted; font.pixelSize: hud.theme.textSm }
                     Text {
                         objectName: "unitSpeed"
                         text: hud.viewData.speed
                         color: hud.theme.ink
+                        font.pixelSize: hud.theme.textMd
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignRight
                         Layout.fillWidth: true
@@ -249,10 +249,10 @@ Item {
                 y: hud.arcCy + hud.arcRy * Math.sin(rad) - height / 2
 
                 Rectangle {
-                    x: 0; y: 3
+                    x: 0; y: 4
                     width: parent.width; height: parent.height
-                    radius: 19
-                    color: "#22131d24"
+                    radius: height / 2
+                    color: hud.theme.bgShadow
                 }
 
                 Button {
@@ -269,17 +269,17 @@ Item {
                     ToolTip.delay: 350
 
                     background: Rectangle {
-                        radius: 19
+                        radius: height / 2
                         color: {
                             if (slot.isCorrect) {
                                 return actionButton.hovered ? hud.theme.dangerHover : hud.theme.danger
                             }
-                            return actionButton.hovered ? hud.theme.accentSoft : "#fcffffff"
+                            return actionButton.hovered ? hud.theme.bgGlassHover : hud.theme.bgGlass
                         }
                         border.width: 1
                         border.color: {
-                            if (slot.isCorrect) return hud.theme.dangerHover
-                            return actionButton.hovered ? hud.theme.accent : hud.theme.borderStrong
+                            if (slot.isCorrect) return hud.theme.modeRecovery
+                            return actionButton.hovered ? hud.theme.selection : hud.theme.borderGlass
                         }
                         opacity: actionButton.enabled ? 1 : 0.45
                     }
@@ -288,8 +288,9 @@ Item {
                         spacing: 6
                         Text {
                             text: slot.modelData.label
-                            color: slot.isCorrect ? "white" : (actionButton.hovered ? hud.theme.accent : hud.theme.ink)
-                            font.pixelSize: 13
+                            color: slot.isCorrect ? "#ffffff" : (actionButton.hovered ? hud.theme.selection : hud.theme.ink)
+                            font.family: hud.theme.fontBody
+                            font.pixelSize: hud.theme.textMd
                             font.weight: slot.isCorrect ? Font.DemiBold : Font.Medium
                             Layout.fillWidth: true
                             horizontalAlignment: slot.modelData.key ? Text.AlignLeft : Text.AlignHCenter
@@ -299,16 +300,17 @@ Item {
                             visible: slot.modelData.key.length > 0
                             implicitWidth: kbdText.implicitWidth + 8
                             implicitHeight: 18
-                            radius: 5
-                            color: actionButton.hovered ? "#d9eaf3" : hud.theme.bgTrack
+                            radius: hud.theme.radiusXs
+                            color: actionButton.hovered ? hud.theme.accentSoft : hud.theme.keycapBg
+                            border.color: actionButton.hovered ? hud.theme.accentBorder : hud.theme.keycapBorder
                             opacity: actionButton.enabled ? 1 : 0.45
                             Text {
                                 id: kbdText
                                 anchors.centerIn: parent
                                 text: slot.modelData.key
-                                color: actionButton.hovered ? hud.theme.accent : hud.theme.inkMuted
+                                color: actionButton.hovered ? hud.theme.selection : hud.theme.inkMuted
                                 font.family: hud.theme.fontMono
-                                font.pixelSize: 10
+                                font.pixelSize: hud.theme.textXs
                                 font.weight: Font.DemiBold
                             }
                         }

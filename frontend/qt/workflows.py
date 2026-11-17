@@ -1,24 +1,124 @@
 """Qt adapters for existing live maintenance commands and read-only replay."""
+from collections.abc import Mapping
 import math
 
 import cv2
 import numpy as np
+from PIL import Image, ImageDraw
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
 from components.homography import transform_points
 from components.homography.geometry import order_corners
+from .board import (
+    _SELECTION_BGR,
+    _SIDE_A_BGR,
+    _SIDE_B_BGR,
+    _badge_dict,
+    _ui_font,
+    draw_corner_brackets,
+    nearest_rect_points,
+    place_badges,
+)
+
+
+def _draw_dashed_poly(canvas, points, color, *, halo=(26, 20, 12), thickness=2, dash=9, gap=6):
+    pts = np.asarray(points, dtype=float)
+    n = len(pts)
+    for i in range(n):
+        p0, p1 = pts[i], pts[(i + 1) % n]
+        vec = p1 - p0
+        length = float(np.hypot(vec[0], vec[1]))
+        if length < 1e-3:
+            continue
+        unit = vec / length
+        pos = 0.0
+        while pos < length:
+            end = min(length, pos + dash)
+            a = tuple(np.rint(p0 + unit * pos).astype(int))
+            b = tuple(np.rint(p0 + unit * end).astype(int))
+            cv2.line(canvas, a, b, halo, thickness + 2, cv2.LINE_AA)
+            cv2.line(canvas, a, b, color, thickness, cv2.LINE_AA)
+            pos += dash + gap
+
+
+def _step_start_corners_mm(event, scene):
+    if not isinstance(event, Mapping):
+        return None
+    start = event.get("start")
+    end = event.get("end")
+    if not isinstance(start, Mapping) or not isinstance(end, Mapping):
+        return None
+    board = scene.get("calibration", {}).get("board", {})
+    matrix = board.get("source_to_plane")
+    corners = None
+    compatible = (
+        matrix is not None
+        and start.get("corners_source") is not None
+        and list(start.get("source_image_size") or ()) == list(end.get("source_image_size") or ())
+        and start.get("source", {}).get("video") == end.get("source", {}).get("video")
+    )
+    if compatible:
+        try:
+            corners = transform_points(np.asarray(start["corners_source"], dtype=float), np.asarray(matrix, dtype=float))
+        except (TypeError, ValueError):
+            corners = None
+    if corners is None:
+        corners = start.get("corners_mm")
+    try:
+        arr = np.asarray(corners, dtype=float)
+    except (TypeError, ValueError):
+        return None
+    if arr.shape != (4, 2) or not np.isfinite(arr).all():
+        return None
+    return arr
+
+
+def _draw_rotation_cue(canvas, start_poly, end_poly, rot_deg, scale):
+    center = end_poly.mean(axis=0)
+    cx, cy = int(round(center[0])), int(round(center[1]))
+    edges = np.roll(start_poly, -1, axis=0)[:2] - start_poly[:2]
+    lengths = np.linalg.norm(edges, axis=1)
+    edge = edges[int(np.argmax(lengths))]
+    theta0 = math.degrees(math.atan2(edge[1], edge[0]))
+    sweep = float(rot_deg) if isinstance(rot_deg, (int, float)) and math.isfinite(rot_deg) else 0.0
+    diag = float(np.linalg.norm(end_poly[2] - end_poly[0]))
+    radius = max(round(38 * scale), min(round(68 * scale), int(round(diag * 0.75))))
+
+    # Radial reference spokes from center along start & end axis
+    r_inner = max(round(12 * scale), int(round(diag * 0.30)))
+    for ang, col, thick in ((theta0, (245, 232, 200), max(1, round(1.4 * scale))),
+                            (theta0 + sweep, _SELECTION_BGR, max(2, round(2.0 * scale)))):
+        rad = math.radians(ang)
+        p0 = (int(round(cx + r_inner * math.cos(rad))), int(round(cy + r_inner * math.sin(rad))))
+        p1 = (int(round(cx + (radius + round(8 * scale)) * math.cos(rad))),
+              int(round(cy + (radius + round(8 * scale)) * math.sin(rad))))
+        cv2.line(canvas, p0, p1, (26, 20, 12), thick + 2, cv2.LINE_AA)
+        cv2.line(canvas, p0, p1, col, thick, cv2.LINE_AA)
+
+    if abs(sweep) >= 1.0:
+        start_a, end_a = (theta0, theta0 + sweep) if sweep > 0 else (theta0 + sweep, theta0)
+        cv2.ellipse(canvas, (cx, cy), (radius, radius), 0, start_a, end_a, (26, 20, 12), max(4, round(4.4 * scale)), cv2.LINE_AA)
+        cv2.ellipse(canvas, (cx, cy), (radius, radius), 0, start_a, end_a, _SELECTION_BGR, max(2, round(2.4 * scale)), cv2.LINE_AA)
+        tip_rad = math.radians(theta0 + sweep)
+        tang = tip_rad + (math.pi / 2 if sweep > 0 else -math.pi / 2)
+        tx, ty = cx + radius * math.cos(tip_rad), cy + radius * math.sin(tip_rad)
+        tail = (int(round(tx - 12 * scale * math.cos(tang))), int(round(ty - 12 * scale * math.sin(tang))))
+        head = (int(round(tx + 3 * scale * math.cos(tang))), int(round(ty + 3 * scale * math.sin(tang))))
+        cv2.arrowedLine(canvas, tail, head, (26, 20, 12), max(4, round(4.4 * scale)), cv2.LINE_AA, tipLength=0.65)
+        cv2.arrowedLine(canvas, tail, head, _SELECTION_BGR, max(2, round(2.4 * scale)), cv2.LINE_AA, tipLength=0.65)
+    return radius
 
 
 def _replay_board(state, replay, preview_size):
     width = max(320, int(preview_size[0]))
     height = max(220, int(preview_size[1]))
-    panel = np.full((height, width, 3), (36, 29, 19), dtype=np.uint8)
+    panel = np.full((height, width, 3), (19, 14, 9), dtype=np.uint8)
     scene = replay.scene
     if scene is None:
-        return panel
+        return panel, []
 
     dimensions = np.asarray(scene["board_size_mm"], dtype=float)
-    margin_x, margin_y = 24, 24
+    margin_x, margin_y = 14, 14
     scale = min((width - margin_x * 2) / dimensions[0], (height - margin_y * 2) / dimensions[1])
     board_w, board_h = np.maximum(1, np.rint(dimensions * scale).astype(int))
     origin_x = (width - board_w) // 2
@@ -39,14 +139,17 @@ def _replay_board(state, replay, preview_size):
         except (KeyError, TypeError, ValueError, cv2.error):
             board = None
     if board is None:
-        board = np.full((int(board_h), int(board_w), 3), (44, 52, 46), dtype=np.uint8)
+        board = np.full((int(board_h), int(board_w), 3), (38, 32, 26), dtype=np.uint8)
         step_px = max(24, int(round(150.0 * scale)))
         for gx in range(step_px, int(board_w), step_px):
-            cv2.line(board, (gx, 0), (gx, int(board_h)), (56, 66, 60), 1)
+            cv2.line(board, (gx, 0), (gx, int(board_h)), (52, 44, 36), 1)
         for gy in range(step_px, int(board_h), step_px):
-            cv2.line(board, (0, gy), (int(board_w), gy), (56, 66, 60), 1)
+            cv2.line(board, (0, gy), (int(board_w), gy), (52, 44, 36), 1)
 
-    highlight = scene["step"]["unit_id"]
+    step = scene["step"]
+    highlight = step["unit_id"]
+    event = step.get("event")
+    draw_scale = max(1.0, height / 720.0)
     overlay = board.copy()
     valid = []
     for unit_id, unit in scene["units"].items():
@@ -59,40 +162,108 @@ def _replay_board(state, replay, preview_size):
                 and points.shape == (4, 2) and np.isfinite(points).all()):
             unit_entry = state.units.units.get(unit_id, {})
             side = state.units.types.get(unit_entry.get("type_id", ""), {}).get("list_id", "A")
-            valid.append((unit_id, side, np.rint(points * scale).astype(np.int32)))
+            front_edge = unit.get("front_edge")
+            valid.append((unit_id, side, front_edge, np.rint(points * scale).astype(np.int32)))
 
-    for unit_id, side, polygon in valid:
+    # Translucent 13% tray fill so miniatures underneath remain crisp and visible
+    for unit_id, side, _, polygon in valid:
         is_active = unit_id == highlight
-        fill_bgr = (68, 198, 245) if is_active else ((188, 130, 52) if side == "A" else (90, 80, 198))
+        fill_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
         cv2.fillPoly(overlay, [polygon], fill_bgr)
-    cv2.addWeighted(overlay, 0.34, board, 0.66, 0, board)
+    cv2.addWeighted(overlay, 0.13, board, 0.87, 0, board)
 
-    for unit_id, side, polygon in valid:
+    # Extra subtle tint for the highlighted step unit
+    for unit_id, _, _, polygon in valid:
+        if unit_id == highlight:
+            hi = board.copy()
+            cv2.fillPoly(hi, [polygon], _SELECTION_BGR)
+            cv2.addWeighted(hi, 0.10, board, 0.90, 0, board)
+            break
+
+    occ = np.zeros((height, width), np.uint8)
+    end_active_poly = None
+    for unit_id, side, front_edge, polygon in valid:
         is_active = unit_id == highlight
-        stroke_bgr = (72, 215, 255) if is_active else ((210, 152, 68) if side == "A" else (106, 94, 224))
+        stroke_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
+        panel_poly = polygon + np.array([origin_x, origin_y], dtype=np.int32)
+        cv2.fillPoly(occ, [panel_poly], 1)
         if is_active:
-            cv2.polylines(board, [polygon], True, (24, 34, 42), 5, cv2.LINE_AA)
-            cv2.polylines(board, [polygon], True, stroke_bgr, 3, cv2.LINE_AA)
+            end_active_poly = polygon.astype(float)
+            cv2.polylines(board, [polygon], True, (26, 20, 12), max(4, round(4.8 * draw_scale)), cv2.LINE_AA)
+            cv2.polylines(board, [polygon], True, stroke_bgr, max(2, round(2.6 * draw_scale)), cv2.LINE_AA)
+            bx0, by0 = int(polygon[:, 0].min()), int(polygon[:, 1].min())
+            bx1, by1 = int(polygon[:, 0].max()), int(polygon[:, 1].max())
+            pad = max(3, round(4 * draw_scale))
+            draw_corner_brackets(
+                board,
+                max(2, bx0 - pad), max(2, by0 - pad),
+                min(int(board_w) - 3, bx1 + pad), min(int(board_h) - 3, by1 + pad),
+                (255, 255, 255), max(2, round(2.2 * draw_scale)), round(12 * draw_scale),
+            )
         else:
-            cv2.polylines(board, [polygon], True, (20, 30, 38), 3, cv2.LINE_AA)
-            cv2.polylines(board, [polygon], True, stroke_bgr, 2, cv2.LINE_AA)
+            cv2.polylines(board, [polygon], True, (26, 20, 12), max(3, round(3.4 * draw_scale)), cv2.LINE_AA)
+            cv2.polylines(board, [polygon], True, stroke_bgr, max(1, round(1.8 * draw_scale)), cv2.LINE_AA)
+        if isinstance(front_edge, int) and 0 <= front_edge < 4:
+            p0 = tuple(polygon[front_edge])
+            p1 = tuple(polygon[(front_edge + 1) % 4])
+            cv2.line(board, p0, p1, (255, 255, 255), max(2, round(2.4 * draw_scale)), cv2.LINE_AA)
 
-        cx, cy = polygon.mean(axis=0)
-        font_scale = max(0.42, min(0.62, board_h / 950.0))
-        thick = max(1, round(font_scale * 2.2))
-        (tw, th), _ = cv2.getTextSize(unit_id, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thick)
-        bx = max(4, min(int(board_w) - tw - 14, int(round(cx - tw / 2 - 7))))
-        by = max(4, min(int(board_h) - th - 10, int(round(cy - th / 2 - 5))))
-        bg_color = (26, 44, 58) if not is_active else (20, 34, 46)
-        border_color = stroke_bgr if is_active else (180, 198, 212)
-        cv2.rectangle(board, (bx, by), (bx + tw + 12, by + th + 9), bg_color, -1)
-        cv2.rectangle(board, (bx, by), (bx + tw + 12, by + th + 9), border_color, 1)
-        cv2.putText(board, unit_id, (bx + 6, by + th + 4), cv2.FONT_HERSHEY_SIMPLEX,
-                    font_scale, (250, 252, 255), thick, cv2.LINE_AA)
+    # Render start ghost + motion trajectory / rotation arc for Move & Rotate steps
+    start_corners_mm = _step_start_corners_mm(event, scene)
+    if event is not None and start_corners_mm is not None and end_active_poly is not None:
+        start_poly = start_corners_mm * scale
+        start_int = np.rint(start_poly).astype(np.int32)
+        cv2.fillPoly(occ, [start_int + np.array([origin_x, origin_y], dtype=np.int32)], 1)
+        _draw_dashed_poly(board, start_poly, (245, 232, 200), thickness=max(1, round(1.6 * draw_scale)))
+        if event.get("kind") == "translation":
+            sc = start_poly.mean(axis=0)
+            ec = end_active_poly.mean(axis=0)
+            sc_i = (int(round(sc[0])), int(round(sc[1])))
+            ec_i = (int(round(ec[0])), int(round(ec[1])))
+            cv2.circle(board, sc_i, max(4, round(4.5 * draw_scale)), (26, 20, 12), -1, cv2.LINE_AA)
+            cv2.circle(board, sc_i, max(3, round(3.2 * draw_scale)), (245, 232, 200), 2, cv2.LINE_AA)
+            dist_px = float(np.hypot(ec[0] - sc[0], ec[1] - sc[1]))
+            if dist_px > 6.0:
+                tip = max(0.14, min(0.32, 14.0 * draw_scale / dist_px))
+                cv2.arrowedLine(board, sc_i, ec_i, (26, 20, 12), max(4, round(4.5 * draw_scale)), cv2.LINE_AA, tipLength=tip)
+                cv2.arrowedLine(board, sc_i, ec_i, _SELECTION_BGR, max(2, round(2.4 * draw_scale)), cv2.LINE_AA, tipLength=tip)
+                cv2.line(occ, (sc_i[0] + origin_x, sc_i[1] + origin_y), (ec_i[0] + origin_x, ec_i[1] + origin_y), 1, max(8, round(10 * draw_scale)))
+        elif event.get("kind") == "rotation":
+            arc_r = _draw_rotation_cue(board, start_poly, end_active_poly, event.get("rotation_deg_estimate"), draw_scale)
+            ec = end_active_poly.mean(axis=0)
+            cv2.circle(occ, (int(round(ec[0])) + origin_x, int(round(ec[1])) + origin_y), int(arc_r * 0.8), 1, -1)
 
-    cv2.rectangle(board, (0, 0), (int(board_w) - 1, int(board_h) - 1), (112, 134, 150), 1)
+    cv2.rectangle(board, (0, 0), (int(board_w) - 1, int(board_h) - 1), (96, 78, 62), 1)
     panel[origin_y:origin_y + int(board_h), origin_x:origin_x + int(board_w)] = board
-    return panel
+
+    # Place non-overlapping capsule labels using the shared integral occupancy solver
+    entries = []
+    for unit_id, side, _, polygon in valid:
+        is_active = unit_id == highlight
+        px0 = max(0, int(polygon[:, 0].min()) + origin_x)
+        py0 = max(0, int(polygon[:, 1].min()) + origin_y)
+        px1 = min(width, int(polygon[:, 0].max()) + 1 + origin_x)
+        py1 = min(height, int(polygon[:, 1].max()) + 1 + origin_y)
+        unit_box = (px0, py0, px1, py1)
+        area = max(1, (px1 - px0) * (py1 - py0))
+        dot = _SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0]
+        border_bgr = _SELECTION_BGR if is_active else dot
+        entries.append((area, unit_box, unit_id, dot, border_bgr, -1, is_active))
+
+    placed = place_badges(entries, occ, width, height, draw_scale)
+    badges = []
+    for box, entry, dist in placed:
+        _, unit_box, unit_id, dot, border_bgr, _, is_active = entry
+        if dist > round(9 * draw_scale):
+            p_lbl, p_unit = nearest_rect_points(box, unit_box)
+            cv2.line(panel, p_lbl, p_unit, (26, 20, 12), max(3, round(3.0 * draw_scale)), cv2.LINE_AA)
+            cv2.line(panel, p_lbl, p_unit, border_bgr, max(1, round(1.5 * draw_scale)), cv2.LINE_AA)
+            cv2.circle(panel, p_unit, max(3, round(3.2 * draw_scale)), (247, 243, 237), -1, cv2.LINE_AA)
+        badges.append(_badge_dict(
+            box, width, height, unit_id, dot, border_bgr,
+            kind="unit", unit_id=unit_id, active=is_active,
+        ))
+    return panel, badges
 
 
 class Workflows(QObject):
@@ -113,12 +284,14 @@ class Workflows(QObject):
             kind="live", rows=[], note="", busy=False, review=False,
             candidateGeneration=0, candidateTime="—", pointCount=0,
             step=0, steps=0, calibrationPending=False,
-            replayInfo=dict(stepText="", stepLabel="", stepUnit="", endTime="—",
-                            observedTime="—", recordedTime="—", calibrationVersion="—",
-                            unavailable="", backgroundNote="", boardDimensions="",
+            replayInfo=dict(stepText="", stepLabel="", stepUnit="", stepKind="", stepSide="",
+                            stepSummary="", endTime="—", observedTime="—", recordedTime="—",
+                            calibrationVersion="—", unavailable="", unavailableCount=0,
+                            backgroundNote="", boardDimensions="",
                             loading=False, error="", hasIndex=False),
         )
         self._replay_key = self._replay_image = None
+        self.replay_badges = []
 
     @Property("QVariantMap", notify=changed)
     def state(self):
@@ -195,16 +368,39 @@ class Workflows(QObject):
             dimensions = ""
             bg_note = ""
 
+        step_unit = (step.get("unit_id") or "") if step else ""
+        step_side = ""
+        if step_unit and step_unit in state.units.units:
+            step_type = state.units.units[step_unit]["type_id"]
+            step_side = state.units.types.get(step_type, {}).get("list_id", "")
+        step_summary = ""
+        if step is not None:
+            event = step.get("event")
+            if event is None:
+                step_summary = "Baseline snapshot"
+            elif event.get("kind") == "translation":
+                disp = event.get("net_displacement_mm")
+                if isinstance(disp, (int, float)) and math.isfinite(disp):
+                    step_summary = f"{disp / 25.4:.2f} in · {disp:.1f} mm"
+            elif event.get("kind") == "rotation":
+                deg = event.get("rotation_deg_estimate")
+                if isinstance(deg, (int, float)) and math.isfinite(deg):
+                    step_summary = f"{deg:+.1f}°"
+
         replay_info = dict(
             stepText=(f"Step {replay.selected} / {len(replay.steps) - 1}" if replay.steps
                       else "Loading history…" if replay.loading else "No steps"),
             stepLabel=step["label"] if step else "",
-            stepUnit=(step.get("unit_id") or "") if step else "",
+            stepUnit=step_unit,
+            stepKind=step["kind"] if step else "",
+            stepSide=step_side,
+            stepSummary=step_summary,
             endTime=f"{step['end_timestamp_seconds']:.2f}s" if step else "—",
             observedTime=observed_time,
             recordedTime=recorded_time,
             calibrationVersion=calib_ver,
             unavailable=", ".join(unavailable),
+            unavailableCount=len(unavailable),
             backgroundNote=bg_note,
             boardDimensions=dimensions,
             loading=replay.loading,
@@ -467,28 +663,38 @@ class Workflows(QObject):
                 if len(xs):
                     x0, y0, x1, y1 = int(xs[0]), int(ys[0]), int(xs[-1]) + 1, int(ys[-1]) + 1
                     sub = mask[y0:y1, x0:x1].astype(np.uint8)
-                    rgba[y0:y1, x0:x1][sub != 0] = (45, 205, 250, 128)
+                    rgba[y0:y1, x0:x1][sub != 0] = (64, 208, 250, 92)
                     contours, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, offset=(x0, y0))
-                    cv2.drawContours(rgba, contours, -1, (18, 30, 40, 240), max(3, round(3.8 * scale)), cv2.LINE_AA)
-                    cv2.drawContours(rgba, contours, -1, (55, 222, 255, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, (26, 20, 12, 240), max(4, round(4.4 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, (72, 224, 255, 255), max(2, round(2.4 * scale)), cv2.LINE_AA)
         if self.points and kind in ("terrain", "recalibrate"):
             points = np.asarray(self.points) if kind == "recalibrate" else transform_points(self.points, state.board.homography["matrix"])
             points = np.rint(points).astype(np.int32)
-            line_bgra = (120, 215, 130, 255) if kind == "terrain" else (242, 196, 68, 255)
+            line_bgra = (150, 218, 100, 255) if kind == "terrain" else (255, 232, 76, 255)
             if len(points) >= 2:
-                cv2.polylines(rgba, [points], False, (18, 30, 40, 230), max(4, round(4.2 * scale)), cv2.LINE_AA)
+                cv2.polylines(rgba, [points], False, (28, 22, 14, 235), max(4, round(4.4 * scale)), cv2.LINE_AA)
                 cv2.polylines(rgba, [points], False, line_bgra, max(2, round(2.2 * scale)), cv2.LINE_AA)
-            node_r = max(8, round(9.5 * scale))
-            font_scale = max(0.45, 0.5 * scale)
-            thick = max(1, round(1.5 * scale))
+            node_r = max(10, round(11.0 * scale))
+            font = _ui_font(max(13, round(14 * scale)), bold=True)
+            height, width = rgba.shape[:2]
             for i, point in enumerate(points):
                 px, py = int(point[0]), int(point[1])
-                cv2.circle(rgba, (px, py), node_r + 2, (18, 30, 40, 240), -1, cv2.LINE_AA)
+                cv2.circle(rgba, (px, py), node_r + 2, (28, 22, 14, 245), -1, cv2.LINE_AA)
                 cv2.circle(rgba, (px, py), node_r, line_bgra, -1, cv2.LINE_AA)
                 label = str(i + 1)
-                (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thick)
-                cv2.putText(rgba, label, (int(px - tw / 2), int(py + th / 2)),
-                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, (18, 30, 40, 255), thick, cv2.LINE_AA)
+                bbox = font.getbbox(label)
+                tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+                x0 = max(0, px - node_r)
+                y0 = max(0, py - node_r)
+                x1 = min(width, x0 + node_r * 2)
+                y1 = min(height, y0 + node_r * 2)
+                if x1 > x0 and y1 > y0:
+                    pil_roi = Image.fromarray(rgba[y0:y1, x0:x1], "RGBA")
+                    ImageDraw.Draw(pil_roi).text(
+                        ((x1 - x0 - tw) // 2 - bbox[0], (y1 - y0 - th) // 2 - bbox[1]),
+                        label, font=font, fill=(28, 22, 14, 255),
+                    )
+                    rgba[y0:y1, x0:x1] = np.asarray(pil_roi)
 
     def render_video(self, state, frame):
         kind = self.kind(state)
@@ -505,7 +711,7 @@ class Workflows(QObject):
                 observed.get("calibration_version"), width, height,
             )
             if key != self._replay_key:
-                self._replay_image = _replay_board(state, replay, (width, height))
+                self._replay_image, self.replay_badges = _replay_board(state, replay, (width, height))
                 self._replay_key = key
             return self._replay_image
         if kind == "recalibrate":

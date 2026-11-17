@@ -5,6 +5,7 @@ import QtQuick.Layouts
 ColumnLayout {
     id: controls
     required property var uiState
+    property bool replayDetailsOpen: false
     readonly property bool formOpen: editor.visible || undoTerrainDialog.visible
     readonly property Theme theme: Theme {}
     readonly property string kind: (flow.state && flow.state.kind) ? flow.state.kind : "live"
@@ -17,6 +18,13 @@ ColumnLayout {
         if (kind === "recovery") return theme.modeRecovery
         if (kind === "recalibrate") return theme.modeRecalibrate
         if (kind === "terrain") return theme.modeTerrain
+        return theme.accent
+    }
+    readonly property color modeDot: {
+        if (kind === "replay") return theme.modeReplayDot
+        if (kind === "recovery") return theme.modeRecoveryDot
+        if (kind === "recalibrate") return theme.modeRecalibrateDot
+        if (kind === "terrain") return theme.modeTerrainDot
         return theme.accent
     }
     readonly property color modeSoft: {
@@ -41,55 +49,85 @@ ColumnLayout {
         property string badgeText: ""
         readonly property Theme t: controls.theme
         implicitHeight: 32
-        leftPadding: 10
-        rightPadding: 10
+        leftPadding: 11
+        rightPadding: 11
         background: Rectangle {
-            radius: 8
-            color: pill.checkedState ? (pill.hovered ? "#dcecf5" : pill.t.accentSoft) : (pill.hovered ? "#eef3f7" : pill.t.bgSubtle)
+            radius: pill.t.radiusMd
+            color: pill.checkedState ? (pill.hovered ? pill.t.bgElevated : pill.t.accentSoft)
+                                     : (pill.hovered ? pill.t.bgElevated : pill.t.bgSubtle)
             border.color: pill.checkedState ? pill.t.accentBorder : pill.t.border
         }
         contentItem: RowLayout {
             spacing: 6
             Rectangle {
                 width: 8; height: 8; radius: 4
-                color: pill.checkedState ? pill.t.accent : pill.t.borderStrong
+                color: pill.checkedState ? pill.t.selection : pill.t.borderStrong
             }
             Text {
                 text: pill.text
                 font.family: pill.t.fontBody
-                font.pixelSize: 12
+                font.pixelSize: pill.t.textSm
                 font.weight: pill.checkedState ? Font.DemiBold : Font.Normal
-                color: pill.checkedState ? pill.t.accent : pill.t.inkSecondary
+                color: pill.checkedState ? pill.t.ink : pill.t.inkSecondary
             }
             Rectangle {
                 visible: pill.badgeText.length > 0
                 implicitWidth: bTxt.implicitWidth + 8
                 implicitHeight: 17
-                radius: 5
-                color: pill.checkedState ? "#ffffff" : pill.t.bgTrack
+                radius: pill.t.radiusXs
+                color: pill.t.bgTrack
                 Text {
                     id: bTxt
                     anchors.centerIn: parent
                     text: pill.badgeText
                     font.family: pill.t.fontMono
-                    font.pixelSize: 9
-                    color: pill.checkedState ? pill.t.accent : pill.t.inkMuted
+                    font.pixelSize: pill.t.textXs
+                    color: pill.checkedState ? pill.t.selection : pill.t.inkMuted
                 }
             }
+        }
+    }
+
+    // Styled dark numeric/text field
+    component DarkField: TextField {
+        id: df
+        readonly property Theme t: controls.theme
+        color: t.ink
+        placeholderTextColor: t.inkMuted
+        selectionColor: t.accentSoft
+        selectedTextColor: t.ink
+        font.family: t.fontBody
+        font.pixelSize: t.textSm
+        leftPadding: 10
+        rightPadding: 10
+        background: Rectangle {
+            radius: df.t.radiusSm
+            color: df.t.bgTrack
+            border.width: df.activeFocus ? 1.5 : 1
+            border.color: df.activeFocus ? df.t.selection : (df.hovered ? df.t.borderStrong : df.t.border)
         }
     }
 
     Rectangle {
         Layout.fillWidth: true
         implicitHeight: barContent.implicitHeight + 14
-        radius: 10
-        color: controls.kind === "live" ? controls.theme.bgSurface : controls.modeSoft
-        border.color: controls.modeBorder
+        radius: controls.theme.radiusLg
+        color: controls.theme.bgSurface
+        border.color: controls.kind === "live" ? controls.theme.border : controls.modeBorder
+        clip: true
+
+        Rectangle {
+            visible: controls.kind !== "live"
+            width: 3
+            height: parent.height
+            anchors.left: parent.left
+            color: controls.modeDot
+        }
 
         ColumnLayout {
             id: barContent
             anchors.fill: parent
-            anchors.leftMargin: 12
+            anchors.leftMargin: controls.kind !== "live" ? 15 : 12
             anchors.rightMargin: 12
             anchors.topMargin: 7
             anchors.bottomMargin: 7
@@ -178,25 +216,75 @@ ColumnLayout {
                     Layout.fillWidth: true
                     spacing: 8
 
-                    // Replay controls
-                    Rectangle {
+                    // Replay header title & action delta (no button border)
+                    RowLayout {
                         visible: controls.kind === "replay"
-                        implicitWidth: replayStepTxt.implicitWidth + 16
-                        implicitHeight: 32
-                        radius: 7
-                        color: controls.theme.bgSurface
-                        border.color: controls.theme.modeReplayBorder
+                        height: 32
+                        spacing: 8
+
                         Text {
-                            id: replayStepTxt
-                            anchors.centerIn: parent
-                            text: (controls.replayInfo.stepText || "Replay")
-                                  + (controls.replayInfo.stepLabel ? " · " + controls.replayInfo.stepLabel : "")
-                                  + (controls.replayInfo.stepUnit ? " · " + controls.replayInfo.stepUnit : "")
+                            text: controls.replayInfo.stepText || "Replay"
                             color: controls.theme.ink
-                            font.pixelSize: 12
+                            font.family: controls.theme.fontDisplay
+                            font.pixelSize: controls.theme.textLg
+                            font.weight: Font.DemiBold
+                        }
+
+                        Rectangle {
+                            visible: (controls.replayInfo.stepLabel || "").length > 0
+                            implicitWidth: stepKindTxt.implicitWidth + 14
+                            implicitHeight: 22
+                            radius: height / 2
+                            color: controls.theme.modeReplaySoft
+                            border.color: controls.theme.modeReplayBorder
+                            Text {
+                                id: stepKindTxt
+                                anchors.centerIn: parent
+                                text: controls.replayInfo.stepLabel || ""
+                                color: controls.theme.modeReplay
+                                font.pixelSize: controls.theme.textXs
+                                font.weight: Font.DemiBold
+                            }
+                        }
+
+                        Rectangle {
+                            visible: (controls.replayInfo.stepUnit || "").length > 0
+                            implicitWidth: stepUnitRow.implicitWidth + 14
+                            implicitHeight: 22
+                            radius: height / 2
+                            color: controls.replayInfo.stepSide === "B" ? controls.theme.sideBSoft
+                                   : controls.replayInfo.stepSide === "A" ? controls.theme.sideASoft
+                                   : controls.theme.bgSubtle
+                            border.color: controls.theme.selection
+                            RowLayout {
+                                id: stepUnitRow
+                                anchors.centerIn: parent
+                                spacing: 5
+                                Rectangle {
+                                    width: 7; height: 7; radius: 4
+                                    color: controls.replayInfo.stepSide === "B" ? controls.theme.sideB
+                                           : controls.replayInfo.stepSide === "A" ? controls.theme.sideA
+                                           : controls.theme.selection
+                                }
+                                Text {
+                                    text: controls.replayInfo.stepUnit || ""
+                                    color: controls.theme.ink
+                                    font.pixelSize: controls.theme.textXs
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+                        }
+
+                        Text {
+                            visible: (controls.replayInfo.stepSummary || "").length > 0
+                            text: controls.replayInfo.stepSummary || ""
+                            color: controls.theme.selection
+                            font.family: controls.theme.fontMono
+                            font.pixelSize: controls.theme.textSm
                             font.weight: Font.DemiBold
                         }
                     }
+
                     ConsoleButton {
                         text: "Previous"
                         shortcut: "A"
@@ -215,6 +303,7 @@ ColumnLayout {
                     }
                     ConsoleButton {
                         text: "Refresh"
+                        variant: "subtle"
                         implicitHeight: 32
                         visible: controls.kind === "replay"
                         onClicked: flow.action("refresh")
@@ -225,16 +314,16 @@ ColumnLayout {
                         visible: controls.kind === "recovery"
                         implicitWidth: recCandTxt.implicitWidth + 16
                         implicitHeight: 32
-                        radius: 7
-                        color: controls.theme.bgSurface
-                        border.color: controls.theme.modeRecoveryBorder
+                        radius: controls.theme.radiusSm
+                        color: controls.modeSoft
+                        border.color: controls.modeBorder
                         Text {
                             id: recCandTxt
                             anchors.centerIn: parent
                             text: "Candidate · " + flow.state.candidateTime
-                            color: controls.theme.modeRecovery
+                            color: controls.modeAccent
                             font.family: controls.theme.fontMono
-                            font.pixelSize: 11
+                            font.pixelSize: controls.theme.textXs
                             font.weight: Font.DemiBold
                         }
                     }
@@ -255,6 +344,7 @@ ColumnLayout {
                     }
                     ConsoleButton {
                         text: "Clear / Retry"
+                        variant: "subtle"
                         implicitHeight: 32
                         visible: controls.kind === "recovery"
                         enabled: !flow.state.busy
@@ -266,16 +356,16 @@ ColumnLayout {
                         visible: controls.kind === "terrain"
                         implicitWidth: terCntTxt.implicitWidth + 16
                         implicitHeight: 32
-                        radius: 7
-                        color: controls.theme.bgSurface
-                        border.color: controls.theme.modeTerrainBorder
+                        radius: controls.theme.radiusSm
+                        color: controls.modeSoft
+                        border.color: controls.modeBorder
                         Text {
                             id: terCntTxt
                             anchors.centerIn: parent
                             text: "Vertices · " + flow.state.pointCount
-                            color: controls.theme.modeTerrain
+                            color: controls.modeAccent
                             font.family: controls.theme.fontMono
-                            font.pixelSize: 11
+                            font.pixelSize: controls.theme.textXs
                             font.weight: Font.DemiBold
                         }
                     }
@@ -297,21 +387,21 @@ ColumnLayout {
                         Rectangle {
                             implicitWidth: calCntTxt.implicitWidth + 14
                             implicitHeight: 32
-                            radius: 7
-                            color: controls.theme.bgSurface
-                            border.color: controls.theme.modeRecalibrateBorder
+                            radius: controls.theme.radiusSm
+                            color: controls.modeSoft
+                            border.color: controls.modeBorder
                             Text {
                                 id: calCntTxt
                                 anchors.centerIn: parent
                                 text: "Corners " + flow.state.pointCount + " / 4"
-                                color: controls.theme.modeRecalibrate
+                                color: controls.modeAccent
                                 font.family: controls.theme.fontMono
-                                font.pixelSize: 11
+                                font.pixelSize: controls.theme.textXs
                                 font.weight: Font.DemiBold
                             }
                         }
-                        Text { text: "L × W (in)"; color: controls.theme.inkSecondary; font.pixelSize: 12 }
-                        TextField {
+                        Text { text: "L × W (in)"; color: controls.theme.inkSecondary; font.pixelSize: controls.theme.textSm }
+                        DarkField {
                             id: length
                             text: controls.uiState.boardWidth
                             Layout.preferredWidth: 68
@@ -319,7 +409,7 @@ ColumnLayout {
                             selectByMouse: true
                         }
                         Text { text: "×"; color: controls.theme.inkMuted }
-                        TextField {
+                        DarkField {
                             id: depth
                             text: controls.uiState.boardDepth
                             Layout.preferredWidth: 68
@@ -336,6 +426,50 @@ ColumnLayout {
                     }
                 }
 
+                // Expandable technical telemetry toggle in Replay
+                Button {
+                    id: detailsToggle
+                    visible: controls.kind === "replay"
+                    implicitHeight: 32
+                    leftPadding: 10
+                    rightPadding: 10
+                    onClicked: controls.replayDetailsOpen = !controls.replayDetailsOpen
+                    ToolTip.visible: hovered
+                    ToolTip.text: controls.replayDetailsOpen ? "Hide step timestamps and unavailable list"
+                                                             : "Show step timestamps, calibration and unavailable units"
+                    background: Rectangle {
+                        radius: controls.theme.radiusMd
+                        color: controls.replayDetailsOpen ? controls.theme.accentSoft
+                               : (controls.replayInfo.unavailableCount || 0) > 0 ? controls.theme.warningSoft
+                               : (detailsToggle.hovered ? controls.theme.bgElevated : controls.theme.bgSubtle)
+                        border.color: controls.replayDetailsOpen ? controls.theme.accentBorder
+                                      : (controls.replayInfo.unavailableCount || 0) > 0 ? controls.theme.warningBorder
+                                      : controls.theme.border
+                    }
+                    contentItem: RowLayout {
+                        spacing: 6
+                        Rectangle {
+                            visible: (controls.replayInfo.unavailableCount || 0) > 0
+                            width: 7; height: 7; radius: 4
+                            color: controls.theme.warning
+                        }
+                        Text {
+                            text: (controls.replayInfo.unavailableCount || 0) > 0
+                                  ? (controls.replayInfo.unavailableCount + " unavailable")
+                                  : "Details"
+                            color: (controls.replayInfo.unavailableCount || 0) > 0
+                                   ? controls.theme.warning : controls.theme.inkSecondary
+                            font.pixelSize: controls.theme.textXs
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            text: controls.replayDetailsOpen ? "▴" : "▾"
+                            color: controls.theme.inkMuted
+                            font.pixelSize: controls.theme.textXs
+                        }
+                    }
+                }
+
                 ConsoleButton {
                     text: "Back to Live"
                     shortcut: "Esc"
@@ -345,9 +479,14 @@ ColumnLayout {
                 }
             }
 
-            // Secondary guidance / replay telemetry line
+            // Secondary guidance (non-replay) or collapsible replay telemetry row
             RowLayout {
-                visible: controls.kind !== "live"
+                visible: controls.kind !== "live" && (
+                    controls.kind !== "replay"
+                    || controls.replayDetailsOpen
+                    || (controls.replayInfo.error || "").length > 0
+                    || (controls.replayInfo.backgroundNote || "").length > 0
+                )
                 Layout.fillWidth: true
                 spacing: 10
 
@@ -355,8 +494,8 @@ ColumnLayout {
                     visible: controls.kind !== "replay"
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
-                    color: controls.modeAccent
-                    font.pixelSize: 11
+                    color: controls.theme.inkSecondary
+                    font.pixelSize: controls.theme.textXs
                     text: {
                         if (controls.kind === "terrain") return "Left click adds polygon vertices; right click removes the last vertex. Save once ≥ 3 points."
                         if (controls.kind === "recalibrate") return "Click four corners directly on the continuous raw video; right click undoes. Playback continues."
@@ -371,26 +510,27 @@ ColumnLayout {
                     spacing: 12
 
                     Text {
+                        visible: controls.replayDetailsOpen
                         text: "End " + (controls.replayInfo.endTime || "—")
                               + " · Obs " + (controls.replayInfo.observedTime || "—")
                               + " · Rec " + (controls.replayInfo.recordedTime || "—")
                               + " · Calib " + (controls.replayInfo.calibrationVersion || "—")
                               + (controls.replayInfo.boardDimensions ? " · " + controls.replayInfo.boardDimensions : "")
-                        color: controls.theme.inkSecondary
+                        color: controls.theme.inkMuted
                         font.family: controls.theme.fontMono
-                        font.pixelSize: 11
+                        font.pixelSize: controls.theme.textXs
                     }
                     Text {
-                        visible: (controls.replayInfo.unavailable || "").length > 0
+                        visible: controls.replayDetailsOpen && (controls.replayInfo.unavailable || "").length > 0
                         text: "No position: " + (controls.replayInfo.unavailable || "")
                         color: controls.theme.warning
-                        font.pixelSize: 11
+                        font.pixelSize: controls.theme.textXs
                     }
                     Text {
                         visible: (controls.replayInfo.backgroundNote || "").length > 0 || (controls.replayInfo.error || "").length > 0
                         text: (controls.replayInfo.error || controls.replayInfo.backgroundNote || "")
-                        color: (controls.replayInfo.error || "").length > 0 ? controls.theme.danger : controls.theme.warning
-                        font.pixelSize: 11
+                        color: (controls.replayInfo.error || "").length > 0 ? controls.theme.modeRecovery : controls.theme.warning
+                        font.pixelSize: controls.theme.textXs
                     }
                 }
             }
@@ -403,9 +543,30 @@ ColumnLayout {
         modal: true
         title: "Remove last terrain?"
         standardButtons: Dialog.Yes | Dialog.No
+        Overlay.modal: Rectangle { color: controls.theme.scrim }
+        background: Rectangle {
+            color: controls.theme.bgSurface
+            radius: controls.theme.radiusLg
+            border.color: controls.theme.borderStrong
+        }
+        header: Rectangle {
+            implicitHeight: 44
+            color: "transparent"
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 18
+                text: undoTerrainDialog.title
+                color: controls.theme.ink
+                font.family: controls.theme.fontDisplay
+                font.pixelSize: controls.theme.textLg
+                font.weight: Font.DemiBold
+            }
+        }
         Label {
             text: "Remove the most recently saved terrain polygon from the match scene?"
             color: controls.theme.inkSecondary
+            font.pixelSize: controls.theme.textSm
         }
         onAccepted: flow.action("undoTerrain")
     }
@@ -419,6 +580,32 @@ ColumnLayout {
         width: Math.min(540, Overlay.overlay.width - 40)
         height: Math.min(600, Overlay.overlay.height - 40)
         onClosed: flow.clearFormError()
+        Overlay.modal: Rectangle { color: controls.theme.scrim }
+        background: Rectangle {
+            color: controls.theme.bgSurface
+            radius: controls.theme.radiusLg
+            border.color: controls.theme.borderStrong
+        }
+        header: Rectangle {
+            implicitHeight: 46
+            color: "transparent"
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 18
+                text: editor.title
+                color: controls.theme.ink
+                font.family: controls.theme.fontDisplay
+                font.pixelSize: controls.theme.textLg
+                font.weight: Font.DemiBold
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: controls.theme.borderSoft
+            }
+        }
 
         ColumnLayout {
             anchors.fill: parent
@@ -446,11 +633,11 @@ ColumnLayout {
                                 visible: modelData.kind !== "bool"
                                 text: modelData.label
                                 color: controls.theme.inkSecondary
-                                font.pixelSize: 12
+                                font.pixelSize: controls.theme.textSm
                                 font.weight: Font.DemiBold
                             }
 
-                            TextField {
+                            DarkField {
                                 Layout.fillWidth: true
                                 visible: modelData.kind !== "bool" && modelData.kind !== "choice"
                                 text: String(modelData.value)
@@ -459,6 +646,7 @@ ColumnLayout {
                             }
 
                             ComboBox {
+                                id: combo
                                 Layout.fillWidth: true
                                 visible: modelData.kind === "choice"
                                 model: modelData.optionLabels || modelData.options || []
@@ -466,6 +654,21 @@ ColumnLayout {
                                     const opts = modelData.options || []
                                     const found = opts.indexOf(String(modelData.value))
                                     return found >= 0 ? found : 0
+                                }
+                                contentItem: Text {
+                                    leftPadding: 10
+                                    text: combo.displayText
+                                    color: controls.theme.ink
+                                    font.family: controls.theme.fontBody
+                                    font.pixelSize: controls.theme.textSm
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+                                background: Rectangle {
+                                    implicitHeight: 34
+                                    radius: controls.theme.radiusSm
+                                    color: controls.theme.bgTrack
+                                    border.color: combo.activeFocus ? controls.theme.selection : controls.theme.border
                                 }
                                 onActivated: idx => {
                                     const opts = modelData.options || []
@@ -476,9 +679,17 @@ ColumnLayout {
                             }
 
                             CheckBox {
+                                id: chk
                                 visible: modelData.kind === "bool"
                                 text: modelData.label
                                 checked: Boolean(modelData.value)
+                                contentItem: Text {
+                                    leftPadding: chk.indicator.width + chk.spacing
+                                    text: chk.text
+                                    color: controls.theme.ink
+                                    font.pixelSize: controls.theme.textSm
+                                    verticalAlignment: Text.AlignVCenter
+                                }
                                 onToggled: editor.rows[index].value = checked
                             }
                         }
@@ -490,7 +701,7 @@ ColumnLayout {
                 visible: flow.formError.length > 0
                 Layout.fillWidth: true
                 implicitHeight: errTxt.implicitHeight + 12
-                radius: 7
+                radius: controls.theme.radiusSm
                 color: controls.theme.dangerSoft
                 border.color: controls.theme.dangerBorder
                 Text {
@@ -498,16 +709,16 @@ ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 6
                     text: flow.formError
-                    color: controls.theme.danger
+                    color: controls.theme.modeRecovery
                     wrapMode: Text.WordWrap
-                    font.pixelSize: 12
+                    font.pixelSize: controls.theme.textSm
                 }
             }
 
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                ConsoleButton { text: "Cancel"; onClicked: editor.close() }
+                ConsoleButton { text: "Cancel"; variant: "subtle"; onClicked: editor.close() }
                 ConsoleButton {
                     text: "Save"
                     primary: true

@@ -92,16 +92,21 @@ class QueryLayers:
                 line = [result["point_a_mm"], result["point_b_mm"]]
             if line is not None:
                 points = project(line)
-                color = (100, 240, 160) if result.get("status") in ("ok", "clear") else (0, 190, 240)
+                color = (153, 224, 96) if result.get("status") in ("ok", "clear") else (76, 180, 240)
+                cv2.line(self._overlay, tuple(points[0]), tuple(points[1]), (18, 26, 34), 5, cv2.LINE_AA)
                 cv2.line(self._overlay, tuple(points[0]), tuple(points[1]), color, 2, cv2.LINE_AA)
                 for point in points:
+                    cv2.circle(self._overlay, tuple(point), 6, (18, 26, 34), -1, cv2.LINE_AA)
                     cv2.circle(self._overlay, tuple(point), 4, color, -1, cv2.LINE_AA)
             poses = result.get("poses", ())
             if poses:
-                for point in project([pose["center_mm"] for pose in poses]):
-                    cv2.circle(self._overlay, tuple(point), 2, (230, 160, 60), -1)
                 for index in np.linspace(0, len(poses) - 1, min(12, len(poses)), dtype=int):
-                    cv2.polylines(self._overlay, [project(poses[index]["corners_mm"])], True, (230, 160, 60), 1, cv2.LINE_AA)
+                    poly = [project(poses[index]["corners_mm"])]
+                    cv2.polylines(self._overlay, poly, True, (18, 26, 34), 3, cv2.LINE_AA)
+                    cv2.polylines(self._overlay, poly, True, (240, 190, 60), 1, cv2.LINE_AA)
+                for point in project([pose["center_mm"] for pose in poses]):
+                    cv2.circle(self._overlay, tuple(point), 4, (18, 26, 34), -1, cv2.LINE_AA)
+                    cv2.circle(self._overlay, tuple(point), 2, (255, 220, 100), -1, cv2.LINE_AA)
         pixels = self._overlay.any(axis=2)
         preview[pixels] = (preview[pixels] * .4 + self._overlay[pixels] * .6).astype(np.uint8)
 

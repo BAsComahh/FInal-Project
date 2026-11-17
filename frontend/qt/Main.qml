@@ -29,7 +29,7 @@ ApplicationWindow {
     }
     readonly property color badgeColor: {
         if (window.table) return theme.inkSecondary
-        if (!window.live) return theme.accent
+        if (!window.live) return theme.selection
         if (flowKind === "replay") return theme.modeReplay
         if (flowKind === "recovery") return theme.modeRecovery
         if (flowKind === "recalibrate") return theme.modeRecalibrate
@@ -37,8 +37,8 @@ ApplicationWindow {
         return theme.modeLive
     }
     readonly property color badgeDot: {
-        if (window.table) return theme.borderStrong
-        if (!window.live) return theme.accent
+        if (window.table) return theme.selection
+        if (!window.live) return theme.accentHover
         if (flowKind === "replay") return theme.modeReplayDot
         if (flowKind === "recovery") return theme.modeRecoveryDot
         if (flowKind === "recalibrate") return theme.modeRecalibrateDot
@@ -55,7 +55,7 @@ ApplicationWindow {
         return theme.modeLiveSoft
     }
     readonly property color badgeBorder: {
-        if (window.table) return theme.border
+        if (window.table) return theme.borderStrong
         if (!window.live) return theme.accentBorder
         if (flowKind === "replay") return theme.modeReplayBorder
         if (flowKind === "recovery") return theme.modeRecoveryBorder
@@ -75,29 +75,37 @@ ApplicationWindow {
     }
     color: theme.bgCanvas
     font.family: theme.fontBody
-    font.pixelSize: 13
+    font.pixelSize: theme.textMd
     onClosing: ui.close()
 
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
 
-        // Compact 54px top header bar
+        // Compact 52px top header bar with subtle 2px mode accent stripe
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: 54
+            implicitHeight: 52
             color: theme.bgHeader
+
+            Rectangle {
+                anchors.top: parent.top
+                width: parent.width
+                height: 2
+                color: window.badgeDot
+            }
 
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
+                anchors.topMargin: 2
                 spacing: 10
 
                 Rectangle {
                     implicitWidth: badgeRow.implicitWidth + 16
                     implicitHeight: 26
-                    radius: 13
+                    radius: height / 2
                     color: window.badgeSoft
                     border.color: window.badgeBorder
                     RowLayout {
@@ -112,7 +120,7 @@ ApplicationWindow {
                             text: window.badgeText
                             color: window.badgeColor
                             font.family: theme.fontMono
-                            font.pixelSize: 10
+                            font.pixelSize: theme.textXs
                             font.weight: Font.DemiBold
                             font.letterSpacing: 0.8
                         }
@@ -131,7 +139,7 @@ ApplicationWindow {
                     }
                     color: theme.ink
                     font.family: theme.fontDisplay
-                    font.pixelSize: window.width < 980 ? 16 : 19
+                    font.pixelSize: window.width < 980 ? theme.textLg : theme.textXl
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
@@ -143,9 +151,9 @@ ApplicationWindow {
                     visible: window.live
                     implicitWidth: segRow.implicitWidth + 6
                     implicitHeight: 34
-                    radius: 9
+                    radius: theme.radiusMd
                     color: theme.bgTrack
-                    border.color: theme.borderSoft
+                    border.color: theme.border
 
                     RowLayout {
                         id: segRow
@@ -159,13 +167,14 @@ ApplicationWindow {
                             enabled: !flow.state.busy
                             onClicked: if (window.flowKind !== "live") flow.action("cancel")
                             background: Rectangle {
-                                radius: 7
-                                color: window.flowKind === "live" ? theme.bgSurface : (liveSeg.hovered ? "#dfe8ef" : "transparent")
-                                border.color: window.flowKind === "live" ? theme.border : "transparent"
+                                radius: theme.radiusSm
+                                color: window.flowKind === "live" ? theme.bgElevated : (liveSeg.hovered ? theme.bgSubtle : "transparent")
+                                border.color: window.flowKind === "live" ? theme.modeLiveBorder : "transparent"
                             }
                             contentItem: Text {
                                 text: "Live"
-                                font.pixelSize: 12
+                                font.family: theme.fontBody
+                                font.pixelSize: theme.textSm
                                 font.weight: window.flowKind === "live" ? Font.DemiBold : Font.Normal
                                 color: window.flowKind === "live" ? theme.modeLive : theme.inkSecondary
                                 horizontalAlignment: Text.AlignHCenter
@@ -180,13 +189,14 @@ ApplicationWindow {
                             enabled: !flow.state.busy
                             onClicked: if (window.flowKind !== "replay") flow.open("replay")
                             background: Rectangle {
-                                radius: 7
-                                color: window.flowKind === "replay" ? theme.bgSurface : (replaySeg.hovered ? "#dfe8ef" : "transparent")
+                                radius: theme.radiusSm
+                                color: window.flowKind === "replay" ? theme.bgElevated : (replaySeg.hovered ? theme.bgSubtle : "transparent")
                                 border.color: window.flowKind === "replay" ? theme.modeReplayBorder : "transparent"
                             }
                             contentItem: Text {
                                 text: "Replay"
-                                font.pixelSize: 12
+                                font.family: theme.fontBody
+                                font.pixelSize: theme.textSm
                                 font.weight: window.flowKind === "replay" ? Font.DemiBold : Font.Normal
                                 color: window.flowKind === "replay" ? theme.modeReplay : theme.inkSecondary
                                 horizontalAlignment: Text.AlignHCenter
@@ -247,15 +257,15 @@ ApplicationWindow {
         ColumnLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.margins: 12
-            spacing: 10
+            Layout.margins: 10
+            spacing: 8
 
-            // Registration toolbar (single compact card)
+            // Registration toolbar (single compact dark card)
             Rectangle {
                 visible: !window.table && !window.live
                 Layout.fillWidth: true
                 implicitHeight: regFlow.implicitHeight + 14
-                radius: 10
+                radius: theme.radiusLg
                 color: theme.bgSurface
                 border.color: theme.border
 
@@ -272,20 +282,64 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         spacing: 7
 
-                        ConsoleButton {
-                            text: "Points"
+                        // Segmented Points | Assign mode switcher
+                        Rectangle {
+                            implicitWidth: regModeSeg.implicitWidth + 6
                             implicitHeight: 32
-                            primary: s.mode === "Points"
-                            enabled: s.editable
-                            onClicked: ui.setMode("Points")
+                            radius: theme.radiusMd
+                            color: theme.bgTrack
+                            border.color: theme.border
+
+                            RowLayout {
+                                id: regModeSeg
+                                anchors.centerIn: parent
+                                spacing: 3
+
+                                Button {
+                                    id: pointsSeg
+                                    implicitHeight: 26
+                                    leftPadding: 11; rightPadding: 11
+                                    enabled: s.editable
+                                    onClicked: ui.setMode("Points")
+                                    background: Rectangle {
+                                        radius: theme.radiusSm
+                                        color: s.mode === "Points" ? theme.accent : (pointsSeg.hovered ? theme.bgSubtle : "transparent")
+                                    }
+                                    contentItem: Text {
+                                        text: "Points"
+                                        font.family: theme.fontBody
+                                        font.pixelSize: theme.textSm
+                                        font.weight: s.mode === "Points" ? Font.DemiBold : Font.Normal
+                                        color: s.mode === "Points" ? "#ffffff" : theme.inkSecondary
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        opacity: pointsSeg.enabled ? 1 : 0.42
+                                    }
+                                }
+                                Button {
+                                    id: assignSeg
+                                    implicitHeight: 26
+                                    leftPadding: 11; rightPadding: 11
+                                    enabled: s.editable
+                                    onClicked: ui.setMode("Assign")
+                                    background: Rectangle {
+                                        radius: theme.radiusSm
+                                        color: s.mode === "Assign" ? theme.accent : (assignSeg.hovered ? theme.bgSubtle : "transparent")
+                                    }
+                                    contentItem: Text {
+                                        text: "Assign"
+                                        font.family: theme.fontBody
+                                        font.pixelSize: theme.textSm
+                                        font.weight: s.mode === "Assign" ? Font.DemiBold : Font.Normal
+                                        color: s.mode === "Assign" ? "#ffffff" : theme.inkSecondary
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        opacity: assignSeg.enabled ? 1 : 0.42
+                                    }
+                                }
+                            }
                         }
-                        ConsoleButton {
-                            text: "Assign"
-                            implicitHeight: 32
-                            primary: s.mode === "Assign"
-                            enabled: s.editable
-                            onClicked: ui.setMode("Assign")
-                        }
+
                         ConsoleButton {
                             text: "New mask"
                             shortcut: "N"
@@ -298,7 +352,7 @@ ApplicationWindow {
                             text: "Front"
                             shortcut: "F"
                             implicitHeight: 32
-                            primary: s.mode === "Front"
+                            active: s.mode === "Front"
                             enabled: s.canFront
                             onClicked: ui.setMode("Front")
                         }
@@ -308,34 +362,46 @@ ApplicationWindow {
                         Button {
                             id: regMaskPill
                             implicitHeight: 32
-                            leftPadding: 10; rightPadding: 10
+                            leftPadding: 11; rightPadding: 11
                             onClicked: ui.setOverlay("masks", !s.masks)
                             background: Rectangle {
-                                radius: 8
-                                color: s.masks ? theme.accentSoft : theme.bgSubtle
+                                radius: theme.radiusMd
+                                color: s.masks ? (regMaskPill.hovered ? theme.bgElevated : theme.accentSoft)
+                                               : (regMaskPill.hovered ? theme.bgElevated : theme.bgSubtle)
                                 border.color: s.masks ? theme.accentBorder : theme.border
                             }
                             contentItem: RowLayout {
                                 spacing: 6
-                                Rectangle { width: 8; height: 8; radius: 4; color: s.masks ? theme.accent : theme.borderStrong }
-                                Text { text: "Masks"; font.pixelSize: 12; font.weight: s.masks ? Font.DemiBold : Font.Normal; color: s.masks ? theme.accent : theme.inkSecondary }
+                                Rectangle { width: 8; height: 8; radius: 4; color: s.masks ? theme.selection : theme.borderStrong }
+                                Text {
+                                    text: "Masks"
+                                    font.pixelSize: theme.textSm
+                                    font.weight: s.masks ? Font.DemiBold : Font.Normal
+                                    color: s.masks ? theme.ink : theme.inkSecondary
+                                }
                             }
                         }
 
                         Button {
                             id: regTrayPill
                             implicitHeight: 32
-                            leftPadding: 10; rightPadding: 10
+                            leftPadding: 11; rightPadding: 11
                             onClicked: ui.setOverlay("trays", !s.trays)
                             background: Rectangle {
-                                radius: 8
-                                color: s.trays ? theme.accentSoft : theme.bgSubtle
+                                radius: theme.radiusMd
+                                color: s.trays ? (regTrayPill.hovered ? theme.bgElevated : theme.accentSoft)
+                                               : (regTrayPill.hovered ? theme.bgElevated : theme.bgSubtle)
                                 border.color: s.trays ? theme.accentBorder : theme.border
                             }
                             contentItem: RowLayout {
                                 spacing: 6
-                                Rectangle { width: 8; height: 8; radius: 4; color: s.trays ? theme.accent : theme.borderStrong }
-                                Text { text: "Trays"; font.pixelSize: 12; font.weight: s.trays ? Font.DemiBold : Font.Normal; color: s.trays ? theme.accent : theme.inkSecondary }
+                                Rectangle { width: 8; height: 8; radius: 4; color: s.trays ? theme.selection : theme.borderStrong }
+                                Text {
+                                    text: "Trays"
+                                    font.pixelSize: theme.textSm
+                                    font.weight: s.trays ? Font.DemiBold : Font.Normal
+                                    color: s.trays ? theme.ink : theme.inkSecondary
+                                }
                             }
                         }
                     }
@@ -343,7 +409,7 @@ ApplicationWindow {
                     Text {
                         visible: window.width >= 1040
                         color: theme.inkMuted
-                        font.pixelSize: 11
+                        font.pixelSize: theme.textXs
                         text: s.mode === "Front" ? "Click the front edge of the selected tray."
                               : s.mode === "Assign" ? "Click a mask, then choose its type."
                               : "Left: + point · Right: − point · Assign type to advance."
@@ -362,31 +428,28 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 12
+                spacing: 10
 
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    spacing: 10
+                    spacing: 8
 
                     // Deep matte video/board stage
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         color: theme.bgStage
-                        radius: 12
-                        border.width: window.live && window.flowKind !== "live" ? 2 : 1
-                        border.color: {
-                            if (window.live && window.flowKind !== "live") return window.badgeDot
-                            return "#243542"
-                        }
+                        radius: theme.radiusLg
+                        border.width: 1
+                        border.color: (window.live && window.flowKind !== "live") ? window.badgeBorder : theme.border
                         clip: true
 
                         Image {
                             id: board
                             objectName: "boardImage"
                             anchors.fill: parent
-                            anchors.margins: 2
+                            anchors.margins: 1
                             source: "image://match/" + s.imageRevision
                             fillMode: Image.PreserveAspectFit
                             smooth: true
@@ -456,6 +519,16 @@ ApplicationWindow {
                                     drop.acceptProposedAction()
                                 }
                             }
+
+                            // Crisp vector rounded-pill unit & terrain badges (never intercept clicks)
+                            BoardBadges {
+                                anchors.fill: parent
+                                z: 1
+                                visible: !window.table && (!window.live || window.flowKind === "live" || window.flowKind === "recovery" || window.flowKind === "replay")
+                                badges: ui.badges
+                                selectedUnitId: window.live && window.flowKind === "live" ? (s.console.unitId || "") : ""
+                                targetUnitId: window.live && window.flowKind === "live" ? (s.console.targetId || "") : ""
+                            }
                         }
 
                         UnitHud {
@@ -480,7 +553,7 @@ ApplicationWindow {
                         visible: window.table
                         Layout.fillWidth: true
                         implicitHeight: tableCardCol.implicitHeight + 24
-                        radius: 10
+                        radius: theme.radiusLg
                         color: theme.bgSurface
                         border.color: theme.border
 
@@ -494,17 +567,18 @@ ApplicationWindow {
                                 Layout.fillWidth: true
                                 spacing: 10
                                 Rectangle {
-                                    implicitWidth: stepChip.implicitWidth + 12
+                                    implicitWidth: stepChip.implicitWidth + 14
                                     implicitHeight: 22
-                                    radius: 6
+                                    radius: height / 2
                                     color: theme.accentSoft
+                                    border.color: theme.accentBorder
                                     Text {
                                         id: stepChip
                                         anchors.centerIn: parent
                                         text: s.tableMode === "dimensions" ? "STEP 2 / 2" : "STEP 1 / 2"
-                                        color: theme.accent
+                                        color: theme.selection
                                         font.family: theme.fontMono
-                                        font.pixelSize: 10
+                                        font.pixelSize: theme.textXs
                                         font.weight: Font.DemiBold
                                     }
                                 }
@@ -515,7 +589,7 @@ ApplicationWindow {
                                           : "Are the table corners aligned?"
                                     color: theme.ink
                                     font.family: theme.fontDisplay
-                                    font.pixelSize: 16
+                                    font.pixelSize: theme.textLg
                                     font.weight: Font.DemiBold
                                     Layout.fillWidth: true
                                 }
@@ -524,7 +598,7 @@ ApplicationWindow {
                                     text: s.tableMode === "dimensions" ? "Entered dimensions scale millimetre measurements."
                                           : "Keep TL / TR / BR / BL on the physical table corners."
                                     color: theme.inkMuted
-                                    font.pixelSize: 11
+                                    font.pixelSize: theme.textXs
                                 }
                             }
 
@@ -556,25 +630,53 @@ ApplicationWindow {
                                 spacing: 10
                                 Column {
                                     spacing: 4
-                                    Text { text: "Length · TL → TR (in)"; color: theme.inkSecondary; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                    Text { text: "Length · TL → TR (in)"; color: theme.inkSecondary; font.pixelSize: theme.textXs; font.weight: Font.DemiBold }
                                     TextField {
                                         id: tableWidth
                                         objectName: "tableWidth"
                                         width: 150
+                                        height: 34
                                         text: s.boardWidth
                                         selectByMouse: true
+                                        color: theme.ink
+                                        selectionColor: theme.accentSoft
+                                        selectedTextColor: theme.ink
+                                        font.family: theme.fontBody
+                                        font.pixelSize: theme.textSm
+                                        leftPadding: 10
+                                        rightPadding: 10
+                                        background: Rectangle {
+                                            radius: theme.radiusSm
+                                            color: theme.bgTrack
+                                            border.width: tableWidth.activeFocus ? 1.5 : 1
+                                            border.color: tableWidth.activeFocus ? theme.selection : theme.borderStrong
+                                        }
                                         onAccepted: ui.confirmTable(tableWidth.text, tableDepth.text)
                                     }
                                 }
                                 Column {
                                     spacing: 4
-                                    Text { text: "Width · TL → BL (in)"; color: theme.inkSecondary; font.pixelSize: 11; font.weight: Font.DemiBold }
+                                    Text { text: "Width · TL → BL (in)"; color: theme.inkSecondary; font.pixelSize: theme.textXs; font.weight: Font.DemiBold }
                                     TextField {
                                         id: tableDepth
                                         objectName: "tableDepth"
                                         width: 150
+                                        height: 34
                                         text: s.boardDepth
                                         selectByMouse: true
+                                        color: theme.ink
+                                        selectionColor: theme.accentSoft
+                                        selectedTextColor: theme.ink
+                                        font.family: theme.fontBody
+                                        font.pixelSize: theme.textSm
+                                        leftPadding: 10
+                                        rightPadding: 10
+                                        background: Rectangle {
+                                            radius: theme.radiusSm
+                                            color: theme.bgTrack
+                                            border.width: tableDepth.activeFocus ? 1.5 : 1
+                                            border.color: tableDepth.activeFocus ? theme.selection : theme.borderStrong
+                                        }
                                         onAccepted: ui.confirmTable(tableWidth.text, tableDepth.text)
                                     }
                                 }
@@ -631,7 +733,7 @@ ApplicationWindow {
         // Slim bottom telemetry footer
         Rectangle {
             Layout.fillWidth: true
-            implicitHeight: statusColumn.implicitHeight + 14
+            implicitHeight: statusColumn.implicitHeight + 12
             color: theme.bgFooter
 
             Rectangle {
@@ -646,8 +748,8 @@ ApplicationWindow {
                 anchors.fill: parent
                 anchors.leftMargin: 16
                 anchors.rightMargin: 16
-                anchors.topMargin: 7
-                anchors.bottomMargin: 7
+                anchors.topMargin: 6
+                anchors.bottomMargin: 6
                 spacing: 4
 
                 RowLayout {
@@ -656,12 +758,12 @@ ApplicationWindow {
 
                     Rectangle {
                         width: 7; height: 7; radius: 4
-                        color: s.ready ? theme.success : s.loading ? theme.accent : theme.danger
+                        color: s.ready ? theme.success : s.loading ? theme.selection : theme.modeRecovery
                     }
                     Text {
                         text: s.modelLabel
-                        color: s.ready ? theme.success : s.loading ? theme.accent : theme.danger
-                        font.pixelSize: 12
+                        color: s.ready ? theme.success : s.loading ? theme.selection : theme.modeRecovery
+                        font.pixelSize: theme.textSm
                         font.weight: Font.DemiBold
                     }
                     ProgressBar {
@@ -674,14 +776,14 @@ ApplicationWindow {
                         visible: (s.note || "").length > 0
                         text: "·"
                         color: theme.inkMuted
-                        font.pixelSize: 11
+                        font.pixelSize: theme.textXs
                     }
                     Text {
                         objectName: "statusNote"
                         visible: (s.note || "").length > 0
                         text: s.note
                         color: theme.inkSecondary
-                        font.pixelSize: 11
+                        font.pixelSize: theme.textXs
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                         ToolTip.visible: noteHover.containsMouse && truncated
@@ -696,7 +798,7 @@ ApplicationWindow {
                         text: "Src " + s.sourceTime + "s · Mask " + s.observationTime + "s · Geom " + s.geometryTime + "s"
                         color: theme.inkMuted
                         font.family: theme.fontMono
-                        font.pixelSize: 11
+                        font.pixelSize: theme.textXs
                     }
                 }
 
@@ -704,8 +806,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     visible: s.historyWarning.length > 0
                     text: s.historyWarning
-                    color: theme.danger
-                    font.pixelSize: 11
+                    color: theme.modeRecovery
+                    font.pixelSize: theme.textXs
                     font.weight: Font.DemiBold
                     wrapMode: Text.WordWrap
                 }
@@ -734,7 +836,31 @@ ApplicationWindow {
         modal: true
         title: "Start a new registration?"
         standardButtons: Dialog.Yes | Dialog.No
-        Label { text: "Current drafts will be cleared. Saved references are kept." }
+        Overlay.modal: Rectangle { color: theme.scrim }
+        background: Rectangle {
+            color: theme.bgSurface
+            radius: theme.radiusLg
+            border.color: theme.borderStrong
+        }
+        header: Rectangle {
+            implicitHeight: 44
+            color: "transparent"
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 18
+                text: resetDialog.title
+                color: theme.ink
+                font.family: theme.fontDisplay
+                font.pixelSize: theme.textLg
+                font.weight: Font.DemiBold
+            }
+        }
+        Label {
+            text: "Current drafts will be cleared. Saved references are kept."
+            color: theme.inkSecondary
+            font.pixelSize: theme.textSm
+        }
         onAccepted: ui.reset()
     }
     Shortcut { sequences: [StandardKey.Undo]; enabled: !window.live && !window.modalOpen; onActivated: ui.undo() }
