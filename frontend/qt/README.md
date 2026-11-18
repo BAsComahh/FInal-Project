@@ -44,7 +44,7 @@ Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，
 
 mask／facing 不确定信息现在集中在右侧 A／B 双栏，只有需要关注的条目才占用侧栏。正常 facing recovery_phase=tracking 不因连续性／DVMNet 来源而一直告警；pending／failed／waiting、无可用正面和没有监测状态的旧估计仍列出。选择列表单位只是查看信息，不确认恢复，也不重新绑定；侧栏底部另提供进入恢复视图的快捷按钮。信息卡和视频单位名不重复显示这些标签，后端来源及规则警告保留。
 
-正式客户端固定 adaptive，不再提供 `--tray-search`：质心相对上次实际拟合移动 ≤5% 且原图像坐标二值 mask IoU ≥0.90 时复用矩形（旧面积／32×32 轮廓／长轴条件已于 2026-11-13 P0 移除）；明显变化先局部拟合、失败再完整拟合，失败记录同样以尝试帧压缩 mask 为基准等待明显变化。底层 full／local 接口保留作无窗口对照。门槛在 application/config.py 中，是试验值；空 mask、恢复目标、标定／尺寸变化及新注册不复用旧解。状态栏显示 Source／Mask／Geom 时间。
+正式客户端固定 adaptive，不再提供 `--tray-search`：质心相对上次实际拟合移动 ≤5% 且原图像坐标二值 mask IoU ≥0.90 时复用矩形（旧面积／32×32 轮廓／长轴条件已于 2026-11-13 P0 移除）；需要重拟合时，质心位移超过托盘短边的 50% 则直接完整搜索，其余先用旧框局部拟合。拟合失败时，以尝试帧压缩 mask 为基准等待变化。底层 full／local 接口用于无窗口对照。稳定门槛见 application/config.py，重拟合见托盘组件文档；空 mask、恢复目标、标定／尺寸变化及新注册不复用旧解。状态栏显示 Source／Mask／Geom 时间。
 
 窗口工厂：`frontend.qt.window.create_window(qgui_app, match, visible=True, preview_width=960)`，返回 `(engine, bridge)`。调用方保留两者至窗口结束；可传入已构造的 MatchApplication。`bridge.close()` 幂等关闭定时器、检测任务和应用。正常入口不创建第二份比赛状态。
 

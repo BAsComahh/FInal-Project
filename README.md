@@ -26,7 +26,7 @@ conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU
 
 规则查询使用尺寸确认页或外部毫米标定建立的尺度、托盘几何，以及相应的正面、Speed、Height、阵营和地形信息。按 F 登记正面、E 编辑规则属性、G 标地形；D／L／V／J 查询距离、LOS、普通移动／Double。详情和不确定性见 [游戏规则组件](components/game_rules/README.md) 与 [需求审计](docs/Game%20information%20requirements%20audit.md)。
 
-运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供 UI 使用。Qt 已接入真实注册和 Live 单位选择／半环菜单、只读单位信息、Distance 连线读数、LOS／Move 底部查询抽屉及右侧 A／B 不确定单位列表；默认托盘更新为 adaptive，稳定 mask 复用几何，变化时局部拟合并完整回退；Live 主路径已做受控 CPU 离屏检查，真实模型／持续追踪与原生交互仍待验收。注册包含桌角／尺寸、点提示、类型绑定、初始正面、一次保存和连续播放；部分受控接口验收已通过，两页离屏加载已通过，实际界面交互待验收，完整 UI 迁移及 I14 验收仍未完成。使用相同模型环境与独立 Qt 依赖，启动见 [Qt 客户端](frontend/qt/README.md)：
+运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供 UI 使用。Qt 已接入真实注册和 Live 单位选择／半环菜单、只读单位信息、Distance 连线读数、LOS／Move 底部查询抽屉及右侧 A／B 不确定单位列表；默认托盘更新为 adaptive，稳定 mask 复用几何。重拟合时质心位移超过托盘短边的 50% 则直接完整搜索，其余优先沿用旧框做局部搜索。局部与完整搜索共用[方向 Chamfer Beam 流程](components/boundary_detection/tray/README.md#逐级回退)和 70% mask 覆盖门槛；Live 主路径已做受控 CPU 离屏检查，真实模型／持续追踪与原生交互仍待验收。注册包含桌角／尺寸、点提示、类型绑定、初始正面、一次保存和连续播放；部分受控接口验收已通过，两页离屏加载已通过，实际界面交互待验收，完整 UI 迁移及 I14 验收仍未完成。使用相同模型环境与独立 Qt 依赖，启动见 [Qt 客户端](frontend/qt/README.md)：
 
 ```powershell
 conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600

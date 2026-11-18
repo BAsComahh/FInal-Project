@@ -7,7 +7,6 @@ from components.homography.geometry import transform_points
 
 
 def make_work_view(image, mask, size, image_to_plane, max_size, margin):
-    height, width = mask.shape
     ys, xs = np.nonzero(mask)
     bbox = np.array([[xs.min(), ys.min()], [xs.max(), ys.min()],
                      [xs.max(), ys.max()], [xs.min(), ys.max()]], dtype=float)
@@ -22,8 +21,7 @@ def make_work_view(image, mask, size, image_to_plane, max_size, margin):
     low = np.minimum(plane_bbox.min(axis=0) - padding, center - radius)
     high = np.maximum(plane_bbox.max(axis=0) + padding, center + radius)
     if image_to_plane is None:
-        low = np.maximum(low, [0, 0])
-        high = np.minimum(high, [width - 1, height - 1])
+        # Keep the full work margin at the frame edge for partially visible trays.
         native_scale = 1.0
     else:
         native_scale = np.sqrt(((np.ptp(xs) + 1) * (np.ptp(ys) + 1)) / np.prod(span))
@@ -38,9 +36,9 @@ def make_work_view(image, mask, size, image_to_plane, max_size, margin):
                                     flags=cv2.INTER_NEAREST).astype(bool)
     if not work_mask.any():
         raise ValueError("The mask vanished in the calibrated working view")
-    valid = cv2.warpPerspective(np.ones(mask.shape, np.uint8), image_to_work, work_size,
-                                flags=cv2.INTER_NEAREST)
-    valid = cv2.erode(valid, np.ones((3, 3), np.uint8))
-    return {"image": work_image, "mask": work_mask, "valid": valid, "scale": scale,
+    visible = cv2.warpPerspective(np.ones(mask.shape, np.uint8), image_to_work, work_size,
+                                  flags=cv2.INTER_NEAREST)
+    valid = cv2.erode(visible, np.ones((3, 3), np.uint8))
+    return {"image": work_image, "mask": work_mask, "valid": valid, "visible": visible.astype(bool), "scale": scale,
             "size": np.asarray(size) * scale, "image_to_work": image_to_work,
             "work_to_image": np.linalg.inv(image_to_work), "work_to_plane": np.linalg.inv(plane_to_work)}

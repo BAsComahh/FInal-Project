@@ -42,15 +42,16 @@ def main():
         "corner_dedup_pct": "Corner deduplication distance as a percentage of the working tray short side",
         "corner_nudge_pct": "Corner translation/strength regularizer as a percentage of the working tray short side",
         "candidate_dedup_pct": "Candidate deduplication distance as a percentage of the working tray short side",
-        "search_pct": "Search translation percentage along each tray width/depth axis",
+        "search_pct": "Mask fallback seed offset along each tray width/depth axis, including diagonals",
     }
     defaults = TrayConfig()
     for name, help_text in percent_options.items():
         parser.add_argument(f"--{name.replace('_', '-')}", type=float, default=getattr(defaults, name), help=help_text)
     parser.add_argument("--angle-tolerance", type=float, default=12)
     parser.add_argument("--angle-step", type=float, default=5)
-    parser.add_argument("--refine-rounds", type=int, default=3, help="Local refinement after coarse edge/mask search; 0 disables it")
-    parser.add_argument("--min-mask-coverage", type=float, default=0.55)
+    parser.add_argument("--refine-rounds", type=int, default=defaults.refine_rounds,
+                        help="Maximum Beam rounds per seed set; 0 scores the seeds only")
+    parser.add_argument("--min-mask-coverage", type=float, default=defaults.min_mask_coverage)
     parser.add_argument("--device", help="SAM3 device if --point is used")
     parser.add_argument("--model", default="facebook/sam3")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "outputs/tray_detection")

@@ -6,16 +6,20 @@ from time import perf_counter
 import cv2
 import numpy as np
 
+from components.homography.geometry import transform_points
 from .detector import fit_tray
 from .temporal import TrayStability, describe_mask
 
 
 def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_stable=False,
-                         stability=None, source_frame=None, attempts=None, cancelled=None):
+                         stability=None, source_frame=None, attempts=None, cancelled=None,
+                         full_search_distance=0.50):
     """Return observed proposals keyed by SAM object ID, plus per-unit errors.
 
     context has image_to_plane and sizes (object_id -> width/depth in mm).
     Missing dimensions and empty masks produce no tray; no boxes are invented.
+    In adaptive mode full_search_distance is measured in tray short sides.
+    Set it to None to always try a compatible previous pose before full search.
     """
     trays, errors = {}, {}
     stability = stability or TrayStability()
@@ -58,7 +62,16 @@ def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_sta
                                                    attempted=False, seconds=perf_counter() - started)
                     continue
             initial = prior.get("corners_image") if prior is not None else None
-            result = fit_tray(frame, mask, size, image_to_plane=context["image_to_plane"], initial_corners=initial)
+            if initial is not None and check is not None and full_search_distance is not None:
+                centers = np.asarray([prior["fit_sample"]["centroid"], sample["centroid"]])
+                if mapping is not None:
+                    centers = transform_points(centers, mapping)
+                displacement = float(np.linalg.norm(centers[1] - centers[0]) / min(size))
+                direct_full = displacement > full_search_distance
+                check.update(refit_displacement_short_sides=displacement, direct_full=direct_full)
+                if direct_full:
+                    initial = None
+            result = fit_tray(frame, mask, size, image_to_plane=mapping, initial_corners=initial)
             if result["success"]:
                 tray = result["best"]
                 tray.update(cache_context=cache_context, observation_frame_index=source_frame)

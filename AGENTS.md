@@ -24,6 +24,12 @@ treat them as disposable handoff notes just because a task is complete.
 | `前端解耦重构计划.md` | D35 / I14 execution plan, interface boundaries, code-simplification requirements and acceptance checks; planned work is not completed functionality. |
 | `待人工确认.md` | Local verification checklist. Git-ignored; do not stage or commit it. |
 
+Store new maintained documents and final reports in `docs/`, with their
+supporting figures, data, and experiment archives in a topic folder. Keep the
+root project records listed above in place. Reserve `outputs/` for temporary
+or reproducible generated files. Archive any important result in `docs/`
+before treating it as a maintained project artifact.
+
 Before substantial implementation, read this file and the relevant sections
 of `项目思路.md` and `TODO.md`; inspect `git status` and the current diff before
 editing. Consult the requirement and research records relevant to the task.
