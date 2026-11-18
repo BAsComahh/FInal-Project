@@ -17,6 +17,7 @@ class UnitTracking:
     last_accepted_position: dict | None = None
     recovery_phase: str | None = None
     recovery_note: str | None = None
+    recovery_update_error: str | None = None
 
 
 def validate_disappearance_seconds(value):
@@ -25,8 +26,8 @@ def validate_disappearance_seconds(value):
     return float(value)
 
 
-def update_tracking(records, roster, prediction, metadata, disappearance_seconds):
-    """Annotate raw results; a failed unit cannot recover just by returning a mask."""
+def update_tracking(records, roster, prediction, metadata, disappearance_seconds, *, resume_visible_masks=False):
+    """Annotate raw results, with same-ID mask return enabled for live propagation."""
     timeout = validate_disappearance_seconds(disappearance_seconds)
     stamp = metadata["timestamp_seconds"]
     if isinstance(stamp, bool) or not isinstance(stamp, (int, float)) or not isfinite(stamp) or stamp < 0:
@@ -34,7 +35,7 @@ def update_tracking(records, roster, prediction, metadata, disappearance_seconds
     frame_index = metadata["frame_index"]
     version = metadata.get("calibration_version", 0)
     visible = {obj for obj, mask in zip(prediction["object_ids"], prediction["masks"]) if mask.any()}
-    unavailable, estimated, inactive = [], [], []
+    unavailable, inactive = [], []
     for object_id, unit_id in roster.bindings.items():
         unit = roster.units[unit_id]
         profile = {**roster.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
@@ -53,13 +54,14 @@ def update_tracking(records, roster, prediction, metadata, disappearance_seconds
             record.frame_index = frame_index
             record.timestamp_seconds = float(stamp)
             record.calibration_version = version
-            if record.status != "failed":
-                if record.visibility:
-                    record.status, record.disappeared_time = "tracking", None
-                else:
-                    if record.disappeared_time is None:
-                        record.disappeared_time = float(stamp)
-                    record.status = "failed" if stamp - record.disappeared_time >= timeout else "pending"
+            if record.visibility and (record.status != "failed" or
+                                      resume_visible_masks and record.recovery_update_error is None):
+                record.status, record.disappeared_time = "tracking", None
+                record.recovery_phase = record.recovery_note = None
+            elif not record.visibility and record.status != "failed":
+                if record.disappeared_time is None:
+                    record.disappeared_time = float(stamp)
+                record.status = "failed" if stamp - record.disappeared_time >= timeout else "pending"
             tray = prediction.get("trays", {}).get(object_id)
             if record.status == "tracking" and record.visibility and tray is not None:
                 record.last_accepted_position = {
@@ -70,6 +72,4 @@ def update_tracking(records, roster, prediction, metadata, disappearance_seconds
                 }
         if record.status != "tracking" or object_id not in visible:
             unavailable.append(object_id)
-        if record.status == "failed" and object_id in visible:
-            estimated.append(object_id)
-    return {**prediction, "unavailable_ids": unavailable, "estimated_ids": estimated, "inactive_ids": inactive}
+    return {**prediction, "unavailable_ids": unavailable, "inactive_ids": inactive}

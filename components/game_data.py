@@ -70,7 +70,7 @@ class GameData:
                           "center_source": transform_points(corners.mean(axis=0), inverse).tolist()}
         return {**prediction, "trays": trays}
 
-    def accept_observation(self, prediction, frame, metadata, *, disappearance_seconds=None):
+    def accept_observation(self, prediction, frame, metadata, *, disappearance_seconds=None, resume_visible_masks=False):
         """Accept a completed result with its matching image and source time."""
         if disappearance_seconds is not None:
             previous = self.current.prediction_metadata
@@ -81,11 +81,18 @@ class GameData:
         if not pending:
             prediction = self._source_geometry(prediction)
         if disappearance_seconds is not None:
-            prediction = update_tracking(self.tracking, self.units, prediction, metadata, disappearance_seconds)
+            prediction = update_tracking(self.tracking, self.units, prediction, metadata, disappearance_seconds,
+                                         resume_visible_masks=resume_visible_masks)
         if pending:
             previous = self.current.prediction or {}
             prediction = {**prediction, **{key: previous[key] for key in
-                ("trays", "tray_errors", "facing_results", "geometry_metadata") if key in previous}}
+                ("trays", "tray_errors", "facing_results", "geometry_metadata", "tray_fit_stats") if key in previous}}
+            prev_tray_fit = (previous.get("timings_seconds") or {}).get("tray_fit")
+            timings = dict(prediction.get("timings_seconds") or {})
+            if prev_tray_fit is not None and "tray_fit" not in timings:
+                timings["tray_fit"] = prev_tray_fit
+            if timings:
+                prediction["timings_seconds"] = timings
             unavailable = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
             prediction["trays"] = {obj: tray for obj, tray in prediction.get("trays", {}).items() if obj not in unavailable}
             for obj in unavailable:
@@ -121,8 +128,10 @@ class GameData:
         self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
                            calibration_version=metadata.get("calibration_version"), bindings=self.units.bindings)
         current = self.current
+        timings = {**(current.prediction.get("timings_seconds") or {}), **(prediction.get("timings_seconds") or {})}
         current.prediction = {**current.prediction, **{key: prediction[key] for key in
-            ("trays", "tray_errors", "facing_results", "geometry_metadata", "tray_fit_stats") if key in prediction}}
+            ("trays", "tray_errors", "facing_results", "geometry_metadata", "tray_fit_stats") if key in prediction},
+            **({"timings_seconds": timings} if timings else {})}
         current.geometry_frame = frame
         current.geometry_revision += 1
         return prediction
@@ -214,6 +223,7 @@ class GameData:
         if object_id not in masks or not masks[object_id].any():
             raise ValueError("Confirmed recovery has no current mask")
         state.status, state.visibility, state.disappeared_time = "tracking", True, None
+        state.recovery_update_error = None
         state.recovery_phase = state.recovery_note = None
         state.frame_index = -1  # Same-frame/EOF recovery must refresh this ID too.
         self.rules.fronts.pop(object_id, None)
@@ -224,20 +234,19 @@ class GameData:
     def fail_manual_recovery(self, object_id, source):
         return self.fail_recovery(object_id, source, method="manual")
 
-    def fail_recovery(self, object_id, source, *, method="manual"):
+    def fail_recovery(self, object_id, source, *, method="manual", error=None):
         """A consumed but unsuccessful update invalidates only its target."""
         unit_id = self.units.bindings.get(object_id) if self.units is not None else None
         if unit_id is None:
             return
         state = self.tracking.setdefault(unit_id, UnitTracking())
         state.status = "failed"
+        state.recovery_update_error = str(error or "") or "The updated mask could not be accepted."
         state.recovery_phase = "manual"
         self.rules.fronts.pop(object_id, None)
         if self.current.prediction is not None:
             prediction = self.current.prediction
             prediction["unavailable_ids"] = sorted(set(prediction.get("unavailable_ids", [])) | {object_id})
-            if state.visibility:
-                prediction["estimated_ids"] = sorted(set(prediction.get("estimated_ids", [])) | {object_id})
         self.record_history(kind=f"{method}_recovery_failed", source=source,
                             recovery={"unit_id": unit_id, "object_id": object_id, "method": method})
 
@@ -268,6 +277,7 @@ class GameData:
                 "disappeared_time": state.disappeared_time if state else None,
                 "recovery_phase": state.recovery_phase if state else None,
                 "recovery_note": state.recovery_note if state else None,
+                "recovery_update_error": state.recovery_update_error if state else None,
                 "active": state.active if state else not (profile.get("routed") or profile.get("removed")),
                 "state": {"engaged": deepcopy(profile.get("engaged")),
                           "wavering": deepcopy(profile.get("wavering")),

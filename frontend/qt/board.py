@@ -276,7 +276,7 @@ def draw_corner_brackets(frame, x, y, right, bottom, color, thickness, span):
         cv2.line(frame, (cx, cy), (cx, cy + dy * span), color, thickness, cv2.LINE_AA)
 
 
-def _badge_dict(box, width, height, label, dot_bgr, border_bgr, *, kind="unit", object_id=-1, unit_id="", active=False):
+def _badge_dict(box, width, height, label, dot_bgr, border_bgr, *, kind="unit", object_id=-1, unit_id="", active=False, unconfirmed=False):
     return {
         "x": box[0] / width,
         "y": box[1] / height,
@@ -289,6 +289,7 @@ def _badge_dict(box, width, height, label, dot_bgr, border_bgr, *, kind="unit", 
         "objectId": int(object_id),
         "unitId": str(unit_id),
         "active": bool(active),
+        "unconfirmed": bool(unconfirmed),
     }
 
 
@@ -330,6 +331,7 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
 
     occ = np.zeros((height, width), np.uint8)
     bindings = state.units.bindings
+    unconfirmed_ids = set(getattr(state, "registration_unconfirmed", ())) if state.stage == "register" else set()
     pred_trays = prediction.get("trays", {})
     items = []
 
@@ -406,7 +408,8 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
             cv2.circle(rgba, p_unit, max(2, round(2.5 * scale)), (237, 243, 247, 255), -1, cv2.LINE_AA)
         badges.append(_badge_dict(
             box, width, height, label, dot, border_bgr,
-            kind="unit", object_id=object_id, unit_id=bindings.get(object_id, ""), active=is_active,
+            kind="unit", object_id=object_id, unit_id=bindings.get(object_id, ""),
+            active=is_active, unconfirmed=object_id in unconfirmed_ids,
         ))
 
     return rgba, badges
@@ -476,6 +479,7 @@ class BoardRenderer:
             state.board.calibration_version,
             len(state.rules.terrain),
             tuple(sorted(state.units.bindings.items())),
+            tuple(getattr(state, "registration_unconfirmed", ())) if state.stage == "register" else (),
             tuple(prompt["click_id"] for prompt in state.registration_prompts) if state.stage == "register" else (),
         )
 

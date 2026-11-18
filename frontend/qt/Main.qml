@@ -17,6 +17,7 @@ ApplicationWindow {
     readonly property bool live: s.stage === "playback" || s.stage === "recalibrate"
     readonly property string flowKind: flow.state.kind || "live"
     readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || workflowControls.formOpen
+    readonly property bool textInputActive: Boolean(unitInfoPanel.editingFocus)
 
     readonly property string badgeText: {
         if (window.table) return "TABLE SETUP"
@@ -25,6 +26,7 @@ ApplicationWindow {
         if (flowKind === "recovery") return "RECOVERY"
         if (flowKind === "recalibrate") return "RECALIBRATE"
         if (flowKind === "terrain") return "TERRAIN"
+        if (flowKind === "debug") return "DEBUG"
         return "LIVE"
     }
     readonly property color badgeColor: {
@@ -135,6 +137,7 @@ ApplicationWindow {
                         if (flowKind === "recovery") return "Scoped unit recovery"
                         if (flowKind === "recalibrate") return "Board corner alignment"
                         if (flowKind === "terrain") return "Terrain polygon editor"
+                        if (flowKind === "debug") return "Paused snapshot"
                         return "Match console"
                     }
                     color: theme.ink
@@ -186,7 +189,7 @@ ApplicationWindow {
                             id: replaySeg
                             implicitHeight: 28
                             leftPadding: 12; rightPadding: 12
-                            enabled: !flow.state.busy
+                            enabled: !flow.state.busy && window.flowKind !== "debug"
                             onClicked: if (window.flowKind !== "replay") flow.open("replay")
                             background: Rectangle {
                                 radius: theme.radiusSm
@@ -349,6 +352,22 @@ ApplicationWindow {
                             onClicked: ui.newObject()
                         }
                         ConsoleButton {
+                            text: "Rectangle"
+                            implicitHeight: 32
+                            active: s.mode === "Rectangle"
+                            enabled: s.editable && s.ready
+                            tooltipText: "Drag with the left mouse button to draw the selected mask."
+                            onClicked: ui.setMode("Rectangle")
+                        }
+                        ConsoleButton {
+                            text: "Four corners"
+                            implicitHeight: 32
+                            active: s.mode === "Quad"
+                            enabled: s.editable && s.ready
+                            tooltipText: "Click four corners to draw the selected mask."
+                            onClicked: ui.setMode("Quad")
+                        }
+                        ConsoleButton {
                             text: "Front"
                             shortcut: "F"
                             implicitHeight: 32
@@ -412,6 +431,8 @@ ApplicationWindow {
                         font.pixelSize: theme.textXs
                         text: s.mode === "Front" ? "Click the front edge of the selected tray."
                               : s.mode === "Assign" ? "Click a mask, then choose its type."
+                              : s.mode === "Rectangle" ? "Drag to draw mask " + s.selected + " · Right-click to undo."
+                              : s.mode === "Quad" ? "Mask " + s.selected + " · " + s.manualVertices.length + "/4 corners · Right-click to undo."
                               : "Left: + point · Right: − point · Assign type to advance."
                     }
                 }
@@ -490,13 +511,65 @@ ApplicationWindow {
                             function imageRevision() { return Number(board.source.toString().split("/").pop()) }
 
                             MouseArea {
+                                id: boardPointer
+                                objectName: "boardPointer"
+                                property bool rectGesture: false
+                                property real startX: 0
+                                property real startY: 0
+                                property int startRevision: 0
+                                readonly property real dragX: Math.max(0, Math.min(width, mouseX))
+                                readonly property real dragY: Math.max(0, Math.min(height, mouseY))
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                enabled: board.status === Image.Ready && (window.live || !s.locked || window.table)
+                                enabled: board.status === Image.Ready && window.flowKind !== "debug"
+                                         && (window.live || !s.locked || window.table)
                                 cursorShape: window.live ? Qt.PointingHandCursor
                                              : (window.table || s.mode !== "Assign") ? Qt.CrossCursor : Qt.PointingHandCursor
-                                onClicked: mouse => ui.click(mouse.x / surface.scaleX, mouse.y / surface.scaleY,
-                                                             mouse.button === Qt.LeftButton, surface.imageRevision())
+                                onPressed: mouse => {
+                                    rectGesture = s.editable && s.mode === "Rectangle" && mouse.button === Qt.LeftButton
+                                    startX = mouse.x
+                                    startY = mouse.y
+                                    startRevision = surface.imageRevision()
+                                }
+                                onReleased: mouse => {
+                                    if (rectGesture && mouse.button === Qt.LeftButton &&
+                                        Math.abs(mouse.x - startX) >= 3 && Math.abs(mouse.y - startY) >= 3) {
+                                        ui.drawMaskRectangle(startX / surface.scaleX, startY / surface.scaleY,
+                                                             mouse.x / surface.scaleX, mouse.y / surface.scaleY, startRevision)
+                                    }
+                                }
+                                onClicked: mouse => {
+                                    if (mouse.button !== Qt.LeftButton || !rectGesture)
+                                        ui.click(mouse.x / surface.scaleX, mouse.y / surface.scaleY,
+                                                 mouse.button === Qt.LeftButton, surface.imageRevision())
+                                }
+
+                                Rectangle {
+                                    visible: s.mode === "Rectangle" && boardPointer.rectGesture &&
+                                             (boardPointer.pressedButtons & Qt.LeftButton) !== 0
+                                    x: Math.min(boardPointer.startX, boardPointer.dragX)
+                                    y: Math.min(boardPointer.startY, boardPointer.dragY)
+                                    width: Math.abs(boardPointer.startX - boardPointer.dragX)
+                                    height: Math.abs(boardPointer.startY - boardPointer.dragY)
+                                    color: theme.accentSoft
+                                    border.color: theme.selection
+                                    border.width: 2
+                                }
+                            }
+
+                            Repeater {
+                                model: s.editable && s.mode === "Quad" ? s.manualVertices : []
+                                Rectangle {
+                                    required property var modelData
+                                    x: modelData[0] * surface.scaleX - width / 2
+                                    y: modelData[1] * surface.scaleY - height / 2
+                                    width: 9
+                                    height: 9
+                                    radius: width / 2
+                                    color: theme.selection
+                                    border.color: theme.bgTrack
+                                    z: 2
+                                }
                             }
 
                             DropArea {
@@ -514,6 +587,9 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 keys: ["unit-type"]
                                 enabled: s.editable && board.status === Image.Ready
+                                onEntered: drag => ui.hoverType(drag.x / surface.scaleX, drag.y / surface.scaleY, surface.imageRevision())
+                                onPositionChanged: drag => ui.hoverType(drag.x / surface.scaleX, drag.y / surface.scaleY, surface.imageRevision())
+                                onExited: ui.clearHover()
                                 onDropped: drop => {
                                     ui.dropType(drop.source.typeId, drop.x / surface.scaleX, drop.y / surface.scaleY, surface.imageRevision())
                                     drop.acceptProposedAction()
@@ -526,6 +602,7 @@ ApplicationWindow {
                                 z: 1
                                 visible: !window.table && (!window.live || window.flowKind === "live" || window.flowKind === "recovery" || window.flowKind === "replay")
                                 badges: ui.badges
+                                hoverObjectId: s.editable ? (s.hoverObjectId || -1) : -1
                                 selectedUnitId: window.live && window.flowKind === "live" ? (s.console.unitId || "") : ""
                                 targetUnitId: window.live && window.flowKind === "live" ? (s.console.targetId || "") : ""
                             }
@@ -712,8 +789,15 @@ ApplicationWindow {
                     Layout.fillHeight: true
                 }
 
+                UnitInfoPanel {
+                    id: unitInfoPanel
+                    visible: window.live && window.flowKind === "live" && Boolean(flow.state.profileOpen)
+                    Layout.preferredWidth: window.width < 1000 ? 280 : 320
+                    Layout.fillHeight: true
+                }
+
                 UncertaintyPanel {
-                    visible: window.live && window.flowKind === "live" && ui.uncertainty.count > 0
+                    visible: window.live && window.flowKind === "live" && !flow.state.profileOpen && ui.uncertainty.count > 0
                     Layout.preferredWidth: window.width < 1000 ? 260 : 300
                     Layout.fillHeight: true
                     viewData: ui.uncertainty
@@ -782,8 +866,9 @@ ApplicationWindow {
                         objectName: "statusNote"
                         visible: (s.note || "").length > 0
                         text: s.note
-                        color: theme.inkSecondary
+                        color: s.noticeError ? theme.warning : theme.inkSecondary
                         font.pixelSize: theme.textXs
+                        font.weight: s.noticeError ? Font.DemiBold : Font.Normal
                         elide: Text.ElideRight
                         Layout.fillWidth: true
                         ToolTip.visible: noteHover.containsMouse && truncated
@@ -869,11 +954,11 @@ ApplicationWindow {
     Shortcut { sequence: "S"; enabled: s.editable && !window.modalOpen; onActivated: ui.finish() }
     Shortcut { sequence: "Space"; enabled: !window.table && !window.live && !window.modalOpen; onActivated: ui.start() }
     Shortcut { sequence: "Tab"; enabled: s.editable && !window.modalOpen; onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
-    Shortcut { sequence: "D"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("distance") }
-    Shortcut { sequence: "L"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("los") }
-    Shortcut { sequence: "V"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen; onActivated: ui.liveTool("move") }
-    Shortcut { sequences: ["Left", "A"]; enabled: window.flowKind === "replay" && !window.modalOpen; onActivated: flow.action("previous") }
-    Shortcut { sequences: ["Right", "D"]; enabled: window.flowKind === "replay" && !window.modalOpen; onActivated: flow.action("next") }
-    Shortcut { sequence: "Escape"; enabled: window.live && !window.modalOpen; onActivated: ui.escapeLive() }
-    Shortcut { sequences: ["Q", "Space"]; enabled: window.live && !window.modalOpen; onActivated: ui.clearSelection() }
+    Shortcut { sequence: "D"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("distance") }
+    Shortcut { sequence: "L"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("los") }
+    Shortcut { sequence: "V"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("move") }
+    Shortcut { sequences: ["Left", "A"]; enabled: window.flowKind === "replay" && !window.modalOpen && !window.textInputActive; onActivated: flow.action("previous") }
+    Shortcut { sequences: ["Right", "D"]; enabled: window.flowKind === "replay" && !window.modalOpen && !window.textInputActive; onActivated: flow.action("next") }
+    Shortcut { sequence: "Escape"; enabled: window.live && !window.modalOpen && !window.textInputActive; onActivated: flow.state.profileOpen ? flow.closeProfile() : ui.escapeLive() }
+    Shortcut { sequences: ["Q", "Space"]; enabled: window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.clearSelection() }
 }

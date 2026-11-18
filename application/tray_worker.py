@@ -10,6 +10,7 @@ def update_trays(request, prediction, *, search, stability, previous=None):
     """Fit requested IDs and merge their results, shared by registration and Live."""
     prediction = {**prediction, "geometry_pending": False}
     context, kind = request["tray_context"], request["kind"]
+    metadata = request["metadata"]
     if kind == "facing":
         prediction.pop("facing_results", None)
     if context is None:
@@ -28,7 +29,7 @@ def update_trays(request, prediction, *, search, stability, previous=None):
             batch = {"object_ids": [prediction["object_ids"][i] for i in normal], "masks": prediction["masks"][normal]}
             trays, errors = fit_registered_trays(request["frame"], batch, context,
                 previous=old.get("trays", {}) if search != "full" else None, reuse_stable=search == "adaptive",
-                stability=stability, source_frame=request["metadata"]["frame_index"])
+                stability=stability, source_frame=metadata["frame_index"], source_time=metadata.get("timestamp_seconds"))
             old = {**old, "trays": trays, "tray_errors": errors}
             request["prediction"] = old
     if targets is not None:
@@ -41,7 +42,8 @@ def update_trays(request, prediction, *, search, stability, previous=None):
     attempts = {}
     trays, errors = fit_registered_trays(request["frame"], target, context,
         previous=previous if search != "full" else None, reuse_stable=search == "adaptive",
-        stability=stability, source_frame=request["metadata"]["frame_index"], attempts=attempts)
+        stability=stability, source_frame=metadata["frame_index"], source_time=metadata.get("timestamp_seconds"),
+        attempts=attempts)
     if targets is not None:
         old = request.get("prediction") or {}
         prediction["trays"] = {**{obj: tray for obj, tray in old.get("trays", {}).items() if obj not in targets}, **trays}

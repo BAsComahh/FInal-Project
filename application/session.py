@@ -29,8 +29,7 @@ class MatchSession:
         self.data.motion_recorder = MotionRecorder(position_tolerance_mm=config.MOTION_POSITION_TOLERANCE_MM,
                                                    rotation_tolerance_deg=config.MOTION_ROTATION_TOLERANCE_DEG,
                                                    settle_seconds=config.MOTION_SETTLE_SECONDS)
-        self.output_dir = (Path(output_dir) if output_dir is not None else
-                           config.PROJECT_ROOT / "outputs/sam3_registration")
+        self.output_dir = Path(output_dir) if output_dir is not None else config.DEFAULT_OUTPUT_DIR
         self._fault_file = None
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -258,10 +257,13 @@ class MatchSession:
         prediction = self.data.current.prediction or {}
         self._geometry_visible = {obj for obj, mask in zip(prediction.get("object_ids", ()), prediction.get("masks", ()))
                                   if mask.any() and obj not in prediction.get("unavailable_ids", ())}
+        self.resume_source(now)
+        self.pending_play = False
+
+    def resume_source(self, now=None):
         self.play_start = perf_counter() if now is None else now
         self.play_start_frame = self.source.frame_index
         self.playing = True
-        self.pending_play = False
 
     def schedule(self, now=None):
         registration, calibration = self.registration, self.calibration
@@ -358,7 +360,7 @@ class MatchSession:
                 except Exception as failure:
                     error = failure
             if error is not None:
-                self.data.fail_recovery(object_id, self.source.metadata(), method=method)
+                self.data.fail_recovery(object_id, self.source.metadata(), method=method, error=error)
             self.last_submitted_frame = max(self.last_submitted_frame, self.worker.tracker.source_frame)
             self.next_inference_time = perf_counter() + self.inference_interval
         self.recovery.accept(request, prediction, error)
@@ -370,7 +372,10 @@ class MatchSession:
         valid = self.automatic_recovery.valid(request)
         if request.get("automatic_consumed"):
             self.trays.invalidate(request["automatic_consumed"])
+        rows = {row["object_id"]: row for row in request.get("automatic_rows", ())}
         for obj in request.get("automatic_consumed", []):
+            row = rows.get(obj, {})
+            failure = error or row.get("update_error") or request.get("automatic_error")
             if valid and error is None and prediction is not None and obj in request.get("automatic_applied", []):
                 try:
                     self.data.accept_recovery(prediction, request["frame"], request["metadata"], obj,
@@ -380,10 +385,11 @@ class MatchSession:
                     self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
                     continue
-                except Exception as failure:
-                    request["automatic_error"] = str(failure)
+                except Exception as accept_error:
+                    failure = accept_error
+                    row["reason"] = str(accept_error) or type(accept_error).__name__
             if request["metadata"].get("calibration_version") == self.data.board.calibration_version:
-                self.data.fail_recovery(obj, self.source.metadata(), method="automatic")
+                self.data.fail_recovery(obj, self.source.metadata(), method="automatic", error=failure)
         self.automatic_recovery.accept(request, error or request.get("automatic_error"))
         consumed = self.worker.tracker.source_frame
         if consumed is not None:
@@ -414,10 +420,18 @@ class MatchSession:
         self.data.record_history(source=self.source.metadata(),
                                  observation=(prediction, request["frame"], metadata), tracking=request["tracking"])
         self.mark_changed()
-        stats = prediction.get("tray_fit_stats", {})
-        self.note = (f"Masks continue | tray {prediction.get('timings_seconds', {}).get('tray_fit', 0):.2f}s "
-                     f"(reuse {stats.get('reused', 0)}, refit {stats.get('refitted', 0)}, "
-                     f"retry wait {stats.get('retry_wait', 0)}) | geometry {metadata['timestamp_seconds']:.2f}s")
+        self.note = self._tracking_note()
+
+    def _tracking_note(self):
+        prediction = self.data.current.prediction or {}
+        times = prediction.get("timings_seconds") or {}
+        backend = prediction.get("tracking_backend", "model")
+        mask_time = times.get("worker_operation", prediction.get("inference_seconds", 0.0))
+        tray_time = times.get("tray_fit", 0.0)
+        stats = prediction.get("tray_fit_stats") or {}
+        detail = (f" (reuse {stats.get('reused', 0)}, refit {stats.get('refitted', 0)}, "
+                  f"retry wait {stats.get('retry_wait', 0)})" if stats else "")
+        return f"Mask ({backend}) {mask_time:.2f}s | tray {tray_time:.2f}s{detail}"
 
     def _queue_geometry(self, request):
         prediction = self.data.current.prediction
@@ -464,6 +478,8 @@ class MatchSession:
                         if candidate is self.recovery._candidate:
                             self.recovery.accept({**request, "recovery_candidate": candidate}, result, failure)
                 registration.accept_prompt_result(request, prediction)
+                if request["kind"] == "trays" and self.data.current.prediction is None:
+                    prediction = None
                 if request["kind"] == "recalibrate" and not calibration.accept_result(request, prediction, error):
                     prediction = error = None
                 if error is not None:
@@ -474,14 +490,25 @@ class MatchSession:
                 elif prediction is not None:
                     prediction["accepted_at"] = perf_counter()
                     prediction = registration.merge_trays(request, prediction)
+                    propagation = request["kind"] == "propagate"
+                    recovery_target = None
+                    if propagation and self.recovery is not None:
+                        uid = (self.data.units.bindings.get(self.recovery.pending_binding)
+                               if self.recovery.pending_binding is not None else self.recovery.review_unit_id)
+                        state = self.data.tracking.get(uid)
+                        if state is not None and state.status == "failed":
+                            recovery_target = state
                     accepted = self.data.accept_observation(
                         prediction, request["frame"], request["metadata"],
-                        disappearance_seconds=self.disappearance_seconds if self.registration_locked else None)
+                        disappearance_seconds=self.disappearance_seconds if self.registration_locked else None,
+                        resume_visible_masks=propagation)
                     if accepted and request["kind"] != "propagate":
                         self.worker.commit_facing(request)
                         self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
-                    if accepted and request["kind"] == "propagate":
+                    if accepted and propagation:
+                        if recovery_target is not None and recovery_target.status == "tracking":
+                            self.recovery.cancel()
                         self._queue_geometry(request)
                     if self.registration_locked and request["kind"] == "recalibrate":
                         self.data.record_history(
@@ -496,18 +523,13 @@ class MatchSession:
                     elif request["kind"] == "start_tracker":
                         self.start_stream(now)
                     self.mark_changed(geometry=request["kind"] != "propagate")
-                    times = prediction.get("timings_seconds", {})
-                    tray_counts = prediction.get("tray_fit_stats", {})
-                    tray_detail = (f" (reuse {tray_counts['reused']}, refit {tray_counts['refitted']})"
-                                   if tray_counts else "")
-                    self.note = (f"Update {prediction['inference_seconds']:.2f}s | "
-                                 f"{prediction.get('tracking_backend', 'model')} operation {times.get('worker_operation', 0):.2f}s | "
-                                 f"tray {times.get('tray_fit', 0):.2f}s{tray_detail}. Latest result held between updates.")
+                    self.note = self._tracking_note()
                     if request["kind"] in ("click", "replace"):
                         self.note = "Mask updated. Assign its type to confirm and fit this unit's tray."
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
-                    self.note = "Point undone. No objects remain; click to register again."
+                    self.note = ("Point undone. Manual masks remain." if self.data.current.prediction is not None else
+                                 "Point undone. No objects remain; click to register again.")
                 elif request["kind"] == "load":
                     self.note = ("Weights loaded. Preparing rectified first-frame features." if self.data.board.homography is not None else
                                  "Weights loaded. Confirm the table corners to focus the battlefield.")

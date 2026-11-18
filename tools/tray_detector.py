@@ -51,7 +51,10 @@ def main():
     parser.add_argument("--angle-step", type=float, default=5)
     parser.add_argument("--refine-rounds", type=int, default=defaults.refine_rounds,
                         help="Maximum Beam rounds per seed set; 0 scores the seeds only")
-    parser.add_argument("--min-mask-coverage", type=float, default=defaults.min_mask_coverage)
+    parser.add_argument("--min-mask-fill", type=float, default=defaults.min_mask_fill,
+                        help="Fraction of the tray rectangle the mask must strictly exceed")
+    parser.add_argument("--min-mask-coverage", type=float,
+                        help="Additional legacy check on the fraction of mask inside the tray")
     parser.add_argument("--device", help="SAM3 device if --point is used")
     parser.add_argument("--model", default="facebook/sam3")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parents[1] / "outputs/tray_detection")
@@ -88,7 +91,7 @@ def main():
         config = TrayConfig(mode=args.mode, merge=not args.no_merge, max_work_size=args.max_work_size,
                             angle_tolerance_deg=args.angle_tolerance, angle_step_deg=args.angle_step,
                             refine_rounds=args.refine_rounds,
-                            min_mask_coverage=args.min_mask_coverage,
+                            min_mask_fill=args.min_mask_fill, min_mask_coverage=args.min_mask_coverage,
                             **{name: getattr(args, name) for name in percent_options})
         config.validate()
         if not np.isfinite(size).all() or min(size) <= 0:
@@ -119,7 +122,9 @@ def main():
         print(f"Saved: {report.resolve()}")
         print(f"Candidate accepted: {result['success']}; visual review required")
         if best:
-            print(f"Method: {best['method']}; mask coverage: {best['mask_coverage']:.3f}; edge support: {best['edge_support']:.3f}")
+            print(f"Method: {best['method']}, mask fill: {best['mask_fill']:.3f}, "
+                  f"mask coverage: {best['mask_coverage']:.3f}, edge support: {best['edge_support']:.3f}, "
+                  f"corner support: {best['corner_support']:.3f}, acceptance: {best.get('acceptance', 'none')}")
         if args.show:
             sheet = diagnostic_images(image, mask, result)["stages"]
             factor = min(1, 1280 / sheet.shape[1], 850 / sheet.shape[0])

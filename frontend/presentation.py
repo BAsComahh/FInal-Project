@@ -5,16 +5,24 @@ def unit_uncertainties(state, object_id):
     unit_id = state.units.bindings.get(object_id)
     tracking = state.tracking.get(unit_id)
     if (object_id in prediction.get("inactive_ids", ()) or
-            tracking is not None and (not tracking.active or tracking.status == "failed" and
-                                      tracking.recovery_phase in ("queued", "searching"))):
+            tracking is not None and (not tracking.active or tracking.status == "pending")):
         return {}
     issues = {}
-    if object_id in prediction.get("estimated_ids", ()):
-        issues["mask"] = "Estimated"
-    elif tracking is not None and tracking.status == "failed" and tracking.recovery_phase == "review":
-        issues["mask"] = "Candidate ready for review"
-    if "mask" in issues and tracking is not None and tracking.status == "failed" and tracking.recovery_note:
-        issues["mask"] += f" · {tracking.recovery_note}"
+    if tracking is not None and tracking.status == "failed":
+        phase = tracking.recovery_phase
+        if tracking.recovery_update_error:
+            issues["mask"] = f"Recovery failed: {tracking.recovery_update_error}"
+            if phase == "review":
+                issues["mask"] += " · Candidate ready for review"
+        elif phase in ("queued", "searching"):
+            return {}
+        elif phase == "review":
+            issues["mask"] = "Candidate ready for review"
+        elif tracking.visibility is False:
+            issues["mask"] = "Estimated"
+        if ("mask" in issues and tracking.recovery_note and
+                (not tracking.recovery_update_error or tracking.recovery_update_error not in tracking.recovery_note)):
+            issues["mask"] += f" · {tracking.recovery_note}"
     if not state.rules.track_facing:
         return issues
     front = state.rules.fronts.get(object_id)

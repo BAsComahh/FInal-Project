@@ -35,11 +35,13 @@ class TrayConfig:
     angle_step_deg: float = 5
     search_pct: float = 35
     refine_rounds: int = 6
-    min_mask_coverage: float = 0.70
+    min_mask_coverage: float | None = None
     min_corner_edge_support: float = 0.40
     min_single_edge_support: float = 0.20
     top_k: int = 5
     min_visible_fraction: float = 0.80
+    min_mask_fill: float = 0.85
+    min_adjacent_edge_support: float = 0.65
 
     def validate(self):
         if self.mode not in ("auto", "corner", "edge", "mask"):
@@ -50,9 +52,13 @@ class TrayConfig:
             percent_to_length(getattr(self, key), 1, name=key)
         if not 0 < self.angle_tolerance_deg < 45 or not 0 < self.angle_step_deg <= 45:
             raise ValueError("Angle tolerance must be in (0,45); angle step in (0,45]")
-        for key in ("min_mask_coverage", "min_corner_edge_support", "min_single_edge_support"):
+        for key in ("min_mask_fill", "min_corner_edge_support", "min_single_edge_support"):
             if not 0 <= getattr(self, key) <= 1:
                 raise ValueError(f"{key} must be in [0,1]")
+        if self.min_mask_coverage is not None and not 0 <= self.min_mask_coverage <= 1:
+            raise ValueError("min_mask_coverage must be in [0,1]")
+        if not 0 < self.min_adjacent_edge_support <= 1:
+            raise ValueError("min_adjacent_edge_support must be in (0,1]")
         if not 0 < self.min_visible_fraction <= 1:
             raise ValueError("min_visible_fraction must be in (0,1]")
         for key in ("max_work_size", "max_lines", "max_corners", "top_k"):
@@ -169,19 +175,17 @@ class _Scorer:
                           & (np.abs(delta @ v) <= self.view["size"][1] / 2)).mean())
         intersection = min(coverage * self.mask_area, self.area)
         iou = intersection / max(1, self.mask_area + self.area - intersection)
-        return coverage, iou
+        return coverage, intersection / self.area, iou
 
     def coarse_score(self, center, angle, method):
         if self.polygons(center, angle) is None:
             return -np.inf
-        coverage, iou = self.mask_scores(center, angle, self.points if method == "mask" else self.points[::4])
-        if method == "mask":
-            return 0.8 * coverage + 0.2 * iou
-        if not len(self.raw):
-            return 0.35 * coverage + 0.10 * iou
+        _, fill, iou = self.mask_scores(center, angle, self.points if method == "mask" else self.points[::4])
+        if method == "mask" or not len(self.raw):
+            return _fit_score(method, fill, iou, 0.0, 0.0)
         distance = self.chamfer.distances(np.asarray([center]), angle)[0]
-        support = float(np.exp(-0.5 * (distance / self.tolerance) ** 2).mean())
-        return 0.55 * support + 0.35 * coverage + 0.10 * iou
+        _, edge_support, corner_support = _edge_evidence(np.exp(-0.5 * (distance / self.tolerance) ** 2))
+        return _fit_score(method, fill, iou, edge_support, corner_support)
 
     def polygons(self, center, angle):
         polygon = rectangle(center, angle, self.view["size"])
@@ -210,8 +214,8 @@ class _Scorer:
         if polygons is None:
             return None
         polygon, image_polygon, visible_fraction = polygons
-        coverage, iou = self.mask_scores(center, angle, self.all_points if exact else self.points)
-        support = [0.0] * 4
+        coverage, fill, iou = self.mask_scores(center, angle, self.all_points if exact else self.points)
+        samples_per_side = np.zeros((4, 24))
         if exact or method != "mask":
             for index, (a, b) in enumerate(zip(polygon, np.roll(polygon, -1, axis=0))):
                 direction = (b - a) / np.linalg.norm(b - a)
@@ -227,12 +231,13 @@ class _Scorer:
                 t = np.clip((offset * line_delta).sum(axis=2) / (line_delta ** 2).sum(axis=1), 0, 1)
                 nearest = lines[None, :, :2] + t[:, :, None] * line_delta
                 distances = np.linalg.norm(samples[:, None] - nearest, axis=2).min(axis=1)
-                support[index] = float((np.exp(-0.5 * (distances / self.tolerance) ** 2) * visible).mean())
-        edge_support = float(np.mean(support))
-        score = _fit_score(method, coverage, iou, edge_support)
-        return {"method": method, "score": score, "mask_coverage": coverage, "mask_iou": float(iou),
-                "visible_fraction": visible_fraction,
-                "edge_support": edge_support, "edge_support_per_side": support,
+                samples_per_side[index] = np.exp(-0.5 * (distances / self.tolerance) ** 2) * visible
+        sides, edge_support, corner_support = _edge_evidence(samples_per_side)
+        score = _fit_score(method, fill, iou, edge_support, corner_support)
+        return {"method": method, "score": score, "mask_coverage": coverage, "mask_fill": fill,
+                "mask_iou": float(iou), "visible_fraction": visible_fraction,
+                "edge_support": edge_support, "edge_support_per_side": sides.tolist(),
+                "corner_support": corner_support,
                 "center_work": np.asarray(center).tolist(), "angle_deg": float(np.degrees(angle) % 180),
                 "corners_work": polygon.tolist(), "corners_image": image_polygon.tolist(),
                 "corners_plane": transform_points(polygon, self.view["work_to_plane"]).tolist(),
@@ -240,10 +245,21 @@ class _Scorer:
                 "provenance": provenance}
 
 
-def _fit_score(method, coverage, iou, edge_support):
+def _edge_evidence(samples):
+    sides = samples.mean(axis=1)
+    # A corner needs two supported sides and visible evidence near their shared vertex.
+    supported_sides = np.minimum(sides, np.roll(sides, -1))
+    starts = samples[:, :4].mean(axis=1)
+    ends = samples[:, -4:].mean(axis=1)
+    supported_vertices = np.minimum(ends, np.roll(starts, -1))
+    corner = np.minimum(supported_sides, supported_vertices).max()
+    return sides, float(sides.mean()), float(corner)
+
+
+def _fit_score(method, fill, iou, edge_support, corner_support):
     if method == "mask":
-        return 0.8 * coverage + 0.2 * iou
-    return 0.55 * edge_support + 0.35 * coverage + 0.10 * iou
+        return 0.8 * fill + 0.2 * iou
+    return 0.65 * edge_support + 0.20 * corner_support + 0.15 * fill
 
 
 def _corner_proposals(corners, size):
@@ -332,10 +348,10 @@ def _rank(proposals, method, scorer, config):
     heap, count = [], 0
 
     def offer(item, serial):
-        entry = (item["score"], serial, item)
+        entry = (_reliable_corner(item, method, config), item["score"], serial, item)
         if len(heap) < max(20, config.top_k * 4):
             heapq.heappush(heap, entry)
-        elif entry[:2] > heap[0][:2]:
+        elif entry[:3] > heap[0][:3]:
             heapq.heapreplace(heap, entry)
 
     for index, proposal in enumerate(proposals):
@@ -345,7 +361,7 @@ def _rank(proposals, method, scorer, config):
         count += 1
         offer(item, index)
     ranked = []
-    for _, _, item in heap:
+    for _, _, _, item in heap:
         proposal = (np.asarray(item["center_work"]), np.radians(item["angle_deg"]), item["provenance"])
         if method == "mask":
             exact_item = scorer.score(proposal, method, exact=True)
@@ -355,13 +371,12 @@ def _rank(proposals, method, scorer, config):
         # Only the mask sampling changes at this stage. The original LSD score
         # was already computed for this exact position and angle.
         center, angle, _ = proposal
-        coverage, iou = scorer.mask_scores(center, angle, scorer.all_points)
-        item.update(mask_coverage=coverage, mask_iou=iou,
-                    score=_fit_score(method, coverage, iou, item["edge_support"]))
+        coverage, fill, iou = scorer.mask_scores(center, angle, scorer.all_points)
+        item.update(mask_coverage=coverage, mask_fill=fill, mask_iou=iou,
+                    score=_fit_score(method, fill, iou, item["edge_support"], item["corner_support"]))
         ranked.append(item)
-    min_edge = _min_edge_support(method, config)
-    ranked.sort(key=lambda item: (item["mask_coverage"] >= config.min_mask_coverage
-                                   and item["edge_support"] >= min_edge, item["score"]), reverse=True)
+    ranked.sort(key=lambda item: (_acceptance(item, method, config) is not None,
+                                  _reliable_corner(item, method, config), item["score"]), reverse=True)
     unique = []
     for item in ranked:
         if not any(np.linalg.norm(np.asarray(item["center_work"]) - old["center_work"]) < scorer.thresholds["candidate_dedup"]
@@ -372,9 +387,25 @@ def _rank(proposals, method, scorer, config):
     return count, unique
 
 
-def _accepted_candidate(top, min_mask_coverage, min_edge_support):
-    return next((item for item in top if item["mask_coverage"] >= min_mask_coverage
-                 and item["edge_support"] >= min_edge_support), None)
+def _reliable_corner(item, method, config):
+    return (method != "mask" and config.min_mask_coverage is None
+            and item["mask_fill"] > config.min_mask_fill
+            and item["corner_support"] >= config.min_adjacent_edge_support)
+
+
+def _acceptance(item, method, config):
+    if item["mask_fill"] <= config.min_mask_fill:
+        return None
+    edge_ok = item["edge_support"] >= _min_edge_support(method, config)
+    if config.min_mask_coverage is not None:
+        return "mask_coverage" if edge_ok and item["mask_coverage"] >= config.min_mask_coverage else None
+    if edge_ok:
+        return "mask_fill"
+    return "reliable_corner" if _reliable_corner(item, method, config) else None
+
+
+def _accepted_candidate(top, method, config):
+    return next((item for item in top if _acceptance(item, method, config) is not None), None)
 
 
 def _min_edge_support(method, config):
@@ -385,14 +416,13 @@ def _min_edge_support(method, config):
 
 def _fit_seeds(seeds, method, scorer, config):
     beam, count, rounds = _search_beam(seeds, scorer, method, int(config.refine_rounds))
-    threshold = _min_edge_support(method, config)
     diagnostics = []
     for center, angle, provenance in beam:
         proposals = (_local_proposals(center, angle, scorer.thresholds, provenance)
                      if config.refine_rounds else [(center, angle, provenance)])
         evaluated, top = _rank(proposals, method, scorer, config)
         count += evaluated
-        if _accepted_candidate(top, config.min_mask_coverage, threshold):
+        if _accepted_candidate(top, method, config):
             return count, top, rounds
         diagnostics.extend(top)
     diagnostics.sort(key=lambda item: -item["score"])
@@ -415,14 +445,14 @@ def _rank_complete(method, scorer, config, lines, corners):
         return _fit_seeds(_edge_seeds(lines, scorer.view["size"], scorer.center), method, scorer, config)
 
     count, top, rounds = _fit_seeds(_mask_seeds(scorer, [scorer.center], config), method, scorer, config)
-    if _accepted_candidate(top, config.min_mask_coverage, 0):
+    if _accepted_candidate(top, method, config):
         return count, top, rounds
     bbox_center = (scorer.all_points.min(axis=0) + scorer.all_points.max(axis=0)) / 2
     offsets = np.array(((0, 0), *_BEAM_MOVES), dtype=float)
     offsets *= [scorer.thresholds["search_width"], scorer.thresholds["search_depth"]]
     retry_count, retry_top, retry_rounds = _fit_seeds(
         _mask_seeds(scorer, bbox_center + offsets, config), method, scorer, config)
-    if _accepted_candidate(retry_top, config.min_mask_coverage, 0):
+    if _accepted_candidate(retry_top, method, config):
         top = retry_top
     else:
         top = sorted(top + retry_top, key=lambda item: -item["score"])[:config.top_k]
@@ -471,19 +501,19 @@ def fit_tray(image, mask, size, *, image_to_plane=None, config=None, initial_cor
             count, top, rounds = _rank_local(initial_corners, scorer, config)
         else:
             count, top, rounds = _rank_complete(method, scorer, config, lines, corners)
-        threshold = _min_edge_support(method, config)
-        accepted_item = _accepted_candidate(top, config.min_mask_coverage, threshold)
+        accepted_item = _accepted_candidate(top, method, config)
         accepted = accepted_item is not None
         stages.append({"method": method, "candidate_count": count, "beam_rounds": rounds,
                        "accepted": accepted, "top": top,
                        "accepted_index": top.index(accepted_item) if accepted else None})
         if accepted:
+            accepted_item["acceptance"] = _acceptance(accepted_item, method, config)
             chosen = accepted_item
             break
     success = chosen is not None
     if chosen is None:
         available = [stage["top"][0] for stage in stages if stage["top"]]
-        chosen = max(available, key=lambda item: item["mask_coverage"]) if available else None
+        chosen = max(available, key=lambda item: item["mask_fill"]) if available else None
     return {"success": success, "needs_review": True, "best": chosen,
             "coordinate_space": "image_pixels" if image_to_plane is None else "calibrated_plane",
             "requested_size": size.tolist(), "corner_order": "cyclic; width follows reported angle",

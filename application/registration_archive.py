@@ -13,7 +13,7 @@ from components.registration.units import UnitRoster
 from components.registration.rule_state import RuleState
 from components.boundary_detection.tray.temporal import describe_mask
 from components.video_io import VideoSource
-from components.game_rules.scene import validate_scene
+from components.game_rules.scene import OBSTACLE_HEIGHT, validate_scene
 from . import config
 
 
@@ -63,7 +63,8 @@ def read_archive(path, video):
         entries = _json(root / "instances.json")["instances"]
         if not isinstance(entries, list) or len(entries) != len(ids):
             raise ValueError("Invalid archive instance list")
-        masks = {}
+        masks, origins = {}, {}
+        manual_ids = {row["object_id"] for row in (metadata.get("manual_masks") or ())}
         for row in entries:
             obj = row["object_id"]
             if obj not in ids or obj in masks:
@@ -79,6 +80,11 @@ def read_archive(path, video):
             if mask.shape != frame.shape[:2]:
                 raise ValueError("Archived mask does not match its registration frame")
             masks[obj] = mask
+            origin = item.get("origin")
+            if obj in manual_ids:
+                origins[obj] = "manual_shape"
+            elif isinstance(origin, str) and origin:
+                origins[obj] = origin
         if not any(mask.any() for mask in masks.values()):
             raise ValueError("Archive has no usable masks")
         homography = deepcopy(metadata["homography"])
@@ -110,6 +116,9 @@ def read_archive(path, video):
         inputs = metadata.get("rule_inputs", {})
         rules.fronts = {int(obj): deepcopy(row) for obj, row in inputs.get("fronts", {}).items() if int(obj) in ids}
         rules.terrain = deepcopy(inputs.get("terrain", []))
+        for terrain in rules.terrain:
+            if terrain.get("kind") == "obstacle":
+                terrain["height"] = OBSTACLE_HEIGHT
         rules.track_facing = config.FACING_TRACKING_ENABLED
         trays = {}
         for unit in metadata.get("rule_scene", {}).get("units", []):
@@ -139,7 +148,7 @@ def read_archive(path, video):
         prediction = dict(object_ids=ids, masks=np.stack([masks[obj] for obj in ids]), frame_idx=0, trays=trays, tray_errors={})
         validate_scene(rules.scene(roster, prediction, plane, size, metadata, source_to_plane=board.source_to_plane))
         return dict(root=root, source=source, raw=raw, frame=frame, overlay=overlay, board=board, rules=rules,
-                    roster=roster, metadata=metadata, prediction=prediction)
+                    roster=roster, metadata=metadata, prediction=prediction, origins=origins)
     except (KeyError, TypeError, AttributeError, UnicodeError) as error:
         if source is not None:
             source.close()

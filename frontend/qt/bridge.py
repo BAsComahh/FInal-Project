@@ -2,8 +2,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 
+from application.contracts import CommandReceipt
 from components.boundary_detection.table import detect_table
 from components.homography import transform_points
 from components.homography.geometry import order_corners
@@ -25,7 +28,10 @@ class MatchBridge(QObject):
         self.renderer = BoardRenderer()
         self.live = LiveSelection(match)
         self.selected = 1
+        self._last_bound = None
+        self._hover_object_id = None
         self.mode = "Points"
+        self._manual_vertices = []
         self.show_masks = True
         self.show_trays = True
         self.table_mode = "detecting"
@@ -136,9 +142,10 @@ class MatchBridge(QObject):
             self.images.publish(video_frame, kind="video")
             self._display_size = video_frame.shape[1::-1]
             self.match.present(state.source_ref)
-            self._shown = state
             self._video_key = video_key
             self._image_revision += 1
+        # Same displayed frame; keep the latest masks/bindings for hit tests (registration never changes frame).
+        self._shown = state
 
         overlay_updated, overlay_rgba = self.renderer.sync_overlay(
             state, selected=selected, masks=self.show_masks, trays=self.show_trays
@@ -173,15 +180,20 @@ class MatchBridge(QObject):
             self.badgesChanged.emit()
 
         catalog_key = (state.stage, id(state.units.types), tuple(
-            (type_id, row.get("list_id", "A"), row.get("classification") or row.get("unit_name") or row.get("name") or type_id)
+            (type_id, row.get("list_id", "A"),
+             row.get("unit_name") or row.get("name") or row.get("classification") or type_id,
+             row.get("classification") or row.get("formation") or "")
             for type_id, row in state.units.types.items()
         ))
         if catalog_key != self._catalog_key:
             types = []
             for type_id, row in state.units.types.items():
-                title = row.get("classification") or row.get("unit_name") or row.get("name") or type_id
+                title = row.get("unit_name") or row.get("name") or row.get("classification") or type_id
+                subtitle = row.get("classification") or row.get("formation") or ""
+                if subtitle == title:
+                    subtitle = ""
                 side = row.get("list_id", "A")
-                types.append(dict(id=type_id, side=side, title=title))
+                types.append(dict(id=type_id, side=side, title=title, subtitle=subtitle))
             self._catalog_a = [row for row in types if row["side"] == "A"]
             self._catalog_b = [row for row in types if row["side"] == "B"]
             self._catalog_key = catalog_key
@@ -189,6 +201,8 @@ class MatchBridge(QObject):
 
         prediction = state.current.prediction
         object_ids = set(prediction["object_ids"]) if prediction is not None else set()
+        masks_list = list(zip(prediction["object_ids"], prediction["masks"])) if prediction is not None else []
+        unconfirmed_ids = set(getattr(state, "registration_unconfirmed", ()))
         selected_unit = state.units.bindings.get(self.selected)
         progress = state.load_progress
         model_label = (progress[0] if progress else "Model ready" if state.startup_ready else "Preparing model")
@@ -205,14 +219,24 @@ class MatchBridge(QObject):
             editable=editable,
             ready=state.startup_ready and not state.model_failed,
             mode=self.mode,
+            manualVertices=self._manual_vertices.copy(),
             selected=self.selected,
+            hoverObjectId=self._hover_object_id if (editable and self._hover_object_id in object_ids) else -1,
             selectedLabel=selected_unit or f"Mask {self.selected}",
             hasSelection=self.selected in object_ids,
             canFront=bool(editable and selected_unit and prediction is not None and
                           self.selected in prediction.get("trays", {})),
             assigned=len(state.units.bindings),
             total=len(object_ids),
-            undo=bool(state.registration_prompts),
+            unassigned=[
+                dict(id=int(obj), label=f"Mask {obj}" if mask.any() else f"Mask {obj} (empty)")
+                for obj, mask in masks_list if obj not in state.units.bindings
+            ],
+            unconfirmed=[
+                dict(id=int(obj), label=f"{state.units.bindings[obj]} · Mask {obj}")
+                for obj in sorted(unconfirmed_ids & state.units.bindings.keys()) if obj in object_ids
+            ],
+            undo=bool(self._manual_vertices) or self.match.registration.can_undo,
             typesA=self._catalog_a,
             typesB=self._catalog_b,
             types=self._catalog_a + self._catalog_b,
@@ -232,6 +256,7 @@ class MatchBridge(QObject):
             loading=not state.startup_ready and not state.model_failed,
             progress=(progress[1] / progress[2] if progress and progress[1] is not None and progress[2] else -1),
             note=self.notice or state.note,
+            noticeError=bool(self.notice),
             historyWarning=state.history_warning or "",
             sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
             observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
@@ -295,11 +320,25 @@ class MatchBridge(QObject):
             return
         if shown.stage != "register" or shown.registration_locked:
             return
+        if self.mode in ("Quad", "Rectangle"):
+            if not positive:
+                self.undo()
+            elif self.mode == "Quad":
+                vertices = [*self._manual_vertices, [x, y]]
+                if len(vertices) == 4:
+                    self._submit_manual_mask(vertices)
+                else:
+                    self._manual_vertices = vertices
+                    self._refresh()
+            return
         if self.mode == "Assign":
-            prediction = shown.current.prediction
-            if prediction is not None:
-                self.selected = next((obj for obj, mask in reversed(list(zip(prediction["object_ids"], prediction["masks"])))
-                                      if mask[int(y), int(x)]), self.selected)
+            hit = self._unit_object_at(shown, x, y)
+            if hit is None:
+                self.notice = "No mask here. Click a mask or its label to select it."
+                self._local_revision += 1
+                self._publish()
+                return
+            self.selected = hit
             self._refresh()
             return
         source = transform_points([x, y], shown.board.homography["inverse_matrix"])
@@ -317,17 +356,75 @@ class MatchBridge(QObject):
             receipt = self.match.registration.point(self.selected, source, shown.source_ref, positive=positive)
         self._refresh(receipt)
 
+    def _submit_manual_mask(self, vertices):
+        receipt = self.match.registration.manual_mask(self.selected, vertices, self._shown.source_ref)
+        if receipt.status == "accepted":
+            self._manual_vertices.clear()
+        self._refresh(receipt)
+
+    @Slot(float, float, float, float, int)
+    def drawMaskRectangle(self, x0, y0, x1, y1, image_revision):
+        if self._closed or self.mode != "Rectangle" or not self._view["editable"] or image_revision != self._image_revision:
+            return
+        width, height = self._display_size
+        left, right = sorted((x0, min(max(x1, 0), width - 1)))
+        top, bottom = sorted((y0, min(max(y1, 0), height - 1)))
+        self._submit_manual_mask([[left, top], [right, top], [right, bottom], [left, bottom]])
+
+    def _unit_object_at(self, state, x, y):
+        if state is None:
+            return None
+        prediction = state.current.prediction
+        if prediction is None:
+            return None
+        height, width = state.current.frame.shape[:2]
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        ix, iy = int(x), int(y)
+        for obj, mask in reversed(list(zip(prediction["object_ids"], prediction["masks"]))):
+            if mask[iy, ix]:
+                return int(obj)
+        trays = prediction.get("trays", {})
+        for obj in reversed(list(prediction["object_ids"])):
+            tray = trays.get(obj)
+            if tray is not None and cv2.pointPolygonTest(
+                    np.asarray(tray["corners_image"], np.float32), (float(x), float(y)), False) >= 0:
+                return int(obj)
+        nx, ny = x / max(1, width), y / max(1, height)
+        pad_x, pad_y = 4.0 / max(1, width), 4.0 / max(1, height)
+        for badge in reversed(self._badges):
+            if badge.get("kind") == "unit" and int(badge.get("objectId", -1)) > 0:
+                bx, by, bw, bh = badge["x"], badge["y"], badge["w"], badge["h"]
+                if bx - pad_x <= nx <= bx + bw + pad_x and by - pad_y <= ny <= by + bh + pad_y:
+                    return int(badge["objectId"])
+        return None
+
     @Slot(str)
     def setMode(self, mode):
-        if mode in ("Points", "Assign", "Front") and self._view["editable"]:
+        if mode in ("Points", "Assign", "Front", "Quad", "Rectangle") and self._view["editable"]:
+            if mode != self.mode:
+                self._manual_vertices.clear()
             self.mode = mode
+            ids = (self.match.snapshot().current.prediction or {}).get("object_ids", ())
+            if mode == "Assign" and self.selected not in ids and ids:
+                # Points mode pre-selects a not-yet-created mask; fall back to the last assigned one.
+                self.selected = self._last_bound if self._last_bound in ids else ids[-1]
+            self._refresh()
+
+    @Slot(int)
+    def selectMask(self, object_id):
+        if self._view["editable"]:
+            self._manual_vertices.clear()
+            self.selected, self.mode = object_id, "Assign"
             self._refresh()
 
     @Slot()
     def newObject(self):
         if self._view["editable"]:
+            self._manual_vertices.clear()
             self.selected = max(self.match.registration.known_ids(), default=0) + 1
-            self.mode = "Points"
+            if self.mode not in ("Quad", "Rectangle"):
+                self.mode = "Points"
             self._refresh()
 
     @Slot(str)
@@ -335,28 +432,52 @@ class MatchBridge(QObject):
         if not self._closed:
             object_id = self.selected if object_id is None else object_id
             receipt = self.match.registration.bind(object_id, type_id)
+            self._hover_object_id = None
             if receipt.status != "rejected":
-                self.selected = object_id
-                if self.mode == "Points":
+                self._manual_vertices.clear()
+                self.selected = self._last_bound = object_id
+                if self.mode in ("Points", "Quad", "Rectangle"):
                     self.newObject()
                     return
                 self.mode = "Assign"
             self._refresh(receipt)
 
+    @Slot(float, float, int)
+    def hoverType(self, x, y, image_revision):
+        if image_revision != self._image_revision or not self._view["editable"]:
+            hit = None
+        else:
+            hit = self._unit_object_at(self._shown, x, y)
+        if hit != self._hover_object_id:
+            self._hover_object_id = hit
+            self._local_revision += 1
+            self._publish()
+
+    @Slot()
+    def clearHover(self):
+        if self._hover_object_id is not None:
+            self._hover_object_id = None
+            self._local_revision += 1
+            self._publish()
+
     @Slot(str, float, float, int)
     def dropType(self, type_id, x, y, image_revision):
+        self._hover_object_id = None
         if image_revision != self._image_revision or not self._view["editable"]:
             return
-        shown = self._shown
-        prediction = shown.current.prediction
-        if prediction is not None and 0 <= x < shown.current.frame.shape[1] and 0 <= y < shown.current.frame.shape[0]:
-            object_id = next((obj for obj, mask in reversed(list(zip(prediction["object_ids"], prediction["masks"])))
-                              if mask[int(y), int(x)]), None)
-            if object_id is not None:
-                self.assign(type_id, object_id)
+        object_id = self._unit_object_at(self._shown, x, y)
+        if object_id is None:
+            self.notice = "Drop the type onto a mask, tray, or unit label."
+            self._local_revision += 1
+            self._publish()
+            return
+        self.assign(type_id, object_id)
 
     @Slot()
     def unbind(self):
+        if self._last_bound == self.selected:
+            self._last_bound = None
+        self._hover_object_id = None
         self._refresh(self.match.registration.unbind(self.selected))
 
     @Slot()
@@ -367,10 +488,17 @@ class MatchBridge(QObject):
                 self.corners = None
             self._refresh()
         else:
+            if self._manual_vertices:
+                self._manual_vertices.pop()
+                self._refresh()
+                return
             prompts = self.match.snapshot().registration_prompts
-            if prompts:
+            receipt = self.match.registration.undo_point()
+            if receipt.value is not None:
+                self.selected = receipt.value
+            elif prompts and receipt.status != "rejected":
                 self.selected = prompts[-1]["object_id"]
-            self._refresh(self.match.registration.undo_point())
+            self._refresh(receipt)
 
     @Slot()
     def detectCorners(self):
@@ -421,10 +549,16 @@ class MatchBridge(QObject):
 
     @Slot()
     def finish(self):
+        if self._manual_vertices:
+            self._refresh(CommandReceipt("rejected", "Finish the four corners or undo the draft before saving."))
+            return
         self._refresh(self.match.registration.finish_registration())
 
     @Slot()
     def start(self):
+        if self._manual_vertices:
+            self._refresh(CommandReceipt("rejected", "Finish the four corners or undo the draft before starting."))
+            return
         self._refresh(self.match.start())
 
     @Slot()
@@ -433,6 +567,9 @@ class MatchBridge(QObject):
         receipt = self.match.reset()
         if receipt.status != "rejected":
             self.selected, self.mode = 1, "Points"
+            self._manual_vertices.clear()
+            self._last_bound = None
+            self._hover_object_id = None
             self.live.clear()
         self._refresh(receipt)
 
@@ -443,7 +580,10 @@ class MatchBridge(QObject):
             self.live.clear()
             state = self.match.snapshot()
             self.selected = next(iter(state.current.prediction["object_ids"]), 1)
+            self._last_bound = None
+            self._hover_object_id = None
             self.mode = "Assign"
+            self._manual_vertices.clear()
             self.corners, self.corner_points = None, []
         self._refresh(receipt)
 
@@ -457,6 +597,12 @@ class MatchBridge(QObject):
     def inspectUnit(self, unit_id):
         if not self._closed:
             self.live.inspect(unit_id, self.match.snapshot())
+            self._refresh()
+
+    @Slot(float, float)
+    def moveUnitCard(self, x, y):
+        if not self._closed:
+            self.live.set_card_anchor(x, y)
             self._refresh()
 
     @Slot(str)

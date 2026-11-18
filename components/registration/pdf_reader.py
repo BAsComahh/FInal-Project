@@ -22,6 +22,13 @@ _OPTION = re.compile(r"^(?P<label>.+?)\s+\[(?P<points>\d+)\]$")
 _WEAPON = re.compile(r'^(.+?)\s*\((\d+(?:\.\d+)?)\s*["\u201d\u2033]\)$')
 _TOTALS = {"units": r"Total Units:\s*(\d+)", "points": r"Total Points:\s*(\d+)",
            "unit_strength": r"Total Unit Strength:\s*(\d+)"}
+_APPENDIX_HEADERS = {
+    "Command Order Target Description": "command_orders",
+    "Special Rule Description": "special_rules",
+    "Spell Description": "spells",
+    "Artefact Description": "artefacts",
+}
+_SPELL_RANGE = re.compile(r'Range:\s*(\d+(?:\.\d+)?)\s*["\u201d\u2033]')
 
 
 def _split_rules(text):
@@ -102,15 +109,60 @@ def _finish_entry(current):
             "unparsed_details": details["unparsed_details"], "source": current["source"]}
 
 
+def _parse_appendix(lines):
+    sections, unparsed = {}, []
+    section = record = None
+    for raw in lines:
+        line = " ".join(raw.split())
+        if not line or line.startswith("Powered by TCPDF"):
+            continue
+        if line in _APPENDIX_HEADERS:
+            section = _APPENDIX_HEADERS[line]
+            record = None
+            continue
+        # The PDF layout extraction uses wide whitespace between table columns.
+        columns = re.split(r"\s{2,}", raw.strip(), maxsplit=2 if section == "command_orders" else 1)
+        indent = len(raw) - len(raw.lstrip())
+        is_spell_note = section == "spells" and record is not None and (
+            columns[0].startswith("Range:") or (len(columns) == 1 and indent == label_indent
+                                                and "range" in record and "targets" not in record))
+        if is_spell_note:
+            if columns[0].startswith("Range:"):
+                record["range"] = columns[0].removeprefix("Range:").strip()
+                if match := _SPELL_RANGE.fullmatch(columns[0]):
+                    record["range_in"] = float(match[1])
+            else:
+                record["targets"] = columns[0]
+            if len(columns) > 1:
+                record["description"] += " " + columns[1]
+        elif section and len(columns) == (3 if section == "command_orders" else 2):
+            record = {"name": columns[0], "description": columns[-1]}
+            if section == "command_orders":
+                record["target"] = columns[1]
+            sections.setdefault(section, []).append(record)
+            label_indent = indent
+        elif record is not None and indent > label_indent:
+            record["description"] += " " + line
+        else:
+            unparsed.append(line)
+    if unparsed:
+        sections["unparsed_lines"] = unparsed
+    return sections
+
+
 def _parse_pages(pages, *, side=None):
     """Parse the supported table layout; reject incomplete lists instead of exporting them."""
     entries, declared = [], {}
-    heading = current = None
+    heading = current = battalion = None
+    source_metadata, appendix_lines = {}, []
     done = False
     for page_number, text in enumerate(pages, start=1):
         for line_number, raw in enumerate(text.splitlines(), start=1):
             line = " ".join(raw.split())
             if not line:
+                continue
+            if done:
+                appendix_lines.append(raw)
                 continue
             totals = {key: int(match[1]) for key, pattern in _TOTALS.items()
                       if (match := re.search(pattern, line))}
@@ -119,9 +171,13 @@ def _parse_pages(pages, *, side=None):
                     entries.append(_finish_entry(current))
                     current = None
                 declared.update(totals)
-                if "points" in totals:
-                    done = True
-                    break
+                done = _TOTALS.keys() <= declared.keys()
+                continue
+            if heading is None and (match := re.fullmatch(r"(.+?)\s+(\d+\s*/\s*\d+\s+.+)", line)):
+                source_metadata.update(list_name=match[1], list_status=match[2])
+                continue
+            if re.fullmatch(r"\d+(?:st|nd|rd|th) Battalion", line):
+                battalion = line
                 continue
             if match := _HEADER.fullmatch(line):
                 if current is not None:
@@ -138,15 +194,15 @@ def _parse_pages(pages, *, side=None):
                            "profile": match.groupdict(), "side": side,
                            "source": {"page": page_number, "line": line_number, "heading": heading,
                                       "profile": raw.strip(), "details": []}}
+                if battalion:
+                    current["source"]["battalion"] = battalion
                 continue
-            if re.fullmatch(r"\d+(?:st|nd|rd|th) Battalion", line) or line.startswith("Powered by TCPDF"):
+            if line.startswith("Powered by TCPDF"):
                 continue
             if heading is not None and re.match(r"(?:Champion|Core|Support|Specialist)\b.*\[\d+\]$", line):
                 raise ValueError(f"Unsupported unit profile at page {page_number}, line {line_number}: {line}")
             if current is not None:
                 current["source"]["details"].append(raw.strip())
-        if done:
-            break
     if current is not None:
         entries.append(_finish_entry(current))
     if not entries:
@@ -158,7 +214,15 @@ def _parse_pages(pages, *, side=None):
             raise ValueError(f"PDF is missing its declared total {key}; completeness cannot be checked.")
         if declared[key] != actual[key]:
             raise ValueError(f"PDF total {key} mismatch: declared {declared[key]}, parsed {actual[key]}.")
-    return entries, actual
+    appendix = _parse_appendix(appendix_lines)
+    option_kinds = {row["name"].casefold(): kind
+                    for section, kind in (("spells", "spell"), ("artefacts", "artefact"))
+                    for row in appendix.get(section, ())}
+    for entry in entries:
+        for option in entry["attributes"]["options"]:
+            if kind := option_kinds.get(option["name"].casefold()):
+                option["kind"] = kind
+    return entries, actual, {**source_metadata, "appendix": appendix}
 
 
 def _read_pdf(path, side):
@@ -175,11 +239,11 @@ def _read_pdf(path, side):
             raise ValueError("Encrypted PDFs are not supported.")
         pages = [page.extract_text(extraction_mode="layout", layout_mode_space_vertically=False) or ""
                  for page in reader.pages]
-        entries, totals = _parse_pages(pages, side=side)
+        entries, totals, source_metadata = _parse_pages(pages, side=side)
         source = {"pdf": str(path), "sha256": hashlib.sha256(content).hexdigest(),
                   "title": reader.metadata.title if reader.metadata else None,
                   "pages": len(pages), "side": side, "totals": totals, "totals_verified": True,
-                  "text_backend": f"pypdf {__version__}"}
+                  "text_backend": f"pypdf {__version__}", **source_metadata}
     except (PyPdfError, ValueError) as error:
         raise ValueError(f"{path.name}: {error}") from error
     return entries, source

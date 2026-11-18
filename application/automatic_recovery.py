@@ -43,8 +43,10 @@ class AutomaticRecovery:
                 if self.batch is not None and uid in {target["unit_id"] for target in self.batch["targets"]}:
                     self.invalidate("Missing set changed during search")
                 record = self.records.pop(uid)
-                if record.get("candidate") is not None:
-                    record["candidate"].cancel()
+                candidate = record.get("candidate")
+                if candidate is not None and not any(
+                        other in failed and row.get("candidate") is candidate for other, row in self.records.items()):
+                    candidate.cancel()
                 self._phase(uid, None, None)
         for uid, record in self.records.items():
             if record.get("candidate") is not None and record["candidate"].cancelled.is_set():

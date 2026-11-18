@@ -92,7 +92,8 @@ class TaskWorker:
                  tracker=DEFAULT_TRACKER, tracker_model=None, tracker_cache=None):
         if tray_search not in ("adaptive", "full", "local"):
             raise ValueError("tray_search must be adaptive, full or local")
-        self.tray_stability = TrayStability(config.TRAY_STABLE_CENTROID_PCT, config.TRAY_STABLE_MIN_MASK_IOU)
+        self.tray_stability = TrayStability(config.TRAY_STABLE_CENTROID_PCT, config.TRAY_STABLE_MIN_MASK_IOU,
+                                            config.TRAY_FAILED_RETRY_SECONDS)
         self.predictor = VideoPredictor(model_id, device, profile=profile)
         self.tracker = create_tracker(tracker, model_id=tracker_model, device=device, cache_dir=tracker_cache)
         self.tracker_name = tracker
@@ -213,6 +214,8 @@ class TaskWorker:
                             candidates[index] = candidate
                         row["candidate"] = candidates[index]
                 except Exception as error:
+                    if obj in request["automatic_consumed"]:
+                        row["update_error"] = str(error) or type(error).__name__
                     row["reason"] = f"Recovery requires manual input: {error}"
             return prediction
         except Exception as error:
@@ -451,14 +454,17 @@ class TaskWorker:
                               timing_gpu_synchronized=prediction.get("timing_gpu_synchronized", False),
                               inference_call_count=prediction.get("inference_call_count"),
                               object_score_logits=prediction.get("object_score_logits"),
-                              trays={key: {**{name: row[name] for name in ("method", "mask_coverage", "edge_support")},
+                              trays={key: {**{name: row.get(name) for name in
+                                              ("method", "mask_fill", "mask_coverage", "edge_support",
+                                               "corner_support", "acceptance")},
                                            "fit_frame_index": row.get("fit_sample", {}).get("frame_index"),
                                            "fit_method": row.get("fit_method", row["method"]),
                                            "reuse_check": row.get("reuse_check")}
                                      for key, row in prediction.get("trays", {}).items()})
                 record["tray_attempts"] = {obj: {key: row.get(key) for key in
                     ("attempted", "seconds", "error", "reuse_check")} | {
-                        "baseline_frame_index": (row.get("fit_sample") or {}).get("frame_index")}
+                        "baseline_frame_index": (row.get("fit_sample") or {}).get("frame_index"),
+                        "baseline_timestamp_seconds": (row.get("fit_sample") or {}).get("timestamp_seconds")}
                     for obj, row in (request.get("tray_attempts") or {}).items()}
             if request["kind"] == "automatic_recovery":
                 record.update(automatic_applied=request.get("automatic_applied", []),

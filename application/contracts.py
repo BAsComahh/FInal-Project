@@ -105,6 +105,7 @@ class TrackingSnapshot:
     last_accepted_position: object
     recovery_phase: str | None
     recovery_note: str | None
+    recovery_update_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -140,3 +141,4 @@ class MatchSnapshot:
     note: str
     registration_prompts: object
     recovery: object
+    registration_unconfirmed: tuple[int, ...] = ()

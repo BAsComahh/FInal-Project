@@ -168,12 +168,13 @@ ColumnLayout {
                     ConsoleButton {
                         text: "Unit information"
                         implicitHeight: 32
-                        variant: "subtle"
+                        variant: Boolean(flow.state && flow.state.profileOpen) ? "default" : "subtle"
+                        primary: Boolean(flow.state && flow.state.profileOpen)
                         enabled: controls.uiState.console.selected
                         tooltipText: controls.uiState.console.selected
-                                     ? ("Edit rule attributes for " + controls.uiState.console.unitId)
+                                     ? ("View profile and edit rule attributes for " + controls.uiState.console.unitId)
                                      : "Select a unit on the board first"
-                        onClicked: flow.open("profile")
+                        onClicked: (flow.state && flow.state.profileOpen) ? flow.closeProfile() : flow.open("profile")
                     }
                     ConsoleButton {
                         text: "Recover units"
@@ -203,6 +204,13 @@ ColumnLayout {
                                      : "No saved terrain polygons to remove"
                         onClicked: undoTerrainDialog.open()
                     }
+                    ConsoleButton {
+                        text: "Debug"
+                        implicitHeight: 32
+                        variant: "subtle"
+                        enabled: !controls.uiState.pendingPlay
+                        onClicked: flow.open("debug")
+                    }
                 }
             }
 
@@ -215,6 +223,26 @@ ColumnLayout {
                 Flow {
                     Layout.fillWidth: true
                     spacing: 8
+
+                    ConsoleButton {
+                        visible: controls.kind === "debug"
+                        text: "Save snapshot"
+                        primary: true
+                        implicitHeight: 32
+                        onClicked: flow.action("saveDebug")
+                    }
+                    LayerPill {
+                        visible: controls.kind === "debug"
+                        text: "Masks"
+                        checkedState: controls.uiState.masks
+                        onClicked: ui.setOverlay("masks", !controls.uiState.masks)
+                    }
+                    LayerPill {
+                        visible: controls.kind === "debug"
+                        text: "Trays"
+                        checkedState: controls.uiState.trays
+                        onClicked: ui.setOverlay("trays", !controls.uiState.trays)
+                    }
 
                     // Replay header title & action delta (no button border)
                     RowLayout {
@@ -471,7 +499,7 @@ ColumnLayout {
                 }
 
                 ConsoleButton {
-                    text: "Back to Live"
+                    text: controls.kind === "debug" ? "Resume Live" : "Back to Live"
                     shortcut: "Esc"
                     implicitHeight: 32
                     enabled: !flow.state.busy
@@ -574,6 +602,7 @@ ColumnLayout {
     Dialog {
         id: editor
         property var rows: []
+        property bool obstacle: false
         title: flow.formTitle
         modal: true
         anchors.centerIn: Overlay.overlay
@@ -626,12 +655,13 @@ ColumnLayout {
                         ColumnLayout {
                             required property var modelData
                             required property int index
+                            readonly property bool fixedHeight: editor.obstacle && modelData.key === "height"
                             Layout.fillWidth: true
                             spacing: 4
 
                             Label {
                                 visible: modelData.kind !== "bool"
-                                text: modelData.label
+                                text: fixedHeight ? "Rule height (fixed for Obstacle)" : modelData.label
                                 color: controls.theme.inkSecondary
                                 font.pixelSize: controls.theme.textSm
                                 font.weight: Font.DemiBold
@@ -639,10 +669,24 @@ ColumnLayout {
 
                             DarkField {
                                 Layout.fillWidth: true
-                                visible: modelData.kind !== "bool" && modelData.kind !== "choice"
-                                text: String(modelData.value)
+                                visible: modelData.kind === "text" || modelData.kind === "number" || modelData.kind === "rules"
+                                text: fixedHeight ? "1" : String(modelData.value)
+                                readOnly: fixedHeight
                                 selectByMouse: true
                                 onTextEdited: editor.rows[index].value = text
+                            }
+
+                            TextEdit {
+                                Layout.fillWidth: true
+                                visible: modelData.kind === "readonly"
+                                text: modelData.value
+                                textFormat: TextEdit.PlainText
+                                readOnly: true
+                                selectByMouse: true
+                                wrapMode: TextEdit.Wrap
+                                color: controls.theme.ink
+                                font.family: controls.theme.fontBody
+                                font.pixelSize: controls.theme.textSm
                             }
 
                             ComboBox {
@@ -674,6 +718,8 @@ ColumnLayout {
                                     const opts = modelData.options || []
                                     if (idx >= 0 && idx < opts.length) {
                                         editor.rows[index].value = opts[idx]
+                                        if (modelData.key === "kind")
+                                            editor.obstacle = opts[idx] === "obstacle"
                                     }
                                 }
                             }
@@ -723,7 +769,8 @@ ColumnLayout {
                     text: "Save"
                     primary: true
                     onClicked: {
-                        if (flow.saveForm(editor.rows)) editor.close()
+                        const rows = editor.obstacle ? editor.rows.filter(row => row.key !== "height") : editor.rows
+                        if (flow.saveForm(rows)) editor.close()
                     }
                 }
             }
@@ -733,6 +780,7 @@ ColumnLayout {
     Connections {
         target: flow
         function onFormRequested() {
+            editor.obstacle = flow.fields.some(row => row.key === "kind" && row.value === "obstacle")
             editor.rows = flow.fields.map(row => ({
                 key: row.key,
                 label: row.label,

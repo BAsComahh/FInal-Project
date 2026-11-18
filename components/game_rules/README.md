@@ -26,12 +26,15 @@ and `state: {engaged, wavering}`. Missing numeric facts become null. Missing
 state flags remain unknown; movement orders that could be prohibited are
 unavailable until their relevant flags are confirmed. Terrain carries
 `terrain_id`, a simple `polygon_mm`, `kind` (`blocking`, `difficult`,
-`obstacle`, `hill`, `decorative`), and `height`. Heights are agreed game height
+`obstacle`, `hill`, `decorative`), and `height`. Obstacle height defaults to 1
+when missing or null, and explicit values other than 1 are invalid. Heights are agreed game height
 levels, not physical millimetres. Metadata, including `snapshot`, warnings and
 facing provenance, is preserved; scene validation never recovers IDs.
 
 Distances are exact base-to-base polygon geometry, including zero for touching
-or overlapping bases. LOS clips the target against the front edge and two
+or overlapping bases. LOS requires known base and effective heights for both
+endpoints. Missing heights return `unavailable` with the affected unit IDs.
+LOS clips the target against the front edge and two
 45-degree rays from its front corners. A partly intersecting target qualifies;
 LOS then searches from the observer front edge to all target base edges.
 Blockers matter when at least as tall as both effective endpoint heights.

@@ -6,6 +6,8 @@
 
 Qt 客户端默认 adaptive。`fit_registered_trays(frame, prediction, context, previous=..., reuse_stable=True, source_frame=...)` 用最后一次实际拟合的 mask 判断稳定性。质心位移不超过参考短边的 5%，且同一图像坐标中的二值 mask IoU 至少为 0.90 时，复用已接纳的结果并保留实际拟合基准。基准随实际拟合更新，慢移可累计触发局部重拟合。
 
+上次尝试失败时，有效 mask 达到变化门槛可以提前复试；传入 `source_time` 的视频调用在失败后累计 5 秒源时间也会使用新观测重试。等待帧保留实际失败的基准，成功后恢复稳定复用。
+
 局部初值和稳定复用都要求图像大小、映射、尺寸及身份相容。首帧编辑、恢复目标、R、实际缺失或标定变化重新建立几何。基准保存质心、面积、包围盒和裁剪后的原分辨率二值 mask 位串。失败的实际拟合也记录 mask 基准，等待后续 mask 有明确变化再重试。当前结果与 profile 区分实际拟合帧 `fit_sample.frame_index` 和观测帧 `observation_frame_index`。
 
 无窗口应用的 `tray_search="full"` 保留完整拟合基线，`"local"` 每次尝试上一解局部拟合，均保留完整回退；正式客户端不暴露这些对照选项。计时 stats 给 reused／refitted／unavailable 数量；静态计时或门控通过不表示定位精度已经校准。
@@ -70,25 +72,27 @@ JSON 必须包含 `image_to_board` 和 `board_size`。相机、裁剪和图片�
 
 **Beam** 对每个位姿保留原位，并试同角度的八方向平移和固定中心的 ±5° 旋转。平移步长为托盘短边的 10%，对角和轴向平移等长。每轮去重后保留三个，默认六轮上限，前三个位姿集合稳定时提前停止。`beam_rounds` 为该分支实际执行的轮数，mask 分支的补充起点组另计。
 
-方向 Chamfer 将原始 LSD 有限线段按无向切线角度每 5° 分桶，对每个非空桶做二维距离变换。矩形四边各取 24 点，查询空间距离和角差罚分的联合最小值。默认 12° 角差的罚分相当于一个边缘距离容差，单点代价截断在三个容差。纯 mask 分支的粗排使用覆盖率和 IoU。参见 [Liu 等，CVPR 2010，第 3、4.2 节](https://www.merl.com/publications/docs/TR2010-045.pdf)。
+方向 Chamfer 将原始 LSD 有限线段按无向切线角度每 5° 分桶，对每个非空桶做二维距离变换。矩形四边各取 24 点，查询空间距离和角差罚分的联合最小值。默认 12° 角差的罚分相当于一个边缘距离容差，单点代价截断在三个容差。纯 mask 分支的粗排使用矩形填充率和 IoU。参见 [Liu 等，CVPR 2010，第 3、4.2 节](https://www.merl.com/publications/docs/TR2010-045.pdf)。
 
-**精校** 对保留的位姿依次试 27 个候选，两轴平移 `-2、0、+2` 倍 `corner_nudge_pct`、旋转 `-2°、0°、+2°`。边缘分数来自原始 LSD 线段，最终覆盖率按完整工作区 mask 计算。某个位姿精校失败后仍可检查其余 Beam 候选。
+**精校** 对保留的位姿依次试 27 个候选，两轴平移 `-2、0、+2` 倍 `corner_nudge_pct`、旋转 `-2°、0°、+2°`。边缘分数来自原始 LSD 线段，最终矩形填充率按完整工作区 mask 计算。某个位姿精校失败后仍可检查其余 Beam 候选。
 
 矩形宽深固定。旋转角对矩形只定义到 180°，正方形还存在 90° 对称；它不代表已识别单位正面方向。
 
 ## 评分与输出
 
-- `mask_coverage`：矩形覆盖的 mask 点比例。初筛最多采样 4096 点，保留候选用完整工作 mask 重算。
-- `edge_support`：矩形各边与方向相近的原始 LSD 线段的贴合程度，距离用高斯衰减。分数不把合并填补的空隙当成真实边。
+- `mask_fill` 为重叠面积除以完整矩形面积。突出底座的 mask 像素不会稀释该分数。
+- `mask_coverage` 为落在矩形内的 mask 点比例，保留供诊断和历史实验对照。两项比例的初筛最多采样 4096 点，保留候选用完整工作 mask 重算。
+- `edge_support` 为四边与方向相近的原始 LSD 有限线段的平均贴合程度，距离用高斯衰减。
+- `corner_support` 取四个角中最强的邻接证据。每个角检查两条相邻边的全长支持度，以及两侧靠近共同顶点的各四个采样的平均支持度，并取上述四个分数的最小值。
 - `mask_iou`：工作 mask 与固定尺寸矩形的近似交并比。
-- `visible_fraction`：完整矩形投影到拟合输入图像后，落在画面内的面积比例，默认下限为 `TrayConfig.min_visible_fraction = 0.80`。出画边缘采样计为无支持。通过的候选保留完整四角，mask 覆盖率仍只使用实际观测到的像素。
-- local／corner／edge 综合分数：`0.55×edge_support + 0.35×mask_coverage + 0.10×mask_iou`；mask 分支：`0.8×mask_coverage + 0.2×mask_iou`。
+- `visible_fraction`：完整矩形投影到拟合输入图像后，落在画面内的面积比例，默认下限为 `TrayConfig.min_visible_fraction = 0.80`。出画边缘采样计为无支持。通过的候选保留完整四角，填充率的分子只使用实际观测到的像素。
+- local／corner／edge 综合分数为 `0.65×edge_support + 0.20×corner_support + 0.15×mask_fill`。有可靠边角的候选在精校排序中优先。纯 mask 分支分数为 `0.8×mask_fill + 0.2×mask_iou`。
 
-这些权重和门槛是**可调启发式，不是模型置信概率，也不是定位准确率**。四路共用默认覆盖门槛 0.70。局部／直角分支平均边缘支持门槛 0.40，单边分支 0.20。没有达到门槛也保留最佳诊断候选，`success=false`；所有结果都设置 `needs_review=true`，供探索期人工检查。
+这些权重和门槛是**可调启发式，不是模型置信概率，也不是定位准确率**。任何分支都要求矩形填充率严格大于 `min_mask_fill`，默认 0.85。填充率达标后，局部和直角分支的平均边缘支持门槛为 0.40，单边分支为 0.20。也可以用 `corner_support ≥ 0.65` 满足边缘条件。纯 mask 仅检查填充率。接纳候选的 `acceptance` 字段记录所用条件。遮挡时以现有 mask 计算填充率。验收失败的候选作为诊断输出，应用将该单位的托盘几何标记为暂不可用，并按既有条件重试。没有达到门槛也保留最佳诊断候选，`success=false`；所有结果都设置 `needs_review=true`，供探索期人工检查。
 
 默认写入 `outputs/tray_detection/`：原始 mask、局部区域、mask 叠加、LSD 线、候选角、各级候选框、原图叠加、组合步骤图，以及 `<图名>_tray.json`。四角按矩形边循环排列，**不是**原图固定的 TL/TR/BR/BL 顺序。JSON 保留原图／工作区／标定平面坐标、分支、评分和配置。`percentage_basis` 记录局部阈值、搜索与 ROI margin 的基准，`resolved_lengths_work_px` 记录实际使用的工作像素长度；百分比尺寸实验还记录 `requested_size_pct`、`size_percentage_basis` 和换算后的 `requested_size`，其 `length_unit` 为 `pixels`。
 
-参数：`--no-merge`、`--max-work-size`、`--angle-tolerance`、`--angle-step`、`--refine-rounds`（每组起点的 Beam 轮数上限，0 只评分起点）、`--min-mask-coverage`。其他门槛可通过 `TrayConfig` 指定。视频工作流通过 `batch.fit_registered_trays` 对已绑定且有尺寸的 mask 调用相同拟合接口，候选可用于托盘图层及后续规则查询；未提供尺寸的单位不生成矩形。
+参数：`--no-merge`、`--max-work-size`、`--angle-tolerance`、`--angle-step`、`--refine-rounds`（每组起点的 Beam 轮数上限，0 只评分起点）、`--min-mask-fill`。显式指定旧参数 `--min-mask-coverage` 时，在填充率门槛之外额外检查旧口径的覆盖率及该分支的常规边缘支持。其他门槛可通过 `TrayConfig` 指定。视频工作流通过 `batch.fit_registered_trays` 对已绑定且有尺寸的 mask 调用相同拟合接口，候选可用于托盘图层及后续规则查询；未提供尺寸的单位不生成矩形。
 
 ## Python 接口
 

@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from application.config import DEFAULT_INFERENCE_FPS, DEFAULT_TRACKER, DEFAULT_UNITS, PROJECT_ROOT
+from application.config import DEFAULT_INFERENCE_FPS, DEFAULT_OUTPUT_DIR, DEFAULT_TRACKER, DEFAULT_UNITS
 
 
 def video_parser(description):
@@ -24,7 +24,7 @@ def video_parser(description):
     parser.add_argument("--tracker-model", help="Optional local checkpoint or HF model ID for the selected candidate")
     parser.add_argument("--tracker-cache", type=Path, help="Candidate model cache root (default: outputs/model_cache)")
     parser.add_argument("--profile", action="store_true", help="Synchronize GPU phase timing; may add profiling overhead")
-    parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "outputs/sam3_registration")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser
 
 

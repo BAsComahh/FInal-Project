@@ -1,6 +1,10 @@
 # Qt 注册与 Live 控制台
 
-当前暂不使用实时facing，DVMNet不会加载，方向检查／恢复和矩形正面连续更新均停用；代码与初始注册F资料保留。直播侧栏隐藏facing和Missing提示，仅保留Estimated mask／可审核候选；后台失踪判定及自动／手动恢复不变。
+当前暂不使用实时 facing，DVMNet 不会加载，方向检查／恢复和矩形正面连续更新均停用；代码与初始注册 F 资料保留。直播右侧 A／B 列表保留 Estimated 和待审核候选。缺失单位在正常传播中重新出现原 ID 的有效 mask 时恢复追踪并清掉提示，查询在取得有效托盘后恢复。
+
+Live 工具栏的 **Debug** 会暂停视频并保留当刻已接纳状态。点 **Save snapshot** 默认保存到 `outputs/debug/instance_*/frame_*/`，按本局注册实例分组；自定义 `--output-dir` 时保存在该目录下的 `debug/instance_*/frame_*/`。界面显示完整路径。`frame.png` 与 `source.png` 是当前拉正图和原图，`mask_frame.png`、`geometry_frame.png` 分别对应 mask 和托盘的观测帧。每个对象一张二值 mask，`snapshot.json` 提供对应的源帧号／时刻、托盘坐标、拟合诊断、单位绑定、追踪状态和标定。**Resume Live** 或 Esc 返回 Live，视频从暂停位置继续。
+
+Registration 可用 **Rectangle**（左键按住拖拽）或 **Four corners**（点选四个凸四边形顶点）画 mask。画完后点击类型或将类型拖到目标上，绑定成功会自动进入下一对象，并保留当前绘图工具。先点 **New mask** 可创建对象；在 **Assign** 中选中现有 mask 后作图则替换该对象。绘制时右键可撤未完成的顶点，**Undo**／`Ctrl+Z` 也可撤回已提交的形状。人工形状覆盖交叠的 SAM 像素；mask 变化的已绑定对象保留 ID，需重新确认类型才能拟合托盘。
 
 `Masks`／`Trays` 胶囊仅控制静态叠加层绘制可见性，关闭 `Trays` 时后台矩形拟合与连续 `Distance`／`LOS`／`Move` 几何查询照常运行，不再暂停计算或回退到定帧快照模式。
 
@@ -27,20 +31,20 @@ conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIO
 
 追踪默认上限为 1.0 Hz。Worker 可提交时处理最新未消费帧，`--inference-fps` 可调整上限。实际更新频率还受模型耗时、视频帧率与界面 tick 影响。
 
-A／B 类型列表使用 48 px 高的紧凑条目，只显示分类名称，例如 `Champion Hero (Inf)`；没有分类字段的目录回退到单位名／名称。名称最多换行两行，超出再省略，拖放预览同样处理。不再显示 Type 编号、详情或 Next；点击／拖放继续绑定原 type，同分类的不同配置不会合并。
+A／B 类型列表使用最小 48 px 高的紧凑条目，上方优先显示兵种名称（`unit_name`／`name`），下方以小一号字附注托盘／分类类型（`classification`／`formation`，例如 `Champion Hero (Inf)`）。主副标题最多各换行两行，超出再省略，拖放预览同样处理。不再显示 Type 编号、详情或 Next；点击／拖放继续绑定原 type，同分类的不同配置不会合并。
 
 1. 检查自动提出的 TL／TR／BR／BL；不准确时 Manual correction，任意顺序点四角，右键或 Undo 撤回，Clear 重选，Auto detect 重试。四点无效时不能继续。确认角点后填 Length／Width（英寸）；72×48 是默认测试值，需手工核对。
 2. 模型从启动开始加载，桌面确认后准备拉正首帧特征；未就绪时点输入明确拒绝。可在加载期间分别 Import A／B 选择单方 PDF 或 JSON，取消不改变名单。
-3. Points 模式左正右负；点击类型或拖类型到 mask 绑定成功后，自动切换到下一对象号，下一次点击开始新目标分割。N／New mask 仍可手动切换，Undo／Ctrl+Z 撤回上一点。Assign 模式先点 mask 再点类型，或拖类型到 mask，成功后仍保留当前目标以便重新分配。失败／落空／过期拖放不自动推进。注册不绘制选中外接框，mask／提示点与可切换的托盘叠加保留；直播选框不受影响。实例编号由应用分配，Unbind 解除绑定。两栏独立滚动。
+3. Points 模式左正右负；点击类型或拖类型到 mask／托盘／单位标签绑定成功后，自动切换到下一对象号，下一次点击开始新目标分割。若此时切回 Assign 且当前目标尚无 mask，会自动选中最近刚赋予类型的 mask，也可直接点图上的 mask 或单位标签重选。N／New mask 仍可手动切换，Undo／Ctrl+Z 撤回上一点。Assign 模式先点 mask 再点类型，或拖类型到 mask，成功后仍保留当前目标以便重新分配。失败／落空／过期拖放不自动推进。未分配或修改待确认的 mask 会在画布胶囊外框与右侧 `Unassigned`／`Re-confirm` 列表中标黄提醒，点击即可定位选中，全部确认后才可 Save／Start。注册不绘制选中外接框，mask／提示点与可切换的托盘叠加保留；直播选框不受影响。实例编号由应用分配，Unbind 解除绑定。两栏独立滚动。
 4. 托盘尺寸只从 PDF 推导或导入目录读取，Qt 不再提供 Tray sizes 手动入口。PDF 中明确底座备注优先于标准表；信息不足保持未知并提示核对资料。旧 JSON 不会自动重算，需重新导入原 PDF 或提供含明确尺寸的目录。已绑定且托盘可用时，Front／F 后点托盘正面边。尺寸和正面进入正式保存。
 5. Save／S 保存最终 references 一次并锁定点／类型编辑，仍留注册页；Start video／Space 会先完成注册，再初始化所选 tracker 并开始源播放。底部状态栏统一显示模型就绪进度、状态提示与 Source／Mask／Geom 时间（以及历史写盘警告），mask／托盘开关改为统一样式的图层胶囊；目录列表使用独立的 `catalogA`/`catalogB` 信号，避免状态刷新打断拖拽绑定。
 6. Reset 显示确认框，开始新注册，保留已导入目录、桌面设置及原有导出。关闭统一释放应用资源、使在途任务失效，最终历史写入沿用 application 语义。
 
-7. 直播顶部提供模式徽标（区分 LIVE／REPLAY／RECOVERY／RECALIBRATE／TERRAIN）及 `Live | Replay` 分段切换；主画面使用深色舞台衬底并按活动流程着色边框（回放时为琥珀色外框）。默认 Select，点已绑定单位的 mask 或托盘选中。左侧只读 Damage／Speed（带 A 蓝／B 红侧边色条与快捷 `Info` 编辑入口），未知为 —；单位菜单统一采用竖排信息卡＋右侧精确椭圆弧线排列的 Distance／LOS／Move／Correct，边缘整体限位／缩放，不切换横条；菜单不随单位移动，双框和引线随观测更新。再次点单位重新定位，点空白清除。不显示重复尺寸／朝向数值；mask／facing 不确定条目集中到右侧 A／B 列表；正常受监测连续追踪不常驻 Estimated，没有可用正面则在列表标 Unknown。
+7. 直播顶部提供模式徽标（区分 LIVE／REPLAY／RECOVERY／RECALIBRATE／TERRAIN）及 `Live | Replay` 分段切换；主画面使用深色舞台衬底并按活动流程着色边框（回放时为琥珀色外框）。默认 Select，点已绑定单位的 mask 或托盘选中。单位菜单保留右侧精确椭圆弧线排列的 Distance／LOS／Move／Correct 在原单位旁；左侧独立数值卡（带 A 蓝／B 红侧边色条与快捷 `Info` 按钮）展示兵种名称、分类、`Engaged`/`Wavering` 状态、`4×2` 核心数值格（`Spd`/`Mel`/`Sh`/`Def`/`Att`/`Nrv`/`US`/`Hgt`）及特殊规则摘要，未知为 —。选中瞬间左卡基于局域多圈＋全屏超稀疏采样按“距离 + 遮挡其他单位/半环按钮/自身”加权自动避让选址，之后不随帧微动重跳，且可单独拖拽微调位置，青色引线自动吸附到左卡最近边缘。再次点单位重新定位，点空白清除。不显示重复尺寸／朝向数值；mask／facing 不确定条目集中到右侧 A／B 列表；正常受监测连续追踪不常驻 Estimated，没有可用正面则在列表标 Unknown。
 8. 点 Distance／D 再点第二个单位，inch／mm 数值直接显示在最近点连线中点，不打开抽屉；等待或失败原因及 Done 留在控制栏。LOS／L 选目标后仍用底部抽屉显示状态、原因、警告和观测时间（附状态色条与状态徽标）。Move／V 提供 Advance、Double、Back、Sidestep、Change facing、Halt 的离散姿态候选；未知输入会明确提示。这不是完整合法性判定，也不移动正式单位。Estimated mask、失效位置或没有托盘时不作为可查询几何。
 9. Done／Esc 退出当前工具，保留单位选择；Select 模式下 Esc、Clear selection、Q／Space 或点空白清除选择。mask／托盘开关独立于选择状态。菜单、查询和信息展示期间源播放／追踪／历史继续；连线数值与抽屉结果只对应其观测，过期结果暂时隐藏等待更新。
 
-Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，信息菜单格式与 Distance 线上数值以 [用户最新截图约定](../../design/ui/live/implementation.md) 为准。2026-11-13 接入辅助流程：红色 Correct 打开当前单位的隔离矫正，正／负点生成黄色候选，再把右侧原 ID 卡片（带 A／B 色标与类型名）拖到候选上确认；Recover units 可选择自动候选并 Correct／No，Clear／Cancel 保留原追踪。候选时间显示在工具栏，确认等待核心完成对齐后生效。B08 的 Recalibrate 在连续原视频上选择四角并提交尺寸，Cancel 保留原标定；Unit information 仅在选中单位时启用并弹出表单（含 `unit_kind`／地形 `kind` 下拉选择与独立校验错误提示，不混用后台追踪提示）；Terrain 点多边形后 Save polygon 填资料，右键撤点，Undo terrain 仅在存在已保存地形时可用并弹出确认框；已保存地形会在舞台中按类别半透明绘制。Replay 替换主画面为深色毫米棋盘，顶部与工具栏清晰显示 `REPLAY` 徽标、当前步数、时间戳、标定版本及无位置单位提示；Previous／Next 或 A／D 切步，Refresh 保持事件，Cancel／Esc 返回最新实况。上述流程中 tick、追踪和历史继续；观众窗口及 What-if 尚未实现。
+Live 控制台沿用 [半环原型](../../design/ui/unit-radial-console.html)，整体布局以 [用户最新截图约定](../../design/ui/live/implementation.md) 为基线。点 `Info` 或 `Unit information` 时，在右侧边栏展开 `UnitInfoPanel`（完整军表只读详情与规则属性编辑，并随当前选中单位自动切换，关闭或 `Esc` 后恢复原有右侧提示栏）；2026-11-13 接入的其余辅助流程包括：红色 Correct 打开当前单位的隔离矫正，正／负点生成黄色候选，再把右侧原 ID 卡片（带 A／B 色标与类型名）拖到候选上确认；Recover units 可选择自动候选并 Correct／No，Clear／Cancel 保留原追踪。候选时间显示在工具栏，确认等待核心完成对齐后生效。B08 的 Recalibrate 在连续原视频上选择四角并提交尺寸，Cancel 保留原标定；Terrain 点多边形后 Save polygon 填资料，右键撤点，Undo terrain 仅在存在已保存地形时可用并弹出确认框；已保存地形会在舞台中按类别半透明绘制；Debug 按钮在播放期暂停源时钟与结果接纳以导出对齐帧、mask 与托盘诊断包。Replay 替换主画面为深色毫米棋盘，顶部与工具栏清晰显示 `REPLAY` 徽标、当前步数、时间戳、标定版本及无位置单位提示；Previous／Next 或 A／D 切步，Refresh 保持事件，Cancel／Esc 返回最新实况。上述流程中 tick、追踪和历史继续；观众窗口及 What-if 尚未实现。
 
 mask／facing 不确定信息现在集中在右侧 A／B 双栏，只有需要关注的条目才占用侧栏。正常 facing recovery_phase=tracking 不因连续性／DVMNet 来源而一直告警；pending／failed／waiting、无可用正面和没有监测状态的旧估计仍列出。选择列表单位只是查看信息，不确认恢复，也不重新绑定；侧栏底部另提供进入恢复视图的快捷按钮。信息卡和视频单位名不重复显示这些标签，后端来源及规则警告保留。
 

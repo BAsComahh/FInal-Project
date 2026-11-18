@@ -45,8 +45,8 @@ class Recovery:
         if selected is not None:
             if self.select_unit(selected).status != "accepted":
                 state = self._session.data.tracking.get(selected)
-                if state is not None and state.recovery_note:
-                    self.note = f"{selected}: {state.recovery_note}. Add points to create a manual candidate."
+                if state is not None and (reason := state.recovery_update_error or state.recovery_note):
+                    self.note = f"{selected}: {reason}. Add points to create a manual candidate."
         self._session.mark_changed()
         return CommandReceipt("accepted")
 

@@ -4,7 +4,9 @@ from copy import deepcopy
 from collections import deque
 from pathlib import Path
 import cv2
+import numpy as np
 from components.homography import transform_points
+from components.homography.geometry import order_corners
 from components.registration import UnitRoster, extract_references, save_registration, read_unit_list_pdf
 
 class Registration:
@@ -18,6 +20,9 @@ class Registration:
         self.pending_update = None
         self.updating_points = False
         self.unconfirmed = set()
+        self._sam_masks = {}
+        self._manual_masks = {}
+        self._manual_edits = []
 
     def _replace_roster(self, roster):
         def geometry_keys(value):
@@ -58,6 +63,8 @@ class Registration:
                 tracker_model=session.worker.tracker.model_id if session.worker.tracker is not None else session.worker.predictor.model_id,
                 inference_fps_limit=session.inference_fps, rule_inputs=draft["rules"].snapshot())
             references = extract_references(draft["frame"], draft["prediction"], source=metadata, roster=draft["roster"])
+            for ref in references:
+                ref["origin"] = draft["origins"].get(ref["object_id"], ref["origin"])
             folder = save_registration(draft["frame"], draft["overlay"], references, metadata,
                                        session.output_dir, roster=draft["roster"])
         except Exception:
@@ -89,6 +96,9 @@ class Registration:
         self.pending_update = None
         self.updating_points = False
         self.unconfirmed.clear()
+        self._sam_masks.clear()
+        self._manual_masks.clear()
+        self._manual_edits.clear()
         self.clicks = deepcopy(metadata.get("clicks", []))
         self.next_click_id = max((row["click_id"] for row in self.clicks), default=-1) + 1
         data.board, data.units, data.rules = draft["board"], draft["roster"], draft["rules"]
@@ -238,6 +248,8 @@ class Registration:
             return CommandReceipt("rejected", self._session.note)
         if isinstance(object_id, bool) or not isinstance(object_id, int) or object_id < 1:
             raise ValueError("Registration object ID must be a positive integer.")
+        if object_id in self._manual_masks:
+            raise ValueError("This object has a manual mask. Redraw it or undo the manual mask before using points.")
         snapshot = self.sample(reference)
         x, y = transform_points(source_point, self._data.board.homography["matrix"])
         height, width = self._data.current.frame.shape[:2]
@@ -263,12 +275,102 @@ class Registration:
         self._session.note = "Click queued. SAM3 runs in the background; playback remains available."
         return CommandReceipt("pending", request_id=click["click_id"])
 
+    @property
+    def can_undo(self):
+        return bool(self.clicks or self._manual_edits)
+
+    def _composed_masks(self):
+        # Manual contours own their pixels before SAM masks, newest contour first.
+        masks = self._sam_masks.copy()
+        occupied = None
+        for obj, draft in sorted(self._manual_masks.items(), key=lambda item: -item[1]["edit_id"]):
+            mask = draft["mask"]
+            masks[obj] = mask if occupied is None else mask & ~occupied
+            occupied = mask if occupied is None else occupied | mask
+        if occupied is not None:
+            for obj in self._sam_masks.keys() - self._manual_masks.keys():
+                masks[obj] = masks[obj] & ~occupied
+        return masks
+
+    def _apply_manual_masks(self, masks, snapshot):
+        session, data = self._session, self._data
+        current = data.current.prediction or {}
+        old = dict(zip(current.get("object_ids", ()), current.get("masks", ())))
+        changed = {obj for obj in old.keys() | masks.keys()
+                   if obj not in old or obj not in masks or not np.array_equal(old[obj], masks[obj])}
+        session.invalidate_trays(changed)
+        for obj in changed:
+            data.rules.fronts.pop(obj, None)
+            if obj in masks:
+                self.unconfirmed.add(obj)
+            else:
+                self.unconfirmed.discard(obj)
+                data.units.unbind(obj)
+        if masks:
+            ids = sorted(masks)
+            prediction = {**(data.current.prediction or {}), "object_ids": ids,
+                          "masks": np.stack([masks[obj] for obj in ids])}
+            prediction.setdefault("frame_idx", 0)
+            data.accept_observation(prediction, snapshot["frame"], snapshot["metadata"])
+            session.prediction_raw_frame = snapshot["raw_frame"]
+        else:
+            data.current.prediction = data.current.prediction_frame = data.current.prediction_metadata = None
+            data.current.geometry_frame = None
+        session.mark_changed()
+
+    @command
+    def manual_mask(self, object_id, corners, reference):
+        if not self.can_edit_points():
+            return CommandReceipt("rejected", self._session.note)
+        if isinstance(object_id, bool) or not isinstance(object_id, int) or object_id < 1:
+            raise ValueError("Registration object ID must be a positive integer.")
+        request = self._session.worker.request
+        if self.pending_clicks or self.updating_points or (request is not None and request["kind"] == "click"):
+            raise ValueError("Wait for the queued point prompts before drawing a manual mask.")
+        snapshot = self.sample(reference)
+        height, width = snapshot["frame"].shape[:2]
+        quad = np.asarray(list(order_corners(corners).values()))
+        if np.any(quad < 0) or np.any(quad >= [width, height]):
+            raise ValueError("Draw the mask inside the registration image.")
+        pixels = np.floor(quad).astype(np.int32)
+        if not cv2.isContourConvex(pixels) or cv2.contourArea(pixels) <= 0:
+            raise ValueError("The manual mask is too small.")
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, pixels, 1)
+        previous = self._manual_masks.get(object_id)
+        draft = {"object_id": object_id, "edit_id": self.next_click_id, "corners": quad.tolist(),
+                 "corners_source": transform_points(quad, self._data.board.homography["inverse_matrix"]).tolist(),
+                 "mask": mask.astype(bool)}
+        self._manual_masks[object_id] = draft
+        masks = self._composed_masks()
+        if any(not masks[obj].any() for obj in self._manual_masks):
+            if previous is None:
+                self._manual_masks.pop(object_id)
+            else:
+                self._manual_masks[object_id] = previous
+            raise ValueError("The new shape would completely cover another manual mask.")
+        self._manual_edits.append((self.next_click_id, object_id, previous))
+        self.next_click_id += 1
+        self._session.pause_source()
+        self._apply_manual_masks(masks, snapshot)
+        self._session.note = f"Manual mask {object_id} saved in the draft. Assign or confirm its type."
+        return CommandReceipt("accepted", value=object_id)
+
     @command
     def undo_point(self):
-        """Undo the most recent positive/negative click across all objects."""
+        """Undo the most recent completed drawing or SAM point across all objects."""
         if not self.can_edit_points():
             return CommandReceipt("rejected", self._session.note)
         self._session.pause_source()
+        if self._manual_edits and (not self.clicks or self._manual_edits[-1][0] > self.clicks[-1]["click_id"]):
+            _, obj, previous = self._manual_edits.pop()
+            if previous is None:
+                self._manual_masks.pop(obj)
+            else:
+                self._manual_masks[obj] = previous
+            self._apply_manual_masks(self._composed_masks(), self._session.source_sample())
+            self._session.note = f"Undid manual mask {obj}."
+            return CommandReceipt("accepted", value=obj)
         if not self.clicks:
             self._session.note = "No point to undo."
             return CommandReceipt("rejected", self._session.note)
@@ -277,9 +379,11 @@ class Registration:
         self.unconfirmed.add(object_id)
         self._session.invalidate_trays((object_id,))
         self._data.rules.fronts.pop(object_id, None)
-        if self._data.units and not any(click["object_id"] == object_id for click in self.clicks):
+        if not any(click["object_id"] == object_id for click in self.clicks):
+            self._sam_masks.pop(object_id, None)
             self.unconfirmed.discard(object_id)
-            self._data.units.unbind(object_id)
+            if self._data.units is not None:
+                self._data.units.unbind(object_id)
             self._session.configure_trays((object_id,), refit=False)
             current = self._data.current.prediction
             if current is not None:
@@ -317,11 +421,15 @@ class Registration:
         if self.updating_points:
             raise ValueError("Wait for the point update to finish before saving")
         if self._data.current.prediction is None:
-            raise ValueError("No completed SAM3 result to extract")
+            raise ValueError("No completed mask to extract")
         if self.pending_clicks or (self._session.worker.busy and self._session.worker.request["kind"] == "click"):
             raise ValueError("Wait for the queued click prompts to finish before extracting")
-        return extract_references(self._data.current.prediction_frame, self._data.current.prediction, source=self._data.current.prediction_metadata,
-                                  roster=self._data.units)
+        references = extract_references(self._data.current.prediction_frame, self._data.current.prediction,
+                                        source=self._data.current.prediction_metadata, roster=self._data.units)
+        for ref in references:
+            if ref["object_id"] in self._manual_masks:
+                ref["origin"] = "manual_shape"
+        return references
 
     @command
     def finish_registration(self, overlay=None):
@@ -337,12 +445,23 @@ class Registration:
             raise ValueError("Wait for the point prompts to finish before completing registration")
         if self._session.model_failed:
             raise ValueError("Resolve the SAM3 error before completing registration; R resets")
-        if self.unconfirmed & self._data.units.bindings.keys():
-            raise ValueError("Assign the type again to confirm each edited mask before completing registration")
+        unconfirmed_bound = sorted(self.unconfirmed & self._data.units.bindings.keys())
+        if unconfirmed_bound:
+            masks = ", ".join(f"{self._data.units.bindings[obj]} (Mask {obj})" for obj in unconfirmed_bound)
+            raise ValueError(f"Re-confirm edited masks: {masks} — assign a type again before starting.")
+        unbound = [obj for obj in (self._data.current.prediction or {}).get("object_ids", ())
+                   if obj not in self._data.units.bindings]
+        if unbound:
+            raise ValueError(f"Unassigned masks: {', '.join(f'Mask {obj}' for obj in unbound)}"
+                             " — assign a type to each before starting.")
         references = self.extract_references()
+        if self._manual_masks and any(ref["box"] is None for ref in references):
+            raise ValueError("A mask is empty. Redraw or undo it before starting playback.")
         self._session.pause_source()
         metadata = {**self._data.current.prediction_metadata, "object_ids": self._data.current.prediction["object_ids"],
                     "clicks": self.clicks, "inference_fps_limit": self._session.inference_fps,
+                    "manual_masks": [{key: value for key, value in draft.items() if key != "mask"}
+                                     for draft in self._manual_masks.values()],
                     "display_video_frame": self._session.source.frame_index, "model": self._session.worker.predictor.model_id,
                     "tracking_backend": self._session.worker.tracker_name,
                     "tracker_model": self._session.worker.tracker.model_id if self._session.worker.tracker is not None else self._session.worker.predictor.model_id,
@@ -361,6 +480,8 @@ class Registration:
         folder = save_registration(self._data.current.prediction_frame, overlay, references, metadata,
                                    self._session.output_dir, roster=self._data.units)
         self._data.reference_folder = folder
+        if self._manual_masks:
+            self._session.worker.tracker_initialized = False
         self._session.capture_facing_references()
         self._data.start_history(folder, metadata)
         self._data.accept_observation(self._data.current.prediction, self._data.current.prediction_frame,
@@ -375,6 +496,9 @@ class Registration:
         self.pending_update = None
         self.updating_points = False
         self.unconfirmed.clear()
+        self._sam_masks.clear()
+        self._manual_masks.clear()
+        self._manual_edits.clear()
         if self._data.units:
             self._data.units.reset_bindings()
         self.clicks.clear()
@@ -391,6 +515,8 @@ class Registration:
     def accept_prompt_result(self, request, prediction):
         if request["kind"] == "replace":
             self.updating_points = False
+            if prediction is None and not request["clicks"]:
+                self._sam_masks.clear()
         if prediction is None:
             return
         if request["kind"] == "click":
@@ -407,6 +533,14 @@ class Registration:
         if kind not in ("click", "replace", "trays"):
             return prediction
         current = self._data.current.prediction or {}
+        if kind in ("click", "replace"):
+            self._sam_masks = dict(zip(prediction["object_ids"], prediction["masks"]))
+            if self._manual_masks:
+                masks = self._composed_masks()
+                ids = sorted(masks)
+                prediction = {**prediction, "object_ids": ids, "masks": np.stack([masks[obj] for obj in ids])}
+        elif current:
+            prediction = {**prediction, "object_ids": current["object_ids"], "masks": current["masks"]}
         ids = set(prediction["object_ids"])
         if kind == "trays":
             valid = {obj for obj, version in (request.get("tray_versions") or {}).items()

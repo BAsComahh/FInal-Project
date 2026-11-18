@@ -5,7 +5,7 @@ from time import perf_counter
 
 from components.game_data import GameData
 from components.registration import UnitRoster
-from .config import DEFAULT_UNITS
+from .config import DEFAULT_OUTPUT_DIR, DEFAULT_UNITS
 from .session import MatchSession
 from .registration import Registration
 from .calibration import Calibration, configure_board
@@ -13,6 +13,7 @@ from .recovery import Recovery
 from .replay import Replay
 from .geometry import GeometryQueries
 from .scene_editing import SceneEditing
+from .debug_capture import save_debug_capture
 from .contracts import (command, CommandReceipt, FrameRef, MatchSnapshot, BoardSnapshot, CurrentSnapshot,
                         RosterSnapshot, RulesSnapshot, TrackingSnapshot, freeze)
 
@@ -35,6 +36,7 @@ class MatchApplication:
         self.scene_editing = SceneEditing(self._session, self.geometry)
         self._snapshot = self._snapshot_key = None
         self._revision = 0
+        self._debug_was_playing = None
         if registration_archive is not None:
             receipt = self.registration.load_archive(registration_archive)
             if receipt.status == "rejected":
@@ -42,7 +44,7 @@ class MatchApplication:
                 raise ValueError(receipt.reason)
 
     def tick(self, now=None):
-        if self._session.closed:
+        if self._session.closed or self.debug_paused:
             return
         self._session.advance(now)
         replay_changed = self.replay.poll()
@@ -102,7 +104,8 @@ class MatchApplication:
         key = (data.current.view_revision, session.generation, session.source.frame_index, stage, self.replay.active,
                session.playing, session.pending_play, session.closed, session.startup_ready, session.model_failed,
                worker.models_loaded, worker.tracker_initialized, session.load_progress, session.note, session.history_warning,
-               self.registration.next_click_id, len(self.registration.clicks), recovery.active, recovery.busy,
+               self.registration.next_click_id, len(self.registration.clicks),
+               tuple(sorted(self.registration.unconfirmed)), recovery.active, recovery.busy,
                recovery.candidate_generation, id(recovery._preview), recovery.note, tuple(recovery.labels()))
         if key == self._snapshot_key:
             return self._snapshot
@@ -126,7 +129,8 @@ class MatchApplication:
             session.inference_fps, session.history_warning, session.tray_status(), session.note, freeze(self.registration.clicks),
             freeze({"active": recovery.active, "busy": recovery.busy, "committing": recovery.committing,
                     "candidate_generation": recovery.candidate_generation, "preview": recovery._preview,
-                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}))
+                    "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}),
+            registration_unconfirmed=freeze(sorted(self.registration.unconfirmed & data.units.bindings.keys())))
         self._snapshot_key = key
         return self._snapshot
 
@@ -137,10 +141,44 @@ class MatchApplication:
             return max(1, min(15, int((next_time - perf_counter()) * 1000)))
         return 15
 
+    @property
+    def debug_paused(self):
+        return self._debug_was_playing is not None
+
+    @command
+    def pause_debug(self):
+        session = self._session
+        if (session.closed or self.debug_paused or not session.playback_started or session.pending_play
+                or self.replay.active or self.recovery.active or self.calibration._context is not None):
+            raise ValueError("Open Debug from Live after tracking has started.")
+        self._debug_was_playing = session.playing
+        session.pause_source()
+
+    @command
+    def save_debug(self):
+        if self._session.closed or not self.debug_paused:
+            raise ValueError("Pause Live in Debug before saving a snapshot.")
+        state = self.snapshot()
+        if state.reference_folder is None:
+            raise ValueError("The current match has no completed registration.")
+        output = self._session.output_dir.resolve()
+        debug_root = DEFAULT_OUTPUT_DIR.parent / "debug" if output == DEFAULT_OUTPUT_DIR else output / "debug"
+        instance = Path(state.reference_folder).name.removeprefix("frame_")
+        return save_debug_capture(state, self._session.source.metadata(), debug_root / f"instance_{instance}")
+
+    @command
+    def resume_debug(self):
+        if not self.debug_paused:
+            return
+        was_playing, self._debug_was_playing = self._debug_was_playing, None
+        if was_playing and not self._session.closed:
+            self._session.resume_source()
+
     @command
     def reset(self):
         if self._session.closed:
             return CommandReceipt("rejected", "Match is closed.")
+        self._debug_was_playing = None
         self.replay.clear()
         self.geometry.clear()
         self.calibration.cancel_recalibration()

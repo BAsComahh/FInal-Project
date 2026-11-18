@@ -1,6 +1,7 @@
 """Qt adapters for existing live maintenance commands and read-only replay."""
 from collections.abc import Mapping
 import math
+import re
 
 import cv2
 import numpy as np
@@ -19,6 +20,90 @@ from .board import (
     nearest_rect_points,
     place_badges,
 )
+
+
+def _catalog_rows(roster, catalog, values):
+    def records(entries):
+        return [entry for entry in entries if isinstance(entry, Mapping)] if isinstance(entries, (list, tuple)) else []
+
+    originals = records(catalog.get("source_entries"))
+    original = originals[0] if originals else {}
+    list_id = catalog.get("list_id")
+    payload = roster.payload
+    if list_id:
+        payload = payload.get("lists", {}).get(list_id, {}).get("metadata", payload)
+    sources = payload.get("sources") or ()
+    index = original.get("source_index", 0)
+    source = sources[index] if isinstance(sources, (list, tuple)) and isinstance(index, int) and 0 <= index < len(sources) else {}
+    source = source if isinstance(source, Mapping) else {}
+    appendix = source.get("appendix", {})
+    appendix = appendix if isinstance(appendix, Mapping) else {}
+
+    def row(label, value):
+        return ("", label, value, "readonly", None)
+
+    def names(entries):
+        return {entry["name"].casefold(): entry for entry in records(entries) if isinstance(entry.get("name"), str)}
+
+    def descriptions(labels, entries):
+        lookup = names(entries)
+        details = []
+        for label in labels:
+            key = label.casefold()
+            base = re.sub(r"\s*\([^()]*\)$", "", key)
+            definition = lookup.get(key) or lookup.get(base + " (n)") or lookup.get(base, {})
+            if description := definition.get("description"):
+                details.append(f"{label} — {description}")
+        return "\n\n".join(details)
+
+    rows = []
+    title = catalog.get("unit_name") or catalog.get("name")
+    profile = "\n".join(filter(None, (title, catalog.get("classification"))))
+    if profile:
+        rows.append(row("Unit profile", profile))
+    stats = (("Melee", "melee"), ("Shooting", "shooting"), ("Defence", "defence"),
+             ("Unit strength", "unit_strength"), ("Attacks", "attacks"), ("Nerve", "nerve"),
+             ("Points", "points"))
+    stat_text = "   ·   ".join(f"{label} {values[key] if values[key] is not None else '—'}"
+                              for label, key in stats if key in values)
+    if stat_text:
+        rows.append(row("Combat stats", stat_text))
+    summary, rows = rows, []
+    if traits := values.get("traits"):
+        rows.append(row("Traits", ", ".join(map(str, traits)) if isinstance(traits, (list, tuple)) else str(traits)))
+    weapons = [f"{weapon['name']} ({weapon['range_in']:g} in)" for weapon in records(values.get("weapons"))
+               if weapon.get("name") and isinstance(weapon.get("range_in"), (int, float))]
+    if weapons:
+        rows.append(row("Weapons", "\n".join(weapons)))
+    for kind, section, label in (("", "", "Options"), ("spell", "spells", "Spells"),
+                                 ("artefact", "artefacts", "Artefacts")):
+        entries = names(appendix.get(section, ()))
+        options = []
+        for option in records(values.get("options")):
+            if option.get("kind", "") != kind or not option.get("label"):
+                continue
+            heading = option["label"]
+            if option.get("points") is not None:
+                heading = f"{heading} · {option['points']} pts"
+            definition = entries.get(str(option.get("name", "")).casefold(), {})
+            notes = [f"Range: {definition['range']}" if definition.get("range") else "",
+                     definition.get("targets"), definition.get("description")]
+            options.append("\n".join(filter(None, (heading, *notes))))
+        if options:
+            rows.append(row(label, "\n\n".join(options)))
+    rules = values.get("special_rules")
+    if isinstance(rules, (list, tuple)) and (descriptions_text := descriptions(
+            (rule for rule in rules if isinstance(rule, str)), appendix.get("special_rules", ()))):
+        rows.append(row("Special rule reference", descriptions_text))
+    if orders := [order for order in records(appendix.get("command_orders"))
+                  if {"name", "target", "description"} <= order.keys()]:
+        rows.append(row("Army command orders", "\n\n".join(
+            f"{order['name']} · {order['target']}\n{order['description']}" for order in orders)))
+    for label, details in (("Other unit notes", catalog.get("unparsed_details")),
+                           ("Army list notes", appendix.get("unparsed_lines"))):
+        if isinstance(details, (list, tuple)) and details:
+            rows.append(row(label, "\n".join(map(str, details))))
+    return summary, rows
 
 
 def _draw_dashed_poly(canvas, points, color, *, halo=(26, 20, 12), thickness=2, dash=9, gap=6):
@@ -269,6 +354,7 @@ def _replay_board(state, replay, preview_size):
 class Workflows(QObject):
     changed = Signal()
     formRequested = Signal()
+    profileLoaded = Signal()
 
     def __init__(self, bridge):
         super().__init__(bridge)
@@ -278,12 +364,15 @@ class Workflows(QObject):
         self._reference = None
         self._fields = []
         self._form_kind = self._unit_id = ""
+        self._profile_open = False
         self._form_error = ""
+        self._debug_note = ""
         self._calibration_pending = False
         self._data = dict(
             kind="live", rows=[], note="", busy=False, review=False,
             candidateGeneration=0, candidateTime="—", pointCount=0,
             step=0, steps=0, calibrationPending=False,
+            profileOpen=False, profileUnitId="",
             replayInfo=dict(stepText="", stepLabel="", stepUnit="", stepKind="", stepSide="",
                             stepSummary="", endTime="—", observedTime="—", recordedTime="—",
                             calibrationVersion="—", unavailable="", unavailableCount=0,
@@ -318,12 +407,66 @@ class Workflows(QObject):
     def kind(self, state):
         return "recovery" if state.recovery["active"] else "replay" if self.match.replay.active else self.mode
 
+    @staticmethod
+    def _build_fields(rows):
+        return [
+            dict(
+                key=key,
+                label=label,
+                kind=field_kind,
+                value=(
+                    bool(value) if field_kind == "bool"
+                    else (", ".join(value) if isinstance(value, (tuple, list)) else str(value or "")) if field_kind == "rules"
+                    else ("" if value is None else str(value))
+                ),
+                options=[opt[0] for opt in options] if options else [],
+                optionLabels=[opt[1] for opt in options] if options else [],
+            )
+            for key, label, value, field_kind, options in rows
+        ]
+
+    def _load_profile(self, state, uid):
+        unit = state.units.units.get(uid)
+        if unit is None:
+            return False
+        catalog = state.units.types[unit["type_id"]]
+        values = {**catalog.get("attributes", {}), **unit["attributes"]}
+        summary, reference = _catalog_rows(state.units, catalog, values)
+        self._unit_id, self._reference, self._form_kind = uid, state.source_ref, "profile"
+        self._fields = self._build_fields(summary + [
+            ("speed_in", "Speed (inches)", values.get("speed_in"), "number", None),
+            ("height", "Rule height", values.get("height"), "number", None),
+            ("side", "Side / army", values.get("side"), "text", None),
+            ("unit_kind", "Unit kind", values.get("unit_kind"), "choice",
+             [("", "Unknown / Unset"), ("ordinary", "Ordinary"),
+              ("war_engine", "War Engine"), ("individual", "Individual")]),
+            ("special_rules", "Special rules (comma separated)", values.get("special_rules"), "rules", None),
+            ("engaged", "Currently engaged", values.get("engaged"), "bool", None),
+            ("wavering", "Currently wavering", values.get("wavering"), "bool", None),
+        ] + reference)
+        self.profileLoaded.emit()
+        return True
+
+    @Slot()
+    def closeProfile(self):
+        if self._profile_open or self._form_error:
+            self._profile_open = False
+            self._form_error = ""
+            self.refresh()
+
     def publish(self, state):
         recovery, replay = state.recovery, self.match.replay
         if self._calibration_pending and self.match.calibration.status is None:
             self.mode, self._calibration_pending = "live", False
             self.points = []
         kind = self.kind(state)
+        if self._profile_open:
+            uid = self.bridge.live.unit_id
+            if state.stage != "playback" or kind != "live" or not uid or uid not in state.units.units:
+                self._profile_open = False
+            elif uid != self._unit_id:
+                self._form_error = ""
+                self._load_profile(state, uid)
         rows = []
         for uid in recovery["labels"]:
             unit = state.units.units[uid]
@@ -341,6 +484,8 @@ class Workflows(QObject):
             ))
 
         note = recovery["note"] if kind == "recovery" else replay.error if kind == "replay" else state.note
+        if kind == "debug":
+            note = self._debug_note
         scene = replay.scene
         step = replay.steps[replay.selected] if replay.steps else None
         unavailable = []
@@ -423,6 +568,8 @@ class Workflows(QObject):
             step=replay.selected,
             steps=len(replay.steps),
             calibrationPending=self._calibration_pending,
+            profileOpen=self._profile_open,
+            profileUnitId=self._unit_id,
             replayInfo=replay_info,
         )
         self.changed.emit()
@@ -437,24 +584,26 @@ class Workflows(QObject):
         state = self.match.snapshot()
         if state.stage != "playback" or state.recovery["committing"]:
             return
+        if self.mode == "debug":
+            return
+        if tool == "debug":
+            if self.kind(state) != "live":
+                return
+            receipt = self.match.pause_debug()
+            if receipt.status == "accepted":
+                self.bridge.live.done()
+                self.mode = "debug"
+                self._debug_note = "Video paused. Save the current frame, masks, trays and tracking state."
+            self.refresh(receipt)
+            return
         if tool == "profile":
             uid = self.bridge.live.unit_id
-            unit = state.units.units.get(uid)
-            if unit is None:
+            if uid is None or uid not in state.units.units:
                 return
-            values = {**state.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
-            self._unit_id, self._reference = uid, state.source_ref
-            self.show_form("profile", [
-                ("speed_in", "Speed (inches)", values.get("speed_in"), "number", None),
-                ("height", "Rule height", values.get("height"), "number", None),
-                ("side", "Side / army", values.get("side"), "text", None),
-                ("unit_kind", "Unit kind", values.get("unit_kind"), "choice",
-                 [("", "Unknown / Unset"), ("ordinary", "Ordinary"),
-                  ("war_engine", "War Engine"), ("individual", "Individual")]),
-                ("special_rules", "Special rules (comma separated)", values.get("special_rules"), "rules", None),
-                ("engaged", "Currently engaged", values.get("engaged"), "bool", None),
-                ("wavering", "Currently wavering", values.get("wavering"), "bool", None),
-            ])
+            self._profile_open = True
+            self._form_error = ""
+            self._load_profile(state, uid)
+            self.refresh()
             return
         if self.mode == "recalibrate":
             self.match.calibration.cancel_recalibration()
@@ -482,21 +631,7 @@ class Workflows(QObject):
     def show_form(self, kind, rows):
         self._form_kind = kind
         self._form_error = ""
-        self._fields = [
-            dict(
-                key=key,
-                label=label,
-                kind=field_kind,
-                value=(
-                    bool(value) if field_kind == "bool"
-                    else (", ".join(value) if isinstance(value, (tuple, list)) else str(value or "")) if field_kind == "rules"
-                    else ("" if value is None else str(value))
-                ),
-                options=[opt[0] for opt in options] if options else [],
-                optionLabels=[opt[1] for opt in options] if options else [],
-            )
-            for key, label, value, field_kind, options in rows
-        ]
+        self._fields = self._build_fields(rows)
         self.changed.emit()
         self.formRequested.emit()
 
@@ -505,6 +640,8 @@ class Workflows(QObject):
         values = {}
         try:
             for row in rows:
+                if row["kind"] == "readonly":
+                    continue
                 value = row["value"]
                 if row["kind"] == "number":
                     value = None if str(value).strip() == "" else float(value)
@@ -535,6 +672,8 @@ class Workflows(QObject):
             return False
 
         self._form_error = ""
+        if self._form_kind == "profile" and self._profile_open:
+            self._load_profile(self.match.snapshot(), self._unit_id)
         return self.refresh(receipt)
 
     @Slot()
@@ -551,6 +690,17 @@ class Workflows(QObject):
     @Slot(str)
     def action(self, action):
         if self.bridge._closed:
+            return
+        if self.mode == "debug":
+            if action == "saveDebug":
+                receipt = self.match.save_debug()
+                if receipt.status == "accepted":
+                    self._debug_note = f"Saved snapshot: {receipt.value}"
+                self.refresh(receipt)
+            elif action == "cancel":
+                receipt = self.match.resume_debug()
+                self.mode = "live"
+                self.refresh(receipt)
             return
         if action == "undoTerrain":
             self.refresh(self.match.scene_editing.undo_terrain())

@@ -55,13 +55,21 @@ def line_of_sight(scene, a_id, b_id, samples=9):
     if a_id == b_id:
         result['reason'] = 'LOS requires two distinct units.'
         return result
+    missing = [unit['unit_id'] for unit in (a, b) if unit['height'] is None]
+    if missing:
+        result['reason'] = f"Enter Height for {', '.join(missing)} to check LOS."
+        return result
     if a['front_edge'] is None:
         result['reason'] = 'Observer front_edge is unknown.'
+        return result
+    ah, bh = _height(a, scene, warnings, True), _height(b, scene, warnings)
+    unknown = [uid for uid, height in ((a_id, ah), (b_id, bh)) if height is None]
+    if unknown:
+        result['reason'] = f"Effective Height is unknown for {', '.join(unknown)}. Check the hill heights and footprints."
         return result
     if not g.front_arc_clip(b['corners_mm'], a['corners_mm'], a['front_edge']):
         result.update(status='blocked', reason='The entire target base is outside the 45-degree arc from the observer front corners.')
         return result
-    ah, bh = _height(a, scene, warnings, True), _height(b, scene, warnings)
     blockers = []
     for unit in scene['units']:
         if unit['unit_id'] not in (a_id, b_id):
@@ -71,11 +79,9 @@ def line_of_sight(scene, a_id, b_id, samples=9):
             blockers.append((t['polygon_mm'], t['height'], True))
     relevant = []
     for poly, height, terrain in blockers:
-        # One endpoint taller is sufficient even when the other height is unknown.
-        if height is not None and any(h is not None and h > height for h in (ah, bh)):
+        if height is not None and max(ah, bh) > height:
             continue
-        known = height is not None and ah is not None and bh is not None
-        relevant.append((poly, known, terrain))
+        relevant.append((poly, height is not None, terrain))
     edge = a['front_edge']
     origins = _edge_samples(a['corners_mm'][edge], a['corners_mm'][(edge + 1) % 4], samples, scene['terrain'])
     targets = [p for c, d in g.edges(b['corners_mm']) for p in _edge_samples(c, d, samples, scene['terrain'])]

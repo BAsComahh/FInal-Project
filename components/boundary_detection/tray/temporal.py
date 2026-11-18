@@ -9,10 +9,11 @@ import numpy as np
 class TrayStability:
     centroid_pct: float = 5.0
     min_mask_iou: float = 0.90
+    failed_retry_seconds: float = 5.0
 
     def __post_init__(self):
-        if (not np.isfinite((self.centroid_pct, self.min_mask_iou)).all() or
-                not 0 < self.centroid_pct <= 100 or not 0 < self.min_mask_iou <= 1):
+        if (not np.isfinite((self.centroid_pct, self.min_mask_iou, self.failed_retry_seconds)).all() or
+                not 0 < self.centroid_pct <= 100 or not 0 < self.min_mask_iou <= 1 or self.failed_retry_seconds <= 0):
             raise ValueError("Invalid tray stability thresholds")
 
     def compare(self, baseline, current, short_side):

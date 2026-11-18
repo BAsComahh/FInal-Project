@@ -6,6 +6,7 @@ Item {
     property var badges: []
     property string selectedUnitId: ""
     property string targetUnitId: ""
+    property int hoverObjectId: -1
     readonly property Theme theme: Theme {}
 
     Repeater {
@@ -14,11 +15,13 @@ Item {
             id: pill
             required property var modelData
             readonly property bool isTerrain: modelData.kind === "terrain"
+            readonly property bool isDropHover: !isTerrain && badgeLayer.hoverObjectId > 0 && modelData.objectId === badgeLayer.hoverObjectId
             readonly property bool isSelected: !isTerrain && (
                 Boolean(modelData.active)
                 || (badgeLayer.selectedUnitId.length > 0 && modelData.unitId === badgeLayer.selectedUnitId)
             )
             readonly property bool isTarget: !isTerrain && badgeLayer.targetUnitId.length > 0 && modelData.unitId === badgeLayer.targetUnitId
+            readonly property bool isNeedsWork: !isTerrain && ((modelData.unitId || "").length === 0 || Boolean(modelData.unconfirmed))
             readonly property real targetH: Math.max(18, Math.round(modelData.h * badgeLayer.height))
             readonly property real targetW: Math.max(row.implicitWidth + 14, Math.round(modelData.w * badgeLayer.width))
 
@@ -29,10 +32,15 @@ Item {
             y: Math.max(2, Math.min(badgeLayer.height - height - 2,
                (modelData.y + modelData.h * 0.5) * badgeLayer.height - height * 0.5))
             radius: height / 2
-            color: isSelected ? "#f2132533" : (isTerrain ? "#cc101922" : "#e6101922")
-            border.width: (isSelected || isTarget) ? 1.5 : 1
-            border.color: isSelected ? badgeLayer.theme.selection
+            color: isDropHover ? "#f2133024"
+                 : isSelected ? "#f2132533"
+                 : isNeedsWork ? "#ea2a2010"
+                 : (isTerrain ? "#cc101922" : "#e6101922")
+            border.width: isDropHover ? 2 : (isSelected || isTarget || isNeedsWork) ? 1.5 : 1
+            border.color: isDropHover ? badgeLayer.theme.success
+                        : isSelected ? badgeLayer.theme.selection
                         : isTarget ? badgeLayer.theme.success
+                        : isNeedsWork ? badgeLayer.theme.warning
                         : isTerrain ? modelData.border
                         : "#6692aec4"
 
@@ -42,16 +50,16 @@ Item {
                 spacing: 5
 
                 Rectangle {
-                    visible: (pill.modelData.dot || "").length > 0
+                    visible: (pill.modelData.dot || "").length > 0 || pill.isNeedsWork
                     width: Math.max(6, Math.round(pill.height * 0.34))
                     height: width
                     radius: width / 2
-                    color: pill.modelData.dot || "transparent"
+                    color: (pill.modelData.dot || "").length > 0 ? pill.modelData.dot : badgeLayer.theme.warning
                 }
 
                 Text {
                     text: pill.modelData.text
-                    color: pill.isSelected ? "#ffffff" : badgeLayer.theme.ink
+                    color: (pill.isSelected || pill.isDropHover) ? "#ffffff" : badgeLayer.theme.ink
                     font.family: badgeLayer.theme.fontBody
                     font.pixelSize: Math.max(10, Math.min(12, Math.round(pill.height * 0.55)))
                     font.weight: Font.DemiBold

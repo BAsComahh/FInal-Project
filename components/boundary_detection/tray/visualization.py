@@ -15,6 +15,12 @@ def _polygon(canvas, points, color, label=None, thickness=2):
                     cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
 
 
+def _mask_score(item):
+    if "mask_fill" in item:
+        return f"fill={item['mask_fill']:.2f}"
+    return f"mask={item['mask_coverage']:.2f}"
+
+
 def diagnostic_images(image, mask, result):
     matrix = np.asarray(result["image_to_work"])
     size = tuple(result["work_size"])
@@ -38,7 +44,7 @@ def diagnostic_images(image, mask, result):
             item = stage["top"][index]
             color = colors[index % len(colors)]
             _polygon(canvas, item["corners_work"], color)
-            label = f"#{index + 1} score={item['score']:.2f} mask={item['mask_coverage']:.2f} edge={item['edge_support']:.2f}"
+            label = f"#{index + 1} score={item['score']:.2f} {_mask_score(item)} edge={item['edge_support']:.2f}"
             cv2.putText(canvas, label, (5, mask_view.shape[0] + 18 + 20 * index),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
         images[f"candidates_{stage['method']}"] = canvas
@@ -46,7 +52,7 @@ def diagnostic_images(image, mask, result):
     best = result["best"]
     if best is not None:
         _polygon(overlay, best["corners_image"], (0, 255, 0) if result["success"] else (0, 150, 255),
-                 f"{best['method']} mask={best['mask_coverage']:.2f} edge={best['edge_support']:.2f}")
+                 f"{best['method']} {_mask_score(best)} edge={best['edge_support']:.2f}")
     images["overlay"] = overlay
     # Compact stage sheet; the individual files retain their native resolution.
     tiles = []

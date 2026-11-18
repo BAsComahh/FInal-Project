@@ -12,7 +12,7 @@ from .temporal import TrayStability, describe_mask
 
 
 def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_stable=False,
-                         stability=None, source_frame=None, attempts=None, cancelled=None,
+                         stability=None, source_frame=None, source_time=None, attempts=None, cancelled=None,
                          full_search_distance=0.50):
     """Return observed proposals keyed by SAM object ID, plus per-unit errors.
 
@@ -20,6 +20,7 @@ def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_sta
     Missing dimensions and empty masks produce no tray; no boxes are invented.
     In adaptive mode full_search_distance is measured in tray short sides.
     Set it to None to always try a compatible previous pose before full search.
+    source_time is the observation's video time in seconds for failed-fit retries.
     """
     trays, errors = {}, {}
     stability = stability or TrayStability()
@@ -42,21 +43,27 @@ def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_sta
                     source_frame is not None and prior.get("observation_frame_index") is not None and
                     prior["observation_frame_index"] > source_frame):
                 prior = None
-            sample = describe_mask(mask) if reuse_stable else None
+            if reuse_stable:
+                sample = dict(describe_mask(mask), frame_index=source_frame, timestamp_seconds=source_time)
             check = None
             if reuse_stable and prior is not None and prior.get("fit_sample") is not None:
                 corners = prior.get("corners_image")
                 short_side = (np.linalg.norm(np.roll(corners, -1, axis=0) - corners, axis=1).min()
                               if corners is not None else min(prior["fit_sample"]["bbox"][2:]))
                 stable, check = stability.compare(prior["fit_sample"], sample, short_side)
-                if stable:
+                failed_at = prior["fit_sample"].get("timestamp_seconds")
+                retry_due = (corners is None and source_time is not None and failed_at is not None
+                             and source_time >= failed_at + stability.failed_retry_seconds)
+                if corners is None:
+                    check["failure_retry_due"] = retry_due
+                if stable and not retry_due:
                     if corners is not None:
                         tray = deepcopy(prior)
                         tray.update(method="stable_reuse", fit_method=prior.get("fit_method", prior["method"]),
                                     observation_frame_index=source_frame, reuse_check=check)
                         trays[object_id] = tray
                     else:
-                        errors[object_id] = "Tray fit waits for mask change after failure"
+                        errors[object_id] = "Tray fit waits for mask change or retry time after failure"
                     if attempts is not None:
                         attempts[object_id] = dict(prior, observation_frame_index=source_frame, reuse_check=check,
                                                    attempted=False, seconds=perf_counter() - started)
@@ -76,7 +83,7 @@ def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_sta
                 tray = result["best"]
                 tray.update(cache_context=cache_context, observation_frame_index=source_frame)
                 if sample is not None:
-                    tray["fit_sample"] = dict(sample, frame_index=source_frame)
+                    tray["fit_sample"] = sample
                 if check is not None:
                     tray["reuse_check"] = check
                 trays[object_id] = tray
@@ -84,13 +91,13 @@ def fit_registered_trays(frame, prediction, context, *, previous=None, reuse_sta
                 errors[object_id] = "Tray fit needs review"
             if attempts is not None:
                 attempts[object_id] = dict(trays.get(object_id, {}), cache_context=cache_context,
-                    fit_sample=dict(sample, frame_index=source_frame) if sample is not None else None,
+                    fit_sample=sample,
                     observation_frame_index=source_frame, reuse_check=check, attempted=True,
                     seconds=perf_counter() - started, error=errors.get(object_id))
         except (ValueError, cv2.error) as error:
             errors[object_id] = str(error)
             if attempts is not None and sample is not None:
-                attempts[object_id] = dict(cache_context=cache_context, fit_sample=dict(sample, frame_index=source_frame),
+                attempts[object_id] = dict(cache_context=cache_context, fit_sample=sample,
                     observation_frame_index=source_frame, attempted=True, seconds=perf_counter() - started,
                     reuse_check=check, error=str(error))
     return trays, errors

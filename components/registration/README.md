@@ -64,7 +64,8 @@ roster = UnitRoster(catalog)
 - 相同来源、相同属性及配置的条目合并；编制、装备、法术选项或属性不同则分别编号。同名的 Horde 和 Regiment 不合并。
 - `listed_count` 只是原军表数量，不预先产生实例，也不限制注册数量；单位标题的 `[2]` 不作为数量。
 - 属性键包含 `speed_in`、`melee`、`shooting`、`defence`、`unit_strength`、`attacks`、`nerve`、`height`、`points`、`unit_kind`、`side`、`special_rules`、`traits`、`options` 和 `weapons`。命中／防御的 `4+` 等保留字符串，缺失横杠转 `null`。
-- `options` 保存带积分明细的原始名称；末尾 `(n)` 保存为 `value`，不凭它推断规则效果。`weapons` 读取明确写出的武器英寸射程；第二页的法术／特殊规则释义不转成可执行规则。
+- `options` 保存带积分明细的原始名称；末尾 `(n)` 保存为 `value`。按 PDF 附录明确对应的名称填写 `kind`（`spell` 或 `artefact`）。`weapons` 读取明确写出的武器英寸射程。
+- `sources[].appendix` 保存指挥命令、特殊规则、法术和神器说明，法术包括原文目标和明确的英寸射程。其余附录文字保留于 `unparsed_lines`。Qt Live 选中单位后可从 `Info` 查阅属性、已购选项及相应说明。附录文字用于查阅。
 - 属性行的 Pts 已包含配置花费；合计只求和属性行，不重复加上明细积分。总单位数、积分和 Unit Strength 任一不符均停止导出。
 - PDF 导入自动填充 `dimension.width_mm/depth_mm`（正面宽×深）：明确的毫米底座备注优先，其次按单位类别＋编制查 [官方 FAQ v0.1 首页面尺寸表](https://www.manticgames.com/wp-content/uploads/2026/02/KoW-v4-FAQ-v1.0.pdf)。支持 Inf／Lrg Inf／Cav／Lrg Cav、Hero 的单模型尺寸及明确的 Heavy／Monstrous／Titan 变体；不按名字猜变体。表中 n/a、未知类别、无法解析或相互冲突的底座备注保持无尺寸并逐 type 警告。没有明确尺寸的 War Engine／Legion 不套用其他编制。
 - 底座备注支持 `Base Size: 75mm`、`Base Size (125x100mm)`、`Unit Footprint: 100 × 80 mm`、`75mm Base` 等明确声明；单个毫米值表示方形。`dimension_inference` 保留导入时原尺寸、方法、分类／编制及规则 URL／版本／页码或原始备注，修改当前 `dimension` 后该导入证据仍保留。Qt 已移除手动尺寸入口，只从 PDF／目录取得尺寸；旧 OpenCV 编辑窗口和共享尺寸更新接口保留。旧 JSON 不自动重算，请重新导入原 PDF 取得映射。

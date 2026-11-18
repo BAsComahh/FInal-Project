@@ -8,6 +8,9 @@ Rectangle {
     required property Item dragLayer
     signal importRequested(string side)
     readonly property Theme theme: Theme {}
+    readonly property var unassignedList: state.unassigned || []
+    readonly property var unconfirmedList: state.unconfirmed || []
+    readonly property bool allReady: state.total > 0 && state.assigned === state.total && unconfirmedList.length === 0
 
     radius: theme.radiusLg
     color: theme.bgSurface
@@ -32,16 +35,15 @@ Rectangle {
                 implicitWidth: countBadge.implicitWidth + 14
                 implicitHeight: 22
                 radius: height / 2
-                color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
-                       ? panel.theme.successSoft : panel.theme.bgTrack
-                border.color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
-                              ? panel.theme.successBorder : panel.theme.borderSoft
+                color: panel.allReady ? panel.theme.successSoft : panel.theme.bgTrack
+                border.color: panel.allReady ? panel.theme.successBorder
+                              : (panel.unconfirmedList.length > 0 ? panel.theme.warning : panel.theme.borderSoft)
                 Text {
                     id: countBadge
                     anchors.centerIn: parent
                     text: panel.state.assigned + " / " + panel.state.total
-                    color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
-                           ? panel.theme.success : panel.theme.inkSecondary
+                    color: panel.allReady ? panel.theme.success
+                           : (panel.unconfirmedList.length > 0 ? panel.theme.warning : panel.theme.inkSecondary)
                     font.family: panel.theme.fontMono
                     font.pixelSize: panel.theme.textXs
                     font.weight: Font.DemiBold
@@ -136,7 +138,7 @@ Rectangle {
                                     id: card
                                     required property var modelData
                                     width: parent.width
-                                    height: 48
+                                    height: Math.max(48, cardTextCol.implicitHeight + 12)
                                     radius: panel.theme.radiusSm
                                     color: pointer.containsMouse ? sideColumn.sideSoft : panel.theme.bgSubtle
                                     border.color: pointer.containsMouse ? sideColumn.sideColor : panel.theme.border
@@ -150,35 +152,61 @@ Rectangle {
                                         color: sideColumn.sideColor
                                     }
 
-                                    Text {
-                                        anchors.fill: parent
+                                    Column {
+                                        id: cardTextCol
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
                                         anchors.leftMargin: 10
                                         anchors.rightMargin: 8
-                                        anchors.topMargin: 6
-                                        anchors.bottomMargin: 6
-                                        text: card.modelData.title
-                                        color: panel.theme.ink
-                                        font.pixelSize: panel.theme.textXs
-                                        wrapMode: Text.WordWrap
-                                        maximumLineCount: 2
-                                        verticalAlignment: Text.AlignVCenter
-                                        elide: Text.ElideRight
+                                        spacing: 2
+
+                                        Text {
+                                            width: parent.width
+                                            text: card.modelData.title
+                                            color: panel.theme.ink
+                                            font.pixelSize: panel.theme.textXs
+                                            font.weight: Font.DemiBold
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Text {
+                                            width: parent.width
+                                            visible: (card.modelData.subtitle || "").length > 0
+                                            text: card.modelData.subtitle || ""
+                                            color: panel.theme.inkSecondary
+                                            font.pixelSize: 10
+                                            wrapMode: Text.WordWrap
+                                            maximumLineCount: 2
+                                            elide: Text.ElideRight
+                                        }
                                     }
 
                                     MouseArea {
                                         id: pointer
+                                        property real grabX: 10
+                                        property real grabY: 10
                                         anchors.fill: parent
                                         hoverEnabled: true
+                                        preventStealing: true
                                         enabled: panel.state.ready && panel.state.editable
                                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                                         drag.target: ghost
                                         drag.threshold: 8
                                         onPressed: {
+                                            grabX = mouseX
+                                            grabY = mouseY
                                             const p = card.mapToItem(panel.dragLayer, mouseX, mouseY)
-                                            ghost.x = p.x - 10
-                                            ghost.y = p.y - 10
+                                            ghost.x = p.x - grabX
+                                            ghost.y = p.y - grabY
                                         }
-                                        onReleased: ghost.Drag.drop()
+                                        onReleased: {
+                                            ghost.Drag.drop()
+                                            ui.clearHover()
+                                        }
+                                        onCanceled: ui.clearHover()
                                         onClicked: ui.assign(card.modelData.id)
                                     }
 
@@ -186,31 +214,59 @@ Rectangle {
                                         id: ghost
                                         parent: panel.dragLayer
                                         width: card.width
-                                        height: 48
+                                        height: card.height
                                         radius: panel.theme.radiusSm
                                         z: 100
                                         visible: pointer.drag.active
                                         color: sideColumn.sideColor
-                                        opacity: 0.94
+                                        opacity: 0.84
                                         border.color: "#ffffff"
                                         border.width: 1
                                         property string typeId: card.modelData.id
                                         Drag.active: pointer.drag.active
                                         Drag.keys: ["unit-type"]
-                                        Drag.hotSpot.x: 10
-                                        Drag.hotSpot.y: 10
+                                        Drag.hotSpot.x: pointer.grabX
+                                        Drag.hotSpot.y: pointer.grabY
 
-                                        Text {
-                                            anchors.fill: parent
+                                        Column {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
                                             anchors.margins: 9
-                                            text: card.modelData.title
-                                            color: "#ffffff"
-                                            font.pixelSize: panel.theme.textXs
-                                            font.weight: Font.DemiBold
-                                            wrapMode: Text.WordWrap
-                                            maximumLineCount: 2
-                                            verticalAlignment: Text.AlignVCenter
-                                            elide: Text.ElideRight
+                                            spacing: 2
+
+                                            Text {
+                                                width: parent.width
+                                                text: card.modelData.title
+                                                color: "#ffffff"
+                                                font.pixelSize: panel.theme.textXs
+                                                font.weight: Font.DemiBold
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 2
+                                                elide: Text.ElideRight
+                                            }
+
+                                            Text {
+                                                width: parent.width
+                                                visible: (card.modelData.subtitle || "").length > 0
+                                                text: card.modelData.subtitle || ""
+                                                color: "#dce8f2"
+                                                font.pixelSize: 10
+                                                wrapMode: Text.WordWrap
+                                                maximumLineCount: 2
+                                                elide: Text.ElideRight
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            x: pointer.grabX - 4
+                                            y: pointer.grabY - 4
+                                            width: 8
+                                            height: 8
+                                            radius: 4
+                                            color: panel.theme.selection
+                                            border.color: "#101922"
+                                            border.width: 1
                                         }
                                     }
                                 }
@@ -242,8 +298,95 @@ Rectangle {
                 height: parent.height
                 radius: panel.theme.radiusXs
                 width: panel.state.total > 0 ? parent.width * Math.min(1, panel.state.assigned / panel.state.total) : 0
-                color: panel.state.assigned > 0 && panel.state.assigned === panel.state.total
-                       ? panel.theme.success : panel.theme.accent
+                color: panel.allReady ? panel.theme.success
+                       : (panel.unconfirmedList.length > 0 ? panel.theme.warning : panel.theme.accent)
+            }
+        }
+
+        // Unassigned or edited unconfirmed masks: click a chip to highlight & select that mask.
+        Flickable {
+            Layout.fillWidth: true
+            Layout.preferredHeight: Math.min(82, pendingFlow.implicitHeight)
+            visible: panel.unassignedList.length > 0 || panel.unconfirmedList.length > 0
+            contentWidth: width
+            contentHeight: pendingFlow.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+
+            Flow {
+                id: pendingFlow
+                width: parent.width
+                spacing: 6
+
+                Text {
+                    visible: panel.unassignedList.length > 0
+                    text: "Unassigned:"
+                    color: panel.theme.warning
+                    font.pixelSize: panel.theme.textXs
+                    font.weight: Font.DemiBold
+                    height: 24
+                    verticalAlignment: Text.AlignVCenter
+                }
+                Repeater {
+                    model: panel.unassignedList
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: chipText.implicitWidth + 14
+                        height: 24
+                        radius: panel.theme.radiusSm
+                        color: modelData.id === panel.state.selected ? panel.theme.accentSoft : panel.theme.bgSubtle
+                        border.color: modelData.id === panel.state.selected ? panel.theme.accentBorder : panel.theme.warning
+                        Text {
+                            id: chipText
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: panel.theme.ink
+                            font.family: panel.theme.fontMono
+                            font.pixelSize: panel.theme.textXs
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: panel.state.editable
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: ui.selectMask(modelData.id)
+                        }
+                    }
+                }
+
+                Text {
+                    visible: panel.unconfirmedList.length > 0
+                    text: "Re-confirm:"
+                    color: panel.theme.warning
+                    font.pixelSize: panel.theme.textXs
+                    font.weight: Font.DemiBold
+                    height: 24
+                    verticalAlignment: Text.AlignVCenter
+                }
+                Repeater {
+                    model: panel.unconfirmedList
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: confText.implicitWidth + 14
+                        height: 24
+                        radius: panel.theme.radiusSm
+                        color: modelData.id === panel.state.selected ? panel.theme.accentSoft : panel.theme.bgSubtle
+                        border.color: modelData.id === panel.state.selected ? panel.theme.accentBorder : panel.theme.warning
+                        Text {
+                            id: confText
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: panel.theme.ink
+                            font.family: panel.theme.fontMono
+                            font.pixelSize: panel.theme.textXs
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: panel.state.editable
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: ui.selectMask(modelData.id)
+                        }
+                    }
+                }
             }
         }
 

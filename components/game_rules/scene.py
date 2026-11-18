@@ -6,6 +6,8 @@ from numbers import Real
 
 from . import geometry as g
 
+OBSTACLE_HEIGHT = 1.0
+
 
 def _number(value, name, minimum=0, nullable=False):
     if value is None and nullable:
@@ -105,7 +107,12 @@ def validate_scene(scene):
         terrain['polygon_mm'] = _polygon(terrain.get('polygon_mm'), name + '.polygon_mm')
         if terrain.get('kind') not in ('blocking', 'difficult', 'obstacle', 'hill', 'decorative'):
             raise ValueError(f"{name}.kind is invalid")
-        terrain['height'] = _number(terrain.get('height'), name + '.height', nullable=True)
+        height = _number(terrain.get('height'), name + '.height', nullable=True)
+        if terrain['kind'] == 'obstacle':
+            if height is not None and height != OBSTACLE_HEIGHT:
+                raise ValueError(f"{name}.height must be {OBSTACLE_HEIGHT:g} for Obstacle terrain")
+            height = OBSTACLE_HEIGHT
+        terrain['height'] = height
     return result
 
 
