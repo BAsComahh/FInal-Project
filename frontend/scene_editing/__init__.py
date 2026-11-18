@@ -1,1 +1,0 @@
-"""Scene editing frontend responsibilities."""

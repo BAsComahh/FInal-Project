@@ -1,4 +1,4 @@
-"""Register real video units with the Qt Quick client, then start basic live playback."""
+"""Run the Qt match console for registration, live playback and replay."""
 import sys
 
 from application.app import MatchApplication

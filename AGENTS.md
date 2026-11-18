@@ -30,6 +30,11 @@ root project records listed above in place. Reserve `outputs/` for temporary
 or reproducible generated files. Archive any important result in `docs/`
 before treating it as a maintained project artifact.
 
+The 2026-11-18 decision retires the OpenCV video client. Qt is the desktop
+video client. Keep the existing video commands as Qt entry points and retain
+the independent image and boundary tools. Move Terrain from Live into
+Registration in a later task tracked in TODO.md.
+
 Before substantial implementation, read this file and the relevant sections
 of `项目思路.md` and `TODO.md`; inspect `git status` and the current diff before
 editing. Consult the requirement and research records relevant to the task.

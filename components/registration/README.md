@@ -25,7 +25,7 @@ folder = save_registration(frame, overlay, references, metadata, "outputs/sam3_r
 
 尺寸值仅展示格式，需换成本局实测值。同 type 尺寸一致，属性随 reference 保存，界面只展示类型与编号。尺寸可选；毫米托盘拟合要求尺寸和相应标定均存在。
 
-`UnitRoster.with_dimensions({type_id: {"width_mm": 100, "depth_mm": 80}})` 返回经过完整校验的新目录，保留实例 ID、属性、绑定、计数与来源；值为 `None` 时移除该 type 的尺寸，未知 type 或无效尺寸会拒绝整次修改。原目录不被修改，`snapshot()` 与实例 `annotation()` 均读取新尺寸。注册页的 `Tray dimensions (mm)` 提供 A／B 双列表单，原始输入文件不被覆盖，草稿尺寸在最终注册时统一保存。
+`UnitRoster.with_dimensions({type_id: {"width_mm": 100, "depth_mm": 80}})` 返回经过完整校验的新目录，保留实例 ID、属性、绑定、计数与来源；值为 `None` 时移除该 type 的尺寸，未知 type 或无效尺寸会拒绝整次修改。原目录不被修改，`snapshot()` 与实例 `annotation()` 均读取新尺寸。Qt 注册从 PDF 推导或目录读取尺寸，随最终注册保存。
 
 ## 双军表与分方编号
 

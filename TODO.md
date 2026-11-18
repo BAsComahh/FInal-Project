@@ -20,7 +20,8 @@
 - [ ] P0 传播／托盘异步已接入，待用户实测：串行模型 worker 先发布 mask，独立 CPU worker 保留一在算批次＋一最新待算批次；几何按原帧成批接纳，DVMNet 仍在原模型队列。查询使用几何时间／revision，历史使用原帧图像与采样追踪状态，真实缺失、恢复、标定／尺寸／身份变化及 R／close 使旧任务失效。注册、B08 与恢复提交仍保持事务整体接纳；界面区分 Masks／Geometry 时间。本轮依用户要求不交 subagent／不跑视频回归，动态吞吐、几何正确性及长局历史待用户验证。
 - [ ] P1 复现自动恢复无效，分别检查离场、场内丢失、重新入画；区分仍在原图可见但被拉正裁剪排除与真正离开画面。核对单次搜索是否在目标缺席时用尽，以及候选／身份匹配／占用拒绝原因。实际玩法是否离场仍待确认，不据此新增自动连续重搜。
   - 2026-11-13 排查：最新 frame_5b58dfca4481 历史共95条，5个实例确已 failed，EdgeTAM／自动恢复开关及24份注册参考有效；CPU受控调度将保存的5个失败状态提交为自动恢复批次。旧历史未存阶段／搜索原因，终端已关闭，无法判定该次实际模型错误或匹配拒绝；未重跑模型。已补每场 automatic_recovery.jsonl 阶段／原因／匹配诊断、历史 recovery_phase／note及Qt侧栏错误原因；后续实测仍待完成。
-- [ ] 后续新功能：独立观众窗口与模式同步、What-if。迁移稳定后再评估移除旧客户端。
+- [ ] 后续新功能：独立观众窗口与模式同步、What-if。
+- [x] 2026-11-18 退役 OpenCV 视频客户端。`python -m frontend` 与 `python -m tools.sam3_registration` 走 Qt，独立图片／桌角／边界工具另见 [前端说明](frontend/README.md)。
 
 初次核对：2026-10-31；最新需求、研究与实施更新：2026-11-10。本文记录已经实现的能力、剩余工作和代码审阅发现。**“已实现”只表示存在对应实现，不代表真实视频准确率或解说可用性已达标。**
 
@@ -46,7 +47,7 @@
 
 ## 1. 桌面检测与标定
 
-主要证据：[桌边检测](components/boundary_detection/table.py)、[桌面设置](frontend/calibration/view.py)、[运行层](application/session.py)、[Homography](components/homography/geometry.py)。
+主要证据：[桌边检测](components/boundary_detection/table.py)、[桌面设置](frontend/qt/bridge.py)、[运行层](application/session.py)、[Homography](components/homography/geometry.py)。
 
 - [x] B01 自动提出桌边／四角，并由用户确认；检测失败转手动登记。
 - [x] B02 手动任意顺序选择四角，排序、校验凸四边形，支持撤回、清空和重新自动检测。
@@ -59,7 +60,9 @@
 
 ## 2. 单位、地形与可配置信息
 
-主要证据：[类型与实例](components/registration/units.py)、[PDF reader](components/registration/pdf_reader.py)、[规则输入](components/registration/rule_state.py)、[规则编辑表单](frontend/scene_editing/dialogs.py)。
+主要证据：[类型与实例](components/registration/units.py)、[PDF reader](components/registration/pdf_reader.py)、[规则输入](components/registration/rule_state.py)、[规则编辑表单](frontend/qt/workflows.py)。
+
+- [ ] 将 Terrain 编辑从 Live 移到 Registration。把地形标注、表单及撤销放到首次播放前的注册流程。
 
 - [x] U01 输入只需 type；绑定时分别生成实例编号。同 type 可有多个独立实例，不要求预声明数量或 ID。
 - [x] U02 独立 type 计数，重复绑定同 type 保号；解除绑定或撤回草稿单位释放编号，不重排其他实例。
@@ -71,13 +74,13 @@
 - [x] U08 单独登记地形 label、区域、类别与可选规则 Height；转换到毫米平面，支持撤回草稿点和删除最后一个地形。
 - [ ] U09 **部分实现**：地形可添加，但缺少已有地形的选择、修改、任意删除及属性配置；Obstacle 的 Height=1 约束尚未落实，见 Q05。
 - [x] U10 不将未登记的骰子、尺子、时钟等自动加入单位或规则地形；只有主动绑定的 mask／人工地形进入相关场景。
-- [x] U11 **PDF 自动尺寸已实现（2026-11-11）**：共享 PDF reader 新增官方 FAQ v0.1 的类别＋编制标准占地映射，明确毫米底座备注优先；未知／冲突／n/a 保持无尺寸并提示。`dimension_inference` 保留导入原值及规则／PDF 依据。用户随后要求移除手动入口，Qt 已删除 Tray sizes 按钮／弹窗及输入适配，只从 PDF／目录取得尺寸；旧 OpenCV 的 D30 编辑窗口与共享更新接口保留，改尺寸仍重新拟合并清除目标旧正面，注册完成后锁定。Qt／OpenCV 导入及 CLI 共用，旧 JSON 不重写。Terra 检查标准矩阵／底座声明／冲突、双军表21个type、CLI及roster覆盖／清空／来源；发现的 Single 别名问题已修复，主实现局部10例及原始 Unicode 声明检查通过，未重跑整批。证据在 outputs/refactor_checks/pdf_dimensions_terra_20261111；Qt入口移除及最终注册保存本轮未运行验收，Unicode × 的实际PDF提取及原生外观／具体特殊单位底座仍待核对。
+- [x] U11 **PDF 自动尺寸已实现（2026-11-11）**：共享 PDF reader 新增官方 FAQ v0.1 的类别＋编制标准占地映射，明确毫米底座备注优先；未知／冲突／n/a 保持无尺寸并提示。`dimension_inference` 保留导入原值及规则／PDF 依据。用户随后要求移除手动入口，Qt 已删除 Tray sizes 按钮／弹窗及输入适配，只从 PDF／目录取得尺寸；旧 D30 窗口已随 OpenCV 客户端退役。共享目录与尺寸更新逻辑继续支持类型尺寸变化后的重拟合，旧 JSON 保留。Terra 检查标准矩阵／底座声明／冲突、双军表21个type、CLI及roster覆盖／清空／来源；发现的 Single 别名问题已修复，主实现局部10例及原始 Unicode 声明检查通过，未重跑整批。证据在 outputs/refactor_checks/pdf_dimensions_terra_20261111；Qt入口移除及最终注册保存本轮未运行验收，Unicode × 的实际PDF提取及原生外观／具体特殊单位底座仍待核对。
 - [ ] U12 **可选**：通用 Range 字段与开关、纯文本军表导入。当前已有 JSON 和指定格式 PDF，尚无通用文本导入器；Range 不是默认 KoW 字段。
 - [ ] U13 **部分实现**：法术、所选装备／artefact 的原始名称可随 `options` 保留，但尚无独立配置、选择与详情展示；不能把所有带 `(n)` 的选项自动当成法术，解析出名称也不代表规则效果已经实现。
 
 ## 3. 首帧注册与保存生命周期
 
-主要证据：[视频 predictor](components/sam3/video/predictor.py)、[运行层](application/session.py)、[窗口](frontend/window.py)、[reference 导出](components/registration/references.py)。
+主要证据：[视频 predictor](components/sam3/video/predictor.py)、[运行层](application/session.py)、[窗口](frontend/qt/window.py)、[reference 导出](components/registration/references.py)。
 
 - [x] R01 首帧正点／负点提示、多对象分割及逐点撤回。
 - [x] R02 分割模式与类型标注模式分开；点击 mask＋type 或拖放 type 绑定，支持改绑与解除绑定。
@@ -143,7 +146,7 @@
 
 ## 7. 叠加层与解说交互
 
-主要证据：[视频窗口](frontend/window.py)、[显示缓存](frontend/shared/layers.py)、[查询控制器](frontend/geometry_tools/controller.py)、[独立俯视显示](components/homography/units.py)。
+主要证据：[视频窗口](frontend/qt/window.py)、[显示缓存](frontend/shared/layers.py)、[查询控制器](application/geometry.py)、[独立俯视显示](components/homography/units.py)。
 
 - [x] I01 拉正战场上的 mask 与托盘独立开关；关闭显示不影响推理或已注册身份。
 - [x] I02 已有 mask／托盘边框、实例编号、注册选中高亮；完成并播放后隐藏注册侧栏，暂停保留播放布局。
@@ -289,7 +292,7 @@ P1：影响规则可信度，建议优先处理。P2：影响数据表达、交�
 
 ### Q02 · P1 · 场景不完整的 LOS 保护只存在于界面
 
-位置：[_query](frontend/geometry_tools/controller.py)、[queries.py:47](components/game_rules/queries.py#L47)、[CLI](tools/query_rules.py)。
+位置：[当前查询入口](application/geometry.py)、[queries.py:47](components/game_rules/queries.py#L47)、[CLI](tools/query_rules.py)。
 
 UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 uncertain；独立 CLI 直接调用组件，绕过这层保护。同一输入包含“Mask 3 没有有效托盘”的警告，行内实际得到：**组件 clear，UI uncertain**。修改警告文案还可能让字符串保护失效。
 
@@ -305,7 +308,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q04 · P2 · 暂停／片段结束后不会追上当前显示帧
 
-位置：[运行调度](application/session.py)、[直播显示](frontend/live/view.py)。
+位置：[运行调度](application/session.py)、[直播显示](frontend/qt/live.py)。
 
 传播提交要求 `self.playing`。到片段结尾先 pause，再调度；人工暂停也同样关闭后续传播。因此即使已有后台任务结束，它也可能只更新到更早帧。行内调度检查：显示帧 300、上次提交 240、已暂停且后台空闲，**不会提交补算**。播放布局还隐藏了普通 mask age，容易让用户对着较新画面选择较旧几何。
 
@@ -313,7 +316,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q05 · P2 · Obstacle Height 没有落实需求约束
 
-位置：[edit_terrain](frontend/scene_editing/dialogs.py)、[场景校验](components/game_rules/scene.py)。
+位置：[Qt 地形表单](frontend/qt/workflows.py)、[场景校验](components/game_rules/scene.py)。
 
 需求将 Obstacles 的规则 Height 定为 1；地形表单所有类别共用一个可为空的数字输入，场景校验也只检查非负数。因此可登记 `kind=obstacle, height=None` 或其他数值，影响 LOS。此项由表单和校验代码确认，未做原生弹窗实测。
 
@@ -321,7 +324,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q06 · P2 · 规则面板只展示第一条警告
 
-位置：[查询显示](frontend/geometry_tools/view.py)。
+历史问题来自旧 OpenCV 查询面板。当前查询展示见 [Qt Live 控制台](frontend/qt/LiveConsole.qml)。
 
 面板只取 `warnings[:1]`，之后又按两行截断。移动接口默认就带通用估计警告，排在后面的缺失几何、朝向歧义、未支持规则等信息可能看不到。接口保存了警告并不等于操作者能读到关键限制。
 
@@ -329,17 +332,17 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 ### Q07 · P3 · FPS 统计位于播放布局提前返回之后
 
-位置：[注册页统计](frontend/registration/view.py)、[直播显示](frontend/live/view.py)。
+历史位置为旧 OpenCV 注册页和直播页。
 
 重构前播放态 `_render` 提前返回，后面的 `if flow.playing` 不会采样；现已按职责迁入注册页的同一统计分支，直播页另行绘制，正常 playing=True 时仍处于 PLAYBACK，因而该分支仍不采样。相关 deque、last_rendered_frame、重置处理和显示文本成为无效维护负担。这是控制流结论，未把旧短测 FPS 当作当前指标。
 
-- [ ] Q07 若继续测 FPS，将采样放到共同渲染路径；若产品不展示它，则删除整组无效统计状态。两者选一即可。
+- [x] Q07 旧 OpenCV 视频客户端已退役。
 
 ### Q08 · P3 · 旧的整表加载路径与当前双军表入口重复
 
-位置：[RegistrationController.load_units](frontend/registration/controller.py)、[VideoApplication._unit_action](frontend/app.py)。
+位置：[RegistrationController.load_units](application/registration.py)。
 
-仓库内没有 `load_units(...)` 调用点；当前侧栏导入走 `import_unit_list`，`_unit_action` 还保留旧 `load` 别名并转到 A 导入。两套路径的状态清理不完全一致：旧 `load_units` 继承绑定，却不清理相应正面。当前正常界面不走该路径，故不作为已发生的界面故障。
+当前侧栏导入走 `import_unit_list`，旧 OpenCV 导入别名已退役。仓库内没有 `load_units(...)` 调用点，外部应用调用尚未核对。旧接口继承绑定时仍存在相应正面清理的差异。
 
 - [ ] Q08 确认没有需要兼容的外部调用后删除旧路径／别名；若要保留公共接口，则统一到当前验证与清理路径。不要再增加一层转发封装。
 
@@ -355,7 +358,7 @@ UI 的 `_query` 搜索 warning 中的字符串 `incomplete`，将 clear 改为 u
 
 - [ ] Q10 同步 Harris 已移除、box prompt 的版本差异、动态状态人工维护、72／48 输入方向，以及“素材播放”和“历史回放”的区别。`docs/` 被 Git 忽略也意味着其中的更新默认不会纳入版本记录；是否调整忽略范围另作决定，本轮不改 `.gitignore`。
 
-此外，[draw_text](frontend/shared/drawing.py) 的非 ASCII 字体写死为 Windows 微软雅黑。当前 Windows 环境可以沿用；若以后需要在 ICF／Linux 或其他电脑运行界面，再增加字体回退即可，不必现在扩展 UI 框架。
+旧 OpenCV 视频客户端的文本绘制随该客户端退役。Qt 仍维护自身的字体加载。
 
 不建议仅为减少行数合并所有几何函数或所有线程：纯 Python 规则几何与 OpenCV／NumPy 图像几何的边界有价值；SAM 串行任务保证会话顺序，独立规则线程避免查询阻塞模型。优先删除失效分支、统一相同语义的规则判定与数据传递。
 

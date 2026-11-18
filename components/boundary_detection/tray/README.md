@@ -4,7 +4,7 @@
 
 ## 最小百分比像素实验
 
-正式 Qt／OpenCV 入口默认 adaptive。`fit_registered_trays(frame, prediction, context, previous=..., reuse_stable=True, source_frame=...)` 用最后一次实际拟合的 mask 判断稳定性。质心位移不超过参考短边的 5%，且同一图像坐标中的二值 mask IoU 至少为 0.90 时，复用已接纳的结果并保留实际拟合基准。基准随实际拟合更新，慢移可累计触发局部重拟合。
+Qt 客户端默认 adaptive。`fit_registered_trays(frame, prediction, context, previous=..., reuse_stable=True, source_frame=...)` 用最后一次实际拟合的 mask 判断稳定性。质心位移不超过参考短边的 5%，且同一图像坐标中的二值 mask IoU 至少为 0.90 时，复用已接纳的结果并保留实际拟合基准。基准随实际拟合更新，慢移可累计触发局部重拟合。
 
 局部初值和稳定复用都要求图像大小、映射、尺寸及身份相容。首帧编辑、恢复目标、R、实际缺失或标定变化重新建立几何。基准保存质心、面积、包围盒和裁剪后的原分辨率二值 mask 位串。失败的实际拟合也记录 mask 基准，等待后续 mask 有明确变化再重试。当前结果与 profile 区分实际拟合帧 `fit_sample.frame_index` 和观测帧 `observation_frame_index`。
 

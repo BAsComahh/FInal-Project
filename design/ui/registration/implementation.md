@@ -2,6 +2,8 @@
 
 用户已授权先提交 I14 阶段 checkpoint，再实现 Qt 主窗口骨架和真实注册。基线提交为 `292dc30`；I14 的完整验收及已记录问题保持开放。当前独立预览继续作为设计样例保存。
 
+2026-11-18：旧视频客户端已退役。本文保留首次接入节点的设计与证据，当前注册操作见 [Qt 客户端](../../../frontend/qt/README.md)。
+
 ## 设计与范围
 
 沿用 Registration.qml 的浅灰蓝、视频主区和 A／B 类型栏。正式入口为 `python -m frontend.qt VIDEO`，与 OpenCV 入口并存。一个 Qt 窗口对应一个 MatchApplication；QTimer 驱动 tick，QObject 只适配命令及展示状态，QML 不访问 GameData／worker／Future。使用 Qt 官方 QQuickImageProvider 向 Image 提供独立 QImage，不让渲染线程访问比赛核心。Image 使用同步提供器和递增 URL、关闭缓存；点击携带所显示图像版本，旧版本拒绝，源坐标与 FrameRef 由适配器提交。

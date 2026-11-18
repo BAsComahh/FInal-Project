@@ -4,7 +4,7 @@
 
 `Masks`／`Trays` 胶囊仅控制静态叠加层绘制可见性，关闭 `Trays` 时后台矩形拟合与连续 `Distance`／`LOS`／`Move` 几何查询照常运行，不再暂停计算或回退到定帧快照模式。
 
-客户端接入真实 MatchApplication，可重新注册，也可载入已完成注册的真实 mask／绑定再初始化追踪。保留 [独立注册预览](../../design/ui/registration/preview.py)；这里是新客户端入口。注册的部分受控接口与两页离屏加载已通过；新增 Live 单位菜单／信息与底部查询控制台，受控主路径已检查，真实模型与原生交互待验收，完整 UI 尚未迁移。
+Qt 是桌面视频客户端。它通过 MatchApplication 提供注册及存档载入、Live、恢复、B08、表单和 Replay。真实模型、原生交互仍待完整验收。[独立注册预览](../../design/ui/registration/preview.py)继续用于设计核对。
 
 ```powershell
 cd 'C:\Users\vasco\Desktop\FInal Project'
@@ -23,9 +23,9 @@ conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIO
 
 该存档包含24个对象，自动定位到45:00；存档帧覆盖 `--start`，`--seconds` 从该帧计时，省略则播到结尾。载入恢复初始mask、原单位ID／类型／属性、桌面标定、地形及已有矩形，注册保持锁定。每次载入新建reference／history目录，原存档不改写；不恢复上次播放进度、追踪器内部记忆或中途失败状态。视频帧不匹配、文件不全会显示拒绝原因；要换存档先Reset。
 
-与 `python -m frontend` 共用视频、目录、segmentor、tracker、起点、时长及推理频率等参数；省略 `--seconds` 默认从起点播放到视频结尾，显式传正秒数才限定区间。完整默认值见 [启动参数](../README.md#启动参数默认值)。`--preview-width` 设定初始窗口宽度的画面部分；视频保持比例，黑边点击不作提示。Qt 不改变模型的自动设备选择。安装目录仅提供可选 Qt，不向模型环境自动安装依赖。
+`python -m frontend` 和 `python -m tools.sam3_registration` 均进入 Qt，参数见 [启动参数](../README.md#启动参数默认值)。`--preview-width` 设置初始画面宽度，视频保持比例。Qt 依赖可单独安装到 `outputs/ui_preview/deps`。
 
-追踪默认不额外限速，worker 空闲时处理最新未消费帧；需要限制 GPU 工作量时可显式设置 `--inference-fps`，`--stride` 已移除。实际更新频率受模型耗时、视频帧率与界面 tick 影响，不保证逐帧处理，也不排队追赶旧帧。
+追踪默认上限为 1.0 Hz。Worker 可提交时处理最新未消费帧，`--inference-fps` 可调整上限。实际更新频率还受模型耗时、视频帧率与界面 tick 影响。
 
 A／B 类型列表使用 48 px 高的紧凑条目，只显示分类名称，例如 `Champion Hero (Inf)`；没有分类字段的目录回退到单位名／名称。名称最多换行两行，超出再省略，拖放预览同样处理。不再显示 Type 编号、详情或 Next；点击／拖放继续绑定原 type，同分类的不同配置不会合并。
 
@@ -50,6 +50,6 @@ mask／facing 不确定信息现在集中在右侧 A／B 双栏，只有需要�
 
 2026-11-11 独立验收：CPU 真实视频解码配受控模型输出覆盖桌角／尺寸拒绝、点／多对象／撤回、A／B 导入／绑定、尺寸／正面、一次保存锁定、播放交接及 Reset。窗口加载的按钮同名冲突及 Flow 只读属性赋值已修正；用户报告后由 Terra-low 定向复查，桌面设置与注册两页均在 CPU offscreen/software 下加载，无属性绑定错误。当前窗口布局／实际点击拖放、取消文件选择、Reset 在途结果、真实模型／GPU及原生桌面未验证；受控播放不证明真实 tracker 或性能。证据在 `outputs/refactor_checks/qt_registration_terra_20261111`。
 
-Live 后续集中验收检查了真实 QML 点选／半环／第二目标、两种窗口大小、公共几何距离／有正面 LOS／移动候选、固定菜单与更新选框、过期叠加及工具／Reset 清理、短段源推进。左边缘遮挡已修正并做局部 QML 复查。真实 tracker 持续输出／历史写入、所有 Estimated 组合、旧 OpenCV 完整绘制和原生桌面／GPU仍未完整验证，详见 [节点证据与范围](../../design/ui/live/implementation.md)。
+Live 后续集中验收检查了真实 QML 点选／半环／第二目标、两种窗口大小、公共几何距离／有正面 LOS／移动候选、固定菜单与更新选框、过期叠加及工具／Reset 清理、短段源推进。左边缘遮挡已修正并做局部 QML 复查。真实 tracker 持续输出／历史写入、所有 Estimated 组合和原生桌面／GPU仍未完整验证，详见 [节点证据与范围](../../design/ui/live/implementation.md)。
 
 代码导航：`window.py` 加载可用字体并组装 Qt、`Theme.qml` 集中管理深色控制台配色、字体及字号/圆角刻度、`ConsoleButton.qml` 提供统一按钮样式（`visualFocus` 仅在键盘导航显式描边）、`BoardBadges.qml` 在矢量层渲染圆角胶囊名牌与地形标签、`bridge.py` 适配输入／展示状态与独立目录/名牌信号、`live.py` 维护窗口内 Live 选择与侧别投影并调用几何查询、`workflows.py` 适配辅助流程表单校验／交互叠加及带起止虚影与运动轨迹箭头的 Replay 棋盘绘制、`board.py` 拆分为纯视频帧、后台线程（`qt-overlay`）按紧密包围盒及二维积分占用图自动避让摆放名牌并输出布局的透明静态叠加层，以及瞬时响应选框／查询／提示点／桌角的透明交互层，分别通过 `BoardImages` 提供拥有自身像素的 QImage，QML 三层叠放交由 Qt 场景图合成，不再在每帧视频播放时逐像素混色。核心不导入 Qt。使用方式依据 Qt 官方 [Image provider](https://doc.qt.io/qtforpython-6/PySide6/QtQuick/QQuickImageProvider.html)、[Image](https://doc.qt.io/qt-6/qml-qtquick-image.html) 和 [FileDialog](https://doc.qt.io/qt-6/qml-qtquick-dialogs-filedialog.html)；同步提供图像、关闭缓存与点击版本校验是本客户端的选择。

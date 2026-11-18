@@ -1,22 +1,18 @@
 # 桌面视频界面
 
-已完成注册可通过两客户端共用的 `--registration DIRECTORY` 或 `--registration DIRECTORY/prompts.json` 载入，Qt 注册页另有 `Load registration`。存档帧覆盖起点，恢复原ID／mask／标定／属性并锁定注册；模型就绪后播放，每次新建reference和history，不恢复中途追踪状态。Qt示例见 [Qt入口](qt/README.md)。
-
-当前实时facing暂时停用，代码和注册初始资料保留；直播不再显示Missing及facing关注提示。后台失败锁／自动恢复／手动Recover仍有效，不能把隐藏提示理解为追踪正常。
-
-`Masks`／`Trays`（以及旧客户端 `M`／`T`）仅控制叠加层绘制显示；隐藏托盘图层不停止后台矩形拟合，直播 `Distance`／`LOS`／`Move` 查询始终使用持续更新的已接纳托盘几何。
-
-首帧先检测并确认桌面边界，再确认桌面长宽，用 Homography 拉正并聚焦战场，进入单位注册与传播流程。窗口显示和交互放在 `frontend/`，运行／业务流程归 `application/`，模型及算法留在 `components/`。界面文案使用英文。旧客户端使用 OpenCV；新 [Qt 客户端](qt/README.md) 已接入真实注册、Live 单位菜单／几何查询，以及恢复／B08／资料地形编辑／回放的辅助入口。部分受控路径已检查，真实模型、候选确认与重标定成功等路径仍待验收；完整验证前保留旧客户端。
+Qt 是唯一的桌面视频客户端。它提供首帧注册、Live 几何查询、恢复候选审核和手动矫正、B08、单位资料与地形编辑，以及 Replay。安装、启动和交互见 [Qt 客户端](qt/README.md)。
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
+conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
 ```
 
-视频路径为必填；起点默认 0 秒，省略 `--seconds` 播放到片尾，显式传正的有限秒数才限定区间。无需传军表参数，注册界面通过 `Import list A`／`Import list B` 分别选择单方 PDF 或 JSON。默认 [ABC 测试资料](../inputs/units.video_estimate.json) 放在 A 栏：Type 1 为 155 × 50 mm，Type 2／3 为 205 × 80 mm；B 栏等待导入。这些值来自假定桌面尺寸的近似换算。独立 [read_unit_list](../components/registration/README.md#pdf-军表-reader) 工具及原命令行入口仍可使用。
+`python -m frontend` 和 `python -m tools.sam3_registration` 使用同一个 Qt 入口。独立图片分割、桌角与边界诊断由 `tools/` 调用相应查看器。无窗口调用使用 [MatchApplication](../application/README.md)。
+
+已完成注册可通过 `--registration DIRECTORY` 或 `--registration DIRECTORY/prompts.json` 载入，也可在注册页选择 `Load registration`。程序以存档帧开始，恢复原 ID、mask、绑定、标定和属性，并锁定注册。每次启动均创建本次 reference 和 history。
 
 ## 启动参数默认值
 
-Qt 与 OpenCV 共用 `frontend/arguments.py`，未传参数时的有效设置如下；手动指定的命令行值覆盖对应默认值。
+启动参数在 `frontend/arguments.py` 定义，默认值如下。
 
 | 参数 | 默认值／行为 |
 | --- | --- |
@@ -24,7 +20,7 @@ Qt 与 OpenCV 共用 `frontend/arguments.py`，未传参数时的有效设置如
 | `--start` | 0 秒，选作注册首帧 |
 | `--seconds` | 不限时，播放到视频末帧 |
 | `--units` | `inputs/units.video_estimate.json`，ABC 测试目录；可由 A／B 导入替换 |
-| `--inference-fps` | 不额外限速；指定正数时才限制调度频率，源视频保持自身时钟／帧率 |
+| `--inference-fps` | 1.0 Hz；源视频保持自身时钟／帧率 |
 | `--preview-width` | 960 像素的初始画面宽度，提示仍用完整拉正帧坐标 |
 | `--device` | 自动选显存最多的可用 GPU，无可用 GPU 时 CPU |
 | `--segmentor` | `facebook/sam3`，初始分割模型 checkpoint |
@@ -34,25 +30,25 @@ Qt 与 OpenCV 共用 `frontend/arguments.py`，未传参数时的有效设置如
 | `--profile` | 关闭额外 GPU 同步计时 |
 | `--output-dir` | `outputs/sam3_registration` |
 
-正式客户端不再提供 `--calibration`／`--board-size-in`，桌角和物理尺寸在界面确认（尺寸仍预填 72×48 英寸）。托盘搜索固定 adaptive。稳定时复用矩形，重拟合时质心位移超过托盘短边 50% 则直接完整搜索。其余先用旧框拟合，失败时完整回退。默认不额外限制追踪调度，worker 空闲时处理最新未消费源帧；只有显式 `--inference-fps` 才设置上限，`--stride` 已移除。串行执行和重复／已消费帧保护继续生效。`--tracker` 选择后端，`--tracker-model` 仅覆盖该后端权重。
+界面确认桌角和物理尺寸，预填 72×48 英寸。托盘搜索固定 adaptive。稳定时复用矩形，重拟合时质心位移超过托盘短边 50% 则直接完整搜索。其余先用旧框拟合，失败时完整回退。追踪调度默认间隔 1 秒，worker 在可提交时处理最新未消费源帧。`--inference-fps` 可调整上限，`--tracker` 选择后端，`--tracker-model` 覆盖该后端权重。
 
-算法试运行门槛另在 `application/config.py`：持续缺失 10 秒；EdgeTAM 单次自动恢复启用，相似度 0.85／分差 0.10；DVMNet facing 启用，候选角误差分差 20°。稳定托盘复用门槛为质心移动 2%／面积变化 10%／轮廓 IoU 0.90／可靠长轴 3°；动作记录为位置容差 10 mm／角度容差 10°／停稳 5 秒。这些与播放时限独立，属于现有试运行设置，不是精度校准结果。
+试运行设置见 `application/config.py`。持续缺失门槛为 10 秒，EdgeTAM 单次自动恢复采用相似度 0.85／分差 0.10。实时 facing 默认停用。托盘稳定复用要求质心移动不超过短边的 5%，且原图 mask IoU 至少为 0.90。动作记录的位置容差为 10 mm、角度容差为 10°，停稳时间为 5 秒。
 
 ## UI 重构设计与 Qt 接入（D33／D34）
 
 最新 Qt 修订统一采用 [竖排信息卡／右半环参考](../design/ui/live/unit-info-reference.png)，边缘通过整体限位／缩放保持格式。Distance 数值直接标在测量连线上，不展开结果抽屉；LOS／Move 仍用抽屉，Distance 提示及完成操作留在控制栏。
 
-前置的应用核心解耦已按 D35／I14 迁出主体，以 `292dc30` 保存阶段 checkpoint；完整验收仍开放，见 [前端解耦重构计划](../前端解耦重构计划.md)。现有 OpenCV 和新 Qt 客户端都通过 application 命令及快照工作。Qt 已接入注册及 Live 主交互；下文的恢复／回放及完整规则表单等操作仍描述 OpenCV 完整客户端。
+应用核心按 D35／I14 迁出主体，以 `292dc30` 保存阶段 checkpoint。Qt 通过 application 命令及快照工作，验收状态见 [前端解耦重构计划](../前端解耦重构计划.md)。
 
-2026-11-10 确认先设计、再实施／重构：操作者控制台沿用现有流程和视频为主结构，但重做交互；新增独立观众窗口，自动跟随控制台 Live／Replay／What-if 模式。Qt 当前为一个操作者主窗，完整旧流程另有 OpenCV 入口；双窗口和 What-if 没有因交互草图而成为现成功能。设计方案、待评审边界与实施状态分别见根目录《项目思路》《待澄清列表》及 TODO I13。
+2026-11-10 确认先设计、再实施。操作者控制台保持视频为主。独立观众窗口计划自动跟随控制台 Live／Replay／What-if 模式，需求与状态见 [TODO I13](../TODO.md#7-叠加层与解说交互)。
 
-后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；该版 Live 主交互现已接入 Qt，并完成受控主路径检查，其他模式及辅助流程继续另行迁移。
+后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；该版 Live 主交互现已接入 Qt，并完成受控主路径检查，后续辅助流程见 Qt 操作说明。
 
 参考文件随仓库存档：以 [单位半环／底部抽屉](../design/ui/unit-radial-console.html) 为当前设计基线，[早期双布局比较](../design/ui/match-console-wireframes.html) 仅供查看取舍。两者是样例内联 HTML，详细适用范围见重构计划第 1.1 节。
 
 ### 单窗口 Qt 注册预览（D36）
 
-独立样例位于 [design/ui/registration](../design/ui/registration/preview.py)，只读已有注册画面／mask，提供 A／B 示例类型、类型绑定及正负点／撤回；没有 SAM 推理或 reference 导出，不影响下文的正式 OpenCV 流程。用户已认可此技术方向，完整 UI 尚未迁移。
+独立样例位于 [design/ui/registration](../design/ui/registration/preview.py)，只读已有注册画面和 mask，提供 A／B 示例类型、类型绑定及正负点／撤回。预览数据仅在内存。
 
 ```powershell
 # Optional Qt modules are isolated from the model environment.
@@ -64,75 +60,23 @@ Qt 与 OpenCV 共用 `frontend/arguments.py`，未传参数时的有效设置如
 
 ## 操作流程
 
-启动时立即在后台加载模型，同时读取区间首帧并执行现有 LSD 桌面检测。第一屏在原图上突出 `TL / TR / BR / BL` 四个桌角，下方大字询问 `Are the table corners aligned?`，提供两个主要操作：
+1. 自动检测首帧桌角，需要时手动修正。确认桌角和物理长宽后，程序拉正棋盘。
+2. 在 Registration 里添加正／负点，导入 A／B 军表并绑定类型。托盘尺寸来自 PDF 推导或目录，绑定确认当前 mask 后才拟合目标托盘。
+3. 用 `Front`／`F` 登记可用托盘的初始正面。`Save`／`S` 保存一次并锁定注册，`Start video`／`Space` 初始化所选追踪器后开始播放。Reset 开启新注册。
 
-- 准确：点击 `YES / Continue` 或按 `Y`／`Enter`，锁定四角并进入尺寸确认页。
-- 不准确：点击 `NO / Manual correction`，或按 `N`／`M`，任意顺序点击四个桌角，程序自动排序并标注角名，再确认。
-- 检测失败：直接进入手动模式；重复点、共线点或不能形成凸四边形的四点不能确认。
-- 手动模式提供 `Undo` 和 `Clear` 按钮；也可用右键、`Ctrl+Z`／`U` 撤回，`R` 清空。四点齐全后仍可撤回；`A` 重新自动检测，`Esc` 退出。
-
-尺寸页显示 `Length (in)` 和 `Width (in)` 两个输入栏，默认 72、48，分别对应 TL→TR 的横向长度和 TL→BL 的纵向宽度。点击输入栏或按 Tab 切换，输入数字会替换被选中的默认值，支持小数、退格、Ctrl+A 和 Enter；空值、零和非有限值不能继续。`Back to corners [B]` 返回四角检查，手动标记的 Undo 仍可用。尺寸在此界面确认，不再通过启动参数预填标定或尺寸。
-
-确认尺寸后复用 Homography 组件，将桌面四边形拉正为矩形并填满战场画面，同时建立毫米坐标。默认 72 × 48 inches 是临时测试假设，尺寸确认不等于真实测量。注册显示、SAM 输入、mask 和 reference 裁剪使用拉正图像坐标；托盘、地形及正面另保存原视频像素锚点，毫米和显示坐标为带标定版本的派生值；每一版标定期间沿用同一变换和尺寸，镜头变化后需显式重新标定。修改外部标定的尺寸时同步缩放其两轴毫米坐标。
-
-原始桌角和确认的英寸／毫米尺寸保存在最终 `prompts.json.table_boundary`，角点坐标空间为 `source_image_pixels`。注册元数据标明 `rectified_table_pixels`，保存原视频尺寸、拉正尺寸及正反矩阵；同样的信息会随每个 reference 保存。手动点不受图像四象限限制，强透视或接近菱形时仍需核对角名。
-
-进入注册后：
-
-侧栏上方点击 `Import list A [O]`／`Import list B [P]`，直接选择各方的 Mantic Companion PDF，或选择已有的单方类型 JSON。可在模型准备期间先导入。下方左右两栏分别显示 Type 1、Type 2…，附兵种／编制和配置摘要；鼠标滚轮只滚动所在的一栏。文件读完并通过验证后才替换该方列表；取消或失败保留原名单。重新导入某方会解除该方的旧类型绑定及正面标记，保留分割 mask 和另一方的绑定，按新名单重新对应即可。一个按钮一次只接受一方名单，不接受双方合并的 JSON。
-
-1. 权重从启动即加载，首帧特征则等待桌角、尺寸确认和 Homography 完成后，在拉正首帧上计算；不预先计算原图特征。全部准备完成才接受单位提示。加载权重显示已完成项数和百分比，准备模型、转入 GPU 和首帧特征计算等阶段显示滚动条；就绪后自动隐藏。首次点击仍需提示解码和记忆编码，实际耗时需实测。
-2. 默认是分割模式：左键添加正点、右键添加排除点，`N` 新建对象。可以先分割所有目标，不指定任何 type。
-3. 按 `Tab` 或侧栏模式按钮切换到标注模式：点击 mask 再点击某方 type，也可以直接把 type 拖到 mask 上。List A 的 Type 1 对应内部类型 A1，实例依次生成 A1.1、A1.2；List B 的 Type 1 则生成 B1.1 等。按下 type 时不绑定，释放到目标才生效；拖到空白处取消。已绑定的 mask 可以重复选中并改绑，同 type 保留编号，换 type 释放旧编号而不重排其他单位。选中目标显示白色轮廓。
-4. `S` 完成注册，或按空格完成并播放：统一保存一次最终 reference，锁定点及类型修改，然后传播 mask。
-5. 首次成功播放后，自动隐藏类型侧栏、注册按钮和提示点，保留视频、MASK／TRAY、回放、重新标定和规则工具。播放期画面与源时钟持续运行，Space／Q 清除工具并回到最新实况，不提供 Hold／显示暂停；区间结束仍保持播放布局。`R` 恢复注册界面并开始新注册，实况页的 `Esc` 关闭窗口，回放页的 `Esc` 返回实况。开始播放后始终锁定 SAM 提示、type 和尺寸编辑。
-
-首次播放前可用 `Ctrl+Z`／`U` 撤回点提示，`Unbind`／退格键仅解除类型绑定。`Tab` 回到分割模式可继续修点，`N` 会自动进入分割模式以添加新 mask。标注模式下点击只选 mask，不添加 SAM 提示；改绑只更新单位信息与尺寸相关托盘候选，不重新分割。选择类型或切换标注模式时退出当前规则查询，避免查询拦截拖放。`B` 保留为重复绑定当前 type 的快捷键，正常点击／拖放无需它。首次播放后导入和类型编辑一并锁定；R 重置注册保留两份名单。
-
-点击注册侧栏的 `Tray dimensions (mm)`，在独立窗口中批量填写尺寸：List A／List B 各一列，每个 type 显示编号、兵种／编制，以及 `Width (mm)`／`Depth (mm)`。宽指正面边长，深指前后长度；同 type 的实例共用尺寸。已有尺寸预填，两列分别滚动；两格都空表示未知，只填一格、非正数或非有限数会阻止保存。
-
-`Save` 整表验证后更新内存目录，已有 mask 自动重新拟合；修改尺寸的实例需要再次用 F 标记正面。`Cancel`、Esc 或关闭窗口保留原值。模型准备期间也可填写；S／首次播放后锁定尺寸编辑，最终尺寸随单位目录和 reference 保存，R 保留编辑后的目录。原始 PDF／JSON 不被覆盖，重新导入某方仍以新目录为准，不自动套用旧手填尺寸。PDF 导入已按官方 FAQ v0.1 的类别＋编制表自动填入标准尺寸，明确毫米底座备注优先；未知／冲突仍为空并提示，不套用 ABC 估算值。尺寸窗口可人工覆盖，导入原值与依据另存 `dimension_inference`；旧 JSON 需重新导入原 PDF 才取得映射。缺少已绑定单位尺寸时，TRAY 仍提示 `NO SIZES`。
-
-红绿提示点只显示当前对象；按 N 或选择另一个对象时，上一对象的标记隐藏，点提示数据仍保留。右侧不再提供上一／下一 mask 按钮，注册时仍可点击 mask、使用数字键或 `[`／`]` 选择目标。
-
-视频按源帧率播放；默认 worker 空闲时处理最新未消费帧，可显式用 `--inference-fps 2` 将提交频率限制为每秒最多两次。每个视频帧先应用固定 Homography，再用于显示或 SAM 推理。模型忙时显示上一份结果，图层可能落后于当前视频；调试文字仅在注册布局中显示，无上限状态显示为 uncapped。
-
-## 显示图层
-
-- `MASK [M]` 按钮或 `M`：开关 mask 色块、轮廓和编号。
-- `TRAY [T]` 按钮或 `T`：开关拟合托盘的矩形边框和编号。
-
-两个开关独立，默认均打开；关闭图层不影响推理、注册、reference 或单位 ID。图层只在新结果／标注变化时重建，正常播放混合缓存后的像素。
-
-矩形层使用现有 `fit_tray`，需要类型表中的 `dimension.width_mm/depth_mm` 和属于同一视频视角、以毫米输入的桌面标定：
-
-```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend inputs/你的录像.mp4 --units inputs/你的类型表.json --seconds 30
-```
-
-标定需要 `image_to_board` 和 `board_size`，格式来自已有 Homography 工具。也可在完成注册前点击右侧 `Load tray calibration [C]` 或按 C，选择对应视频视角的毫米标定 JSON；已有 mask 和尺寸时会在后台补算矩形。只有像素拉正矩阵、未提供实际桌面尺寸的标定不能用于毫米托盘拟合。
-
-毫米标定仍按原视频坐标提供，界面将其与拉正逆矩阵组合，使托盘拟合输入的拉正图像正确映射到实际平面。
-
-TRAY 按钮显示当前状态：`NO CALIB` 缺标定、`NO SIZES` 缺已绑定单位的尺寸、`WAIT MASK` 等待分割结果、`FITTING` 后台计算中、`ON (数量)` 已有矩形、`CHECK FIT` 拟合未通过需检查、`NO FIT` 暂无可显示候选。未绑定尺寸或 mask 消失的单位不生成矩形，不使用 mask 包围框代替托盘。示例类型表的尺寸是示例值，不能代替实际测量。
-
-首次绑定类型后，后台为已有 mask 补算矩形；之后每次传播使用同一推理帧和对应 mask 更新托盘。类型改绑会清除旧矩形并补算。拟合与 SAM 在一个后台线程串行执行，不占用窗口线程；单位较多时会增加图层更新延迟。矩形仍是待审阅候选，尚无真实视频精度结论。
+直播的 Mask 和 Geom 各有观测时间。传播先发布 mask，托盘由独立 CPU worker 用同帧图像和 mask 拟合。`Masks`／`Trays` 控制显示，后台持续更新托盘，Distance、LOS 和 Move 使用最近接纳的有效几何。
 
 ## 结构
 
 ```text
-frontend/__main__.py                 命令行入口
-frontend/window.py                   OpenCV 窗口生命周期与事件循环
-frontend/app.py                      流程组装、阶段衔接与输入路由
-frontend/presentation.py             注册选择、几何工具／单位选择（不复制比赛事实）
-frontend/registration/               首帧布局、提示点适配、军表拖放和尺寸表单
-frontend/calibration/                桌角／尺寸草稿及绘制
-frontend/live/                       LIVE 画面与只读失败名单
-frontend/replay/                     历史场景绘制及键盘适配
-frontend/recovery/                   候选绘制、点选和原实例拖放
-frontend/geometry_tools/             几何工具控件和叠加缓存
-frontend/scene_editing/              表单轮询、屏幕点收集及地形／正面绘制
-frontend/shared/                    绘制、视口及图层
+frontend/__main__.py                 Qt 兼容启动入口
+frontend/qt/                         Qt Quick 控件、窗口、画面和工作流适配
+frontend/arguments.py                视频命令行参数
+frontend/presentation.py             单位不确定项的展示判断
+frontend/shared/layers.py            查询几何叠加
+frontend/image/                      独立图片分割与注册工具
+frontend/corner_picker.py            独立桌角工具
+frontend/boundary_viewer.py          独立边界阶段诊断
 application/app.py                   无窗口比赛入口、tick、快照、reset／close
 application/session.py               源时钟、结果接纳、generation、历史生命周期
 application/task_worker.py           模型加载与串行任务
@@ -157,11 +101,7 @@ components/boundary_detection/table.py  可复用桌角检测接口
 components/boundary_detection/tray/  已有托盘拟合及批量适配
 ```
 
-`VideoWindow` 通过 `window.app` 持有现有 `VideoApplication`。它组装窗口适配器并调用同一个 `MatchApplication`；TABLE／REGISTER／PLAYBACK／RECALIBRATE 来自应用快照。唯一 GameData 属于应用内部，UI 不能取得可写业务对象、worker 或视频句柄。S 锁定与开始播放分别处理；核心 tick 不依赖 render，恢复／B08／回放期间源时钟继续。
-
-入口保持 `python -m frontend VIDEO` 和 `python -m tools.sam3_registration VIDEO`。无窗口驱动使用 `from application.app import MatchApplication`，接口说明见 [application](../application/README.md)。公共业务命令返回 accepted／rejected／pending；UI 显示拒绝原因，后台错误仍在对应流程中接纳。输入／文件错误转回执，内部合同违例不伪装为空结果。
-
-业务修改先看 application 对应流程，界面修改看 frontend 对应 view／表单及 presentation.py。应用仅组合 components，不导入 frontend／Qt／Tk 或 HighGUI；独立图片与边界诊断窗口保持原有用途。回放由 application/replay.py 管理固定边界与游标，frontend/replay 只绘制；what-if、正式 Qt 迁移与观众窗口仍未实现。
+每个 Qt 窗口使用一个 `MatchApplication`。应用持有比赛状态、源时钟、几何和历史，Qt 通过命令与快照接入。恢复、B08 和 Replay 期间，核心继续推进源时钟。接口说明见 [application](../application/README.md)，Qt 文件导航见 [Qt 客户端](qt/README.md)。
 
 本次核对了 Meta 官方跟踪源码、HF 文档和实际安装的 Transformers `5.18.0` 会话接口，继续使用现有提示更新和传播方法。参考：[Meta 跟踪源码](https://github.com/facebookresearch/sam3/blob/main/sam3/model/sam3_tracking_predictor.py)、[HF 视频接口](https://huggingface.co/docs/transformers/model_doc/sam3_tracker_video)。目录拆分、图层开关及托盘结果衔接属于项目集成。
 
@@ -258,21 +198,21 @@ segment = read_event_history(history_path, events[0]["event_id"]) if events else
 
 ## 追踪失败判定与只读名单
 
-完成注册后启用持续无 mask 判定。修改 [config.py](config.py) 的 `TRACKING_DISAPPEARANCE_SECONDS` 可调整缺失阈值，默认 10 秒，须为正的有限数；程序启动时读取，不新增设置控件。首次无有效 mask 的源视频时间保存为 `disappeared_time`，不同源帧的后续缺失观测才推进计时。阈值前恢复非空 mask 自动清零；单纯卡顿、同帧刷新和显示冻结不累计新的失败证据。
+完成注册后启用持续无 mask 判定。修改 [config.py](../application/config.py) 的 `TRACKING_DISAPPEARANCE_SECONDS` 可调整缺失阈值，默认 10 秒，须为正的有限数；程序启动时读取，不新增设置控件。首次无有效 mask 的源视频时间保存为 `disappeared_time`，不同源帧的后续缺失观测才推进计时。阈值前恢复非空 mask 自动清零；单纯卡顿、同帧刷新和显示冻结不累计新的失败证据。
 
 `app.session.data.tracking[unit_id]` 保存 `visibility`（最近一次是否有非空 mask）、`status`（tracking／pending／failed）、`disappeared_time`、最近观测帧／时间／标定版本及 `last_accepted_position`。最后位置有自己的源帧与版本；它表示按当前业务假设曾被接纳，不是测得的身份置信度。显式 `routed=True`／`removed=True` 的属性令记录不在场并排除失败名单；正式移除编辑入口尚未实现。
 
-EdgeTAM 超时先进入自动搜索，未能接回才在播放页出现 A／B 双列；名单显示 ID、type、Damage 摘要及最后位置时间，支持分别滚动，没有 Damage 时显示 `?`。失败后原追踪器自行返回的 mask 标为 `[Estimated]`，仍保持失败，不进入规则、朝向更新或有效位置历史；独立恢复流程确认后才解除锁定。已有 mask 但拟合失败只导致几何不可用，不进入这份失踪名单，旧位置不自动填回。非 EdgeTAM 后端保留原失败显示流程。
+Qt 的 A／B 关注栏显示 Estimated mask 和待审核候选。失败后原追踪器自行返回的 mask 仍保持失败，不进入规则或有效位置历史，独立恢复确认后才解除锁定。有 mask 但拟合失败时，位置几何单独标记不可用。
 
 EdgeTAM 失败实例先进入内部 Missing；`recovery_phase=queued/searching` 时不列入人工名单。串行 worker 进行一次 SAM 文本搜索与 DINO 匹配，全部当前 Missing 参考用于防止实例竞争，但只有本轮 queued 实例收到尝试；不按帧重复搜索。正常实例 mask 有任意像素占用的候选即保守排除，其他实例争同一／重叠候选也不自动分配。可靠结果按原 ID 在同一观测帧接回；其余转 `review/manual` 并显示 A／B 人工名单。R 清空阶段，B08 作废旧候选并保留原 ID／失败锁。恢复不解锁首帧注册。
 
-点击名单中的 ID 或 `Recover units` 打开恢复窗口；有候选时显示黄色 mask，`Correct` 确认、`No / Search again` 发起一轮新的单次搜索。`Clear / Retry` 丢弃候选并进入正负点手动补标；取消保留失败状态。候选尚未被接纳时持续传播但不写有效历史，一旦消失就作废；不能用旧确认接纳新候选。No 尚未实现跨帧排除被拒目标，因此可能再次提出同一区域，规则见 [CL08](../待澄清列表.md#cl08-单次自动尝试与-no-后的候选排除)。
+通过 `Recover units` 进入候选审核；有候选时显示黄色 mask，`Correct` 确认、`No / Search again` 发起一轮新的单次搜索。`Clear / Retry` 丢弃候选并进入正负点手动补标；取消保留失败状态。候选尚未被接纳时持续传播但不写有效历史，一旦消失就作废；不能用旧确认接纳新候选。No 尚未实现跨帧排除被拒目标，因此可能再次提出同一区域，规则见 [CL08](../待澄清列表.md#cl08-单次自动尝试与-no-后的候选排除)。
 
 配置位于 `application/config.py`：`AUTO_RECOVERY_ENABLED`（默认 True，仅 EdgeTAM）、`AUTO_RECOVERY_SIMILARITY=0.85`、`AUTO_RECOVERY_MARGIN=0.10`、`AUTO_RECOVERY_PROMPT="miniature"`、`AUTO_RECOVERY_DETECTION_THRESHOLD=0.30`。相似度与分差是用户选定的实验初值，不是概率或准确率；单个候选缺少第二名时交人工。SAM 文本模型与 DINO 在启动的串行加载阶段准备，加载失败保留普通追踪与手动路径，之后失败实例直接请求人工。搜索／确认期间源持续播放，额外推理可能增加观测年龄。
 
 ## 不停播的手动恢复（EdgeTAM）
 
-播放页点击 `Recover units`。右侧 A／B 标签是本局已有实例，失踪单位可直接拖放；正常单位需先点 `Pick tracking error`，再点它当前的 mask，将其 ID 加入本次纠错草稿。不会新增实例或解锁最初注册。
+直播中选中原单位，点半环红色 `Correct` 发起主动矫正。`Recover units` 提供失败单位和自动候选审核。右侧可操作卡片对应本局已有实例。
 
 1. 在直播画面左键点目标，SAM 生成初始 mask，独立 Edge 候选继续传播。之后左键正点、右键负点；等待一次补点结果期间不接受更多点，源和显示继续运行。
 2. 满意后将原 ID 标签拖到黄色候选上；拖放就是确认，成功后返回实况，一次接回一个。候选丢失时不能提交，拖到其他正常单位占用的位置会被拒绝。
@@ -284,10 +224,10 @@ EdgeTAM 失败实例先进入内部 Missing；`recovery_phase=queued/searching` 
 
 ## 比赛中重新标定
 
-播放页点击 `Recalibrate [K]` 或按 K：
+在 Live 的流程工具栏点击 `Recalibrate`。
 
-1. 按固定相机理想假设处理，直接显示持续播放的原始源画面；源时钟和旧标定下追踪继续。不执行相机运动检测，不因纹理不足拒绝进入或自动清空角点。打开时取消其他工具的未保存草稿，支持 k／K 和按钮。
-2. Continue 等待最近有效观测及其同帧原始源图，将 mask 映射到新拉正图，保留原 object ID 和单位绑定，以原已加载权重建立独立新会话；新托盘依据实际尺寸重新拟合。
+1. 按固定相机理想假设处理，直接显示持续播放的原始源画面；源时钟和旧标定下追踪继续。不执行相机运动检测，不因纹理不足拒绝进入或自动清空角点。打开时取消其他工具的未保存草稿。
+2. 选定四角并提交桌面尺寸后，应用等待最近有效观测和同帧源图，将 mask 映射到新拉正图，以原权重创建独立新会话。保留 object ID 和单位绑定，新托盘按实际尺寸拟合。
 3. 新会话成功后切换标定，显示使用最新源帧，源时钟不重启。旧会话在成功前一直保留；准备新会话占用原串行模型队列，可能增加观测延迟，画面仍持续播放。
 4. Esc／`Cancel / Return` 随时取消，包括初始化过程中；取消或被新一轮标定替代的结果不接纳。失败保留旧会话／标定，并持续显示失败原因，允许重试。地形和正面从原视频像素锚点投影到新标定；正面重新关联矩形轴并标为估计。
 
@@ -301,32 +241,13 @@ EdgeTAM 失败实例先进入内部 Missing；`recovery_phase=queued/searching` 
 
 当前采用 `KoW4 mini` 规则子集，提供托盘最近距离、基础 LOS 和普通移动／At the Double。冲锋、完整射击判断和自动战斗结算未加入；EdgeTAM 单次自动 ID 恢复已接入，见上文。规则来源与限制见 [game_rules](../components/game_rules/README.md)，需求核对见 [审计记录](../docs/Game%20information%20requirements%20audit.md)。
 
-先确认物理比例。程序会在锁定桌角后显示默认 72 × 48 inches，在界面确认或修改：
+先在桌面设置里确认物理尺寸并在 Registration 完成 mask、类型和初始正面登记。直播中可在单位信息卡点 `Info` 编辑规则资料。当前 Terrain 在 Live 工具栏，依次添加顶点、右键撤点、`Save polygon` 填写资料。已确认后续将 Terrain 移到 Registration，见 [TODO](../TODO.md#2-单位地形与可配置信息)。
 
-```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
-```
-
-完成尺寸确认后建立毫米平面和对应宽高比；也可继续载入原视频的有效毫米标定。没有有效托盘或缺少必要规则输入时工具返回 `Unavailable`。
-
-完成 mask/type 绑定并获得托盘后：
-
-1. 选中单位，按 `F`／`Set front`，点击托盘的正面边。这里只登记方向，不调用 SAM；再次 F 取消。正面需在第一次播放前登记，R 后重新登记；B08 保留兼容的源图参考，再按新托盘重选正面边。
-2. 按 `E`／`Unit rules`，核对 `Speed (inches)`、`Rule Height`、`Side`、`Unit kind`、特殊规则及当前 `Engaged`／`Wavering`。type 属性作为默认值，实例属性覆盖它。表单 Save 明确确认状态；缺失字段保留未知，不把旧 `movement` 字段自动当作英寸 Speed。播放后仍可手动更新这些规则信息，已经保存的初始 reference 不会因此重写。
-3. 按 `G`／`Terrain`，在拉正画面依次点出地形区域，点回起点闭合，填写 label、类别和规则 Height。`U`／Ctrl+Z／右键撤回草稿顶点，`Undo terrain` 按钮也可移除最后一个已登记地形；再次 G 取消草稿。仅玩家登记的地形参与计算，SAM 杂物不会自动成为障碍。
-4. S 或首次播放保存初始规则输入。有毫米标定及已绑定单位时，最终目录额外生成 `scene.json`，可交给独立规则工具。
-
-| 操作 | 用法 |
-| --- | --- |
-| `Distance [D]` | 点击两个单位，显示托盘最近点连线和 mm／inches |
-| `LOS [L]` | 按观察者、目标的顺序点两个单位；显示可用视线或不确定原因 |
-| `Move [V]` | 点击一个单位；重复 V 循环 Advance、Back、左右 Sidestep、Change Facing、Halt |
-| `Double [J]` | 点击一个单位，估计 At the Double 的可达姿态 |
-| `Q` | 清除规则查询和选择，返回原有交互 |
+单位半环提供 Distance、LOS、Move。Distance 结果显示在测量连线上，LOS 和 Move 使用结果抽屉。Move 包含 `Double` 等指令选择。具体交互见 [Qt 客户端](qt/README.md)。
 
 选择规则查询时画面继续播放，选中的实例随最新有效观测重新计算；一次查询中的托盘和规则输入仍取自同帧场景。结果显示 `Observed` 源时间与年龄，正在等待新结果时标为 `Updating`，过期几何图层暂不叠加。Space／Q 清除工具并回到最新实况，不解除注册锁。规则计算使用独立后台线程并合并待算观测，旧代次结果不能覆盖已清除或换标定后的结果。蓝色点表示采样到的可达**中心位置**，每个姿态的路径及朝向由组件返回；没有实心填充样本凸包，也没有宣称采样以外不可达。
 
-Unit rules 和闭合地形后的资料窗口由主循环轮询，填写、校验报错和保存期间源播放、追踪及历史继续。Cancel／Esc／关闭窗口放弃草稿，R、切换标定、进入回放或关闭程序会取消尚未应用的编辑；保存针对原实例，迟到结果不能写给另一个绑定。
+Qt 规则资料和地形表单打开时，源播放、追踪与历史继续。编辑提交通过应用命令校验所属会话及标定版本。
 
 LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。原型只在目标完全不在前方弧时直接返回 `Blocked`；场景存在未拟合单位时不会将该不完整场景的射线升级为确定清晰。Hill、地形内外及 Height 等仅按已登记区域计算，未登记障碍仍可能改变结果。
 
@@ -334,7 +255,7 @@ LOS 找到清晰采样线时提供证据；没找到只能返回 `Uncertain`。�
 
 ### DVMNet 辅助正面
 
-**已接入按需恢复：**平时用矩形连续性维护正面侧和角度，并做轻量外观检查。仅方向可疑时调用 DVMNet，不运行 DINO 或替换 mask；实例恢复时先由 SAM／DINO 接回原 ID，再强制独立恢复方向，两者成功状态独立。
+**以下为保留的实验实现。** 默认停用实时 facing，初始 F 资料可保存。启用时用矩形连续性维护正面并进行轻量外观检查，仅在方向可疑时调用 DVMNet。实例恢复后可独立尝试恢复方向。
 
 首帧用 F 标正面，完成注册后冻结该单位同帧参考。轻量检查将源图按托盘及候选正面归一化为 48×48 小图，在共同 mask 前景内比较颜色纹理；背景不参与分数。非方形比较相反两侧，方形比较四侧。当前方向匹配低、替代方向明显更好，或当前不可比而替代方向有支持，连续两次不同源帧满足才调用 DVMNet。前景／纹理不足时不给匹配分数，不将其当作已确认正确。
 
@@ -380,4 +301,4 @@ python -m tools.setup_facing --reuse-experiment outputs/dvmnet_experiment/202611
 
 2026-11-08 已完成现有播放后入口的持续显示／不停源改造。首帧注册仍按原约定编辑并一次保存；手动恢复、单次自动搜索及候选审核于 2026-11-09 接入。自动门槛的准确率验证、拒绝排除及 what-if 布局问题仍见根目录 [待澄清列表](../待澄清列表.md)。
 
-桌角自动检测失败会保留橙色候选边、缺边原因及 Retry／Manual 按钮；不会直接跳到空白手动页，也不会把无效候选当成成功。手动页提供 Auto 重试，手动输入继续优先于迟到的自动结果。
+桌角自动检测失败时可重试或手动选四角。手动输入优先于迟到的自动检测结果。

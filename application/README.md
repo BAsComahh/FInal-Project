@@ -2,7 +2,7 @@
 
 当前`FACING_TRACKING_ENABLED=False`，保留实现但不构建／加载DVMNet，不更新实时有向正面。注册F资料仍可保存，开始播放后清除活动正面。`rules.track_facing`在快照中说明该状态，涉及正面的规则保持未知输入约束。
 
-前端 `Trays`／`T` 开关仅控制托盘轮廓的显示可见性（与 `Masks`／`M` 相同）；后台托盘拟合与连续几何查询始终保持运行，不再暂停或使用一次性定帧快照。
+前端 `Trays` 开关仅控制托盘轮廓的显示可见性（与 `Masks` 相同）；后台托盘拟合与连续几何查询始终保持运行，不再暂停或使用一次性定帧快照。
 
 `MatchApplication` 拥有一份 GameData、一个源时钟与一个串行模型 worker。构造时即加载模型；`tick(now=None)` 接纳结果、推进源并调度，不等待模型 Future。`snapshot()` 返回冻结元数据和共享只读图像／mask，当前源帧与已接纳观测各有 FrameRef。反复读取同一 revision 不复制图像、不写历史。
 

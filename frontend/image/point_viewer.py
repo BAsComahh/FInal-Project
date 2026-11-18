@@ -86,17 +86,6 @@ def _write_selection(image, result, output, source):
     (output / "selection.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def save_selection(image, result, output_dir, *, source=None):
-    """Save one confirmed selection, including a tightly cropped RGBA cutout."""
-    if result is None or result["box"] is None:
-        raise ValueError("No non-empty selection to save")
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output = Path(mkdtemp(prefix="selection_", dir=output_dir))
-    _write_selection(image, result, output, source)
-    return output
-
-
 def save_selections(image, results, output_dir, *, source=None):
     """Save all targets from one S action under a single batch directory."""
     if any(result is None for result in results):

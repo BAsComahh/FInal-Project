@@ -1,1 +1,0 @@
-"""Geometry tools frontend responsibilities."""

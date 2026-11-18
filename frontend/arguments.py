@@ -1,4 +1,4 @@
-"""Shared video options for the OpenCV and Qt clients."""
+"""Command-line options for the Qt video client."""
 import argparse
 from pathlib import Path
 
