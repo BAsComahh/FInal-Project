@@ -293,6 +293,26 @@ def _badge_dict(box, width, height, label, dot_bgr, border_bgr, *, kind="unit", 
     }
 
 
+def _draw_dashed_poly(canvas, points, color, *, halo=(26, 20, 12), thickness=2, dash=9, gap=6):
+    pts = np.asarray(points, dtype=float)
+    n = len(pts)
+    for i in range(n):
+        p0, p1 = pts[i], pts[(i + 1) % n]
+        vec = p1 - p0
+        length = float(np.hypot(vec[0], vec[1]))
+        if length < 1e-3:
+            continue
+        unit = vec / length
+        pos = 0.0
+        while pos < length:
+            end = min(length, pos + dash)
+            a = tuple(np.rint(p0 + unit * pos).astype(int))
+            b = tuple(np.rint(p0 + unit * end).astype(int))
+            cv2.line(canvas, a, b, halo, thickness + 2, cv2.LINE_AA)
+            cv2.line(canvas, a, b, color, thickness, cv2.LINE_AA)
+            pos += dash + gap
+
+
 def _bake_static_overlay(state, size, *, selected, masks, trays):
     """Build transparent BGRA overlay (terrain + masks + trays + leader lines) & crisp QML badge coords."""
     width, height = size
@@ -333,6 +353,11 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
     bindings = state.units.bindings
     unconfirmed_ids = set(getattr(state, "registration_unconfirmed", ())) if state.stage == "register" else set()
     pred_trays = prediction.get("trays", {})
+    held_ids = set()
+    if trays and state.stage == "playback" and state.mode == "live" and state.board.image_to_plane is not None:
+        held_ids = (set(prediction.get("tray_errors", ())) - pred_trays.keys()
+                    - set(prediction.get("unavailable_ids", ())) - set(prediction.get("inactive_ids", ())))
+    plane_to_image = np.linalg.inv(state.board.image_to_plane) if held_ids else None
     items = []
 
     for object_id, mask in zip(prediction["object_ids"], prediction["masks"]):
@@ -380,6 +405,13 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
             if trays and len(polygon):
                 cv2.polylines(rgba, [polygon], True, (12, 20, 26, 215), max(3, round(3.8 * scale)), cv2.LINE_AA)
                 cv2.polylines(rgba, [polygon], True, (*color, 255), max(2, round(2.0 * scale)), cv2.LINE_AA)
+        elif object_id in held_ids and x0 is not None:
+            tracking = state.tracking.get(bindings.get(object_id))
+            last = tracking.last_accepted_position if tracking is not None else None
+            if last and last["calibration_version"] == state.board.calibration_version:
+                corners = transform_points(last["corners_mm"], plane_to_image)
+                _draw_dashed_poly(rgba, corners, (*color, 185), halo=(12, 20, 26, 135),
+                                  thickness=max(1, round(1.6 * scale)), dash=round(9 * scale), gap=round(8 * scale))
 
         if x0 is not None:
             unit_box = (max(0, x0), max(0, y0), min(width, x1), min(height, y1))

@@ -15,6 +15,7 @@ from .board import (
     _SIDE_A_BGR,
     _SIDE_B_BGR,
     _badge_dict,
+    _draw_dashed_poly,
     _ui_font,
     draw_corner_brackets,
     nearest_rect_points,
@@ -104,26 +105,6 @@ def _catalog_rows(roster, catalog, values):
         if isinstance(details, (list, tuple)) and details:
             rows.append(row(label, "\n".join(map(str, details))))
     return summary, rows
-
-
-def _draw_dashed_poly(canvas, points, color, *, halo=(26, 20, 12), thickness=2, dash=9, gap=6):
-    pts = np.asarray(points, dtype=float)
-    n = len(pts)
-    for i in range(n):
-        p0, p1 = pts[i], pts[(i + 1) % n]
-        vec = p1 - p0
-        length = float(np.hypot(vec[0], vec[1]))
-        if length < 1e-3:
-            continue
-        unit = vec / length
-        pos = 0.0
-        while pos < length:
-            end = min(length, pos + dash)
-            a = tuple(np.rint(p0 + unit * pos).astype(int))
-            b = tuple(np.rint(p0 + unit * end).astype(int))
-            cv2.line(canvas, a, b, halo, thickness + 2, cv2.LINE_AA)
-            cv2.line(canvas, a, b, color, thickness, cv2.LINE_AA)
-            pos += dash + gap
 
 
 def _step_start_corners_mm(event, scene):
