@@ -307,7 +307,7 @@ class MatchSession:
             self.worker.submit("start_tracker", frame=self.data.current.prediction_frame, metadata=self.data.current.prediction_metadata,
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
                                previous_trays={**self.data.current.prediction.get("trays", {}), **self.trays.attempts})
-        elif not self.model_failed and (ready := self.trays.take_ready()) is not None:
+        elif not self.model_failed and self._needs_facing_task() and (ready := self.trays.take_ready()) is not None:
             request, prediction = ready
             self.worker.submit("facing", frame=request["frame"], metadata=request["metadata"],
                 raw_frame=request.get("raw_frame"), prediction=prediction, generation=request["generation"],
@@ -402,7 +402,23 @@ class MatchSession:
                          f"Recovery: {len(request.get('automatic_applied', []))} unit(s) recovered automatically.")
         self.mark_changed()
 
-    def _accept_geometry(self, request, prediction, error):
+    def _needs_facing_task(self):
+        return bool(self.worker.facing is not None and self.worker.facing_references)
+
+    def _poll_direct_trays(self):
+        """Accept completed TrayWorker geometry immediately when facing evaluation is inactive."""
+        if self.model_failed or self._needs_facing_task():
+            return
+        ready = self.trays.take_ready()
+        if ready is None:
+            return
+        request, prediction = ready
+        if request.get("generation") != self.generation:
+            self.trays.accept(request, valid=False)
+            return
+        self._accept_geometry(request, prediction, None, direct=True)
+
+    def _accept_geometry(self, request, prediction, error, *, direct=False):
         current = self.data.current
         metadata = request["metadata"]
         previous = (current.prediction or {}).get("geometry_metadata")
@@ -411,10 +427,14 @@ class MatchSession:
                  (previous is None or metadata["frame_index"] >= previous["frame_index"]))
         if error is not None:
             self.trays.accept(request, valid=False)
+            if direct:
+                self.worker.record_direct_geometry(request, prediction, error)
             self.note = f"Tray/facing update failed; mask tracking continues: {error}"
             return
         if not self.trays.accept(request, valid=valid):
             return
+        if direct:
+            self.worker.record_direct_geometry(request, prediction, None)
         prediction = self.data.accept_geometry(prediction, request["frame"], metadata)
         self.worker.commit_facing(request)
         self.data.record_history(source=self.source.metadata(),
@@ -453,6 +473,7 @@ class MatchSession:
         if self.closed:
             return
         now = perf_counter() if now is None else now
+        self._poll_direct_trays()
         completed = self.worker.poll()
         if completed is not None:
             request, prediction, error = completed
@@ -552,6 +573,7 @@ class MatchSession:
             if target >= self.end_index:
                 self.playing = False
                 self.note = "Video interval complete. Final registration references are already saved."
+        self._poll_direct_trays()
         self.trays.start((self.data.current.prediction or {}).get("trays", {}))
         self.schedule(now)
         self._poll_history()

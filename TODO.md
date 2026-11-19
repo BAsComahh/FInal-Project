@@ -10,6 +10,8 @@
 
 ## 2026-11-13 重要：真实运行性能与恢复
 
+- [ ] P0 2026-11-18 EdgeTAM 推理加速与停用 facing 托盘直出已接入并完成 RX 7900 XT 短播实测，待用户长局与桌面实测：基于 `frame_6b59223eebc5`（30 对象，`1528×1019`）剖析，已在 `components/tracking/edgetam.py` 接入（1）`memory_attention` 与 `spatial_perceiver` 局部 FP16 autocast + `[EFFICIENT_ATTENTION, FLASH_ATTENTION, MATH]`（保留其余权重与会话存储为 FP32，外层保留 `SDPBackend.MATH` 兜底）；（2）严格限定在单次 `_infer()` 生命周期内的 `Layer 0` 自注意力缓存（避免跨帧 `data_ptr()` 复用与 `RecoveryCandidate` 共享 `model` 串扰）；（3）EdgeTAM 有界会话状态留在当前 GPU（`prune_video_session` 改为规范化 `torch.device` 比较，SAM3 与 CPU 模式不变）；并在 `application/session.py` / `application/task_worker.py` 解除停用 facing 时 `TrayWorker` 等待 `TaskWorker("facing")` 空任务的锁步阻塞（在 `advance()` 的 `worker.poll()` 与 `trays.start()` 之前直接交付，保留 `--profile` 日志与 `run.json` 精度/设备记录）。在物理独显 AMD Radeon RX 7900 XT 上实测：100 步实拍自回归对照（`1.5s/步` 覆盖大位移与手部／卷尺遮挡）30 对象全员平均 IoU `0.99935`、零可见性/符号翻转、激活峰值 `6.52` 无溢出；生产代码 30 对象单帧稳态耗时降至 `~418–430 ms`（会话 `CPU 12.0 / GPU 168.0 / Pinned 0.0 MiB`），同帧/跨帧 `update_mask`、`RecoveryCandidate` 隔离、CPU 回退冒烟及 `MatchApplication` 11 秒短播均通过（`obs_dt` 中位数 `1.000s`，`e2e_lat` 中位数由 `3.45s` 降至 `0.767s`，零 `"facing"` 空任务）。长局原生桌面运行稳定性待用户复测。
+
 - [ ] P0 2026-11-15 长跑原生崩溃根因已定位并接入有界会话／运行期诊断与 SDPA 优化，待用户复测帧率与长局：反汇编 `torch_hip.dll` 崩溃偏移（`+0xA78F`／`+0xB1C5`）确认，`frame_83cdb0ce313e` 的 `0xc0000409` 源于 `ATen/hip/CachingHostAllocator.cpp:80`（`allocate_host_memory_slowpath` 的 `hipHostMalloc`）失败后，局部守卫析构调用 `c10::cuda::SetDevice` 在栈展开中抛出二次 C++ 异常触发 `ucrtbase.dll!terminate`。本机 HF `5.18.0` 的 `Sam2VideoInferenceSession` 对 CPU 状态卸载硬编码 `non_blocking=True`（触发 `pin_memory=True` 锁页分配）且不淘汰历史帧／输出（28 对象每步累积 ~14 MiB 锁页内存 + 12 MiB 输入帧，508 步锁页达 ~7.1 GiB），同时 `sam3-video` 线程未调用 `torch.cuda.set_device` 而默认停在 `cuda:0`（核显）。现已：（1）在模型加载及 worker 入口显式绑定所选独显（`cuda:1` RX 7900 XT），并在 `EdgeTamTracker._infer` 使用 `sdpa_kernel([SDPBackend.MATH])` 避免 `set_device(1)` 触发 ROCm 慢速 `EFFICIENT_ATTENTION` 分支（28 对象单帧从 `1345 ms` 降至 `511 ms`）；（2）单帧视觉特征缓存留推理设备，`store_output` 改为 `non_blocking=False` 可分页内存（`pinned_mib=0`）；（3）按 HF `5.18.0` 实际读取窗口（`num_maskmem-1=6`、`max_object_pointers_in_encoder-1=15`）淘汰过期 `processed_frames`、`non_cond_frame_outputs`、已消费 `mask_inputs_per_obj` 及历史 `pred_masks`/`high_res_masks`，修复同帧 `update_mask` 写入 `cond_frame_outputs`；（4）交接后释放注册 SAM3 会话、取消／消失候选立即释放会话，启用 `crash_traceback.log`（`faulthandler`）与 `runtime_diagnostics.jsonl`，并按用户决定将 `DEFAULT_INFERENCE_FPS` 设为 `1.0`（默认 1.0 秒传播间隔，使预训练固定的 6 个非条件空间记忆槽覆盖约 6 秒抗遮挡窗口）。用户已在 `frame_3fe3022f7627`（180000～192162 帧）实测确认会话恒定在 `CPU 75 MiB / GPU 100.47 MiB / Pinned 0 MiB`、进程 WorkingSet 稳定在 `~2.82 GiB`。
 
 - [ ] P0 注册拟合边界已接入，待用户实测：正负点／撤点不调用tray拟合，只使目标旧几何失效；点击／拖放类型确认后按目标ID拟合，保留其他单位的tray。绑定后再改点需重新确认类型。注册与Live共用application/tray_worker.py的update_trays；逐对象版本阻止在途旧拟合复活，军表／尺寸修改仅失效受影响对象。CPU定向检查覆盖点选无拟合、单ID确认／拟合、无关几何保留及旧版本拒绝；未跑真实模型／GPU／桌面操作，不新增测试文件、不委派subagent。
@@ -133,6 +135,8 @@
 - [ ] T12 **待实测**：短视频中身份切换、失踪与恢复、同 type 混淆、遮挡和落定后的稳定性；当前没有足够证据选定最终恢复算法。
 - [x] T13 持续无有效 mask 的失败判定已实现，独立于几何拟合；首次缺失源时间起算，默认 10 秒，通过 `application/config.py` 修改。不同源帧的新观测才推进判定。超时后，正常传播中原 ID 的有效 mask 重新出现时默认恢复；恢复写入失败的单位仍需独立接回。
 - [x] T14 Estimated 业务隔离与自动候选审核已接入；未接纳候选独立 Edge 传播，Correct 绑定当前代次并接回原 ID，No 人工发起新一轮单次搜索，Clear／Cancel 丢弃候选。无 mask／替换／取消后作废，不追溯补写历史。No 的跨帧拒绝排除仍是 CL08 未决扩展，不做自动无限重试。
+
+- [ ] 给传播结果加 mask 质量检查。非空 mask 面积异常偏大或形状明显不合理时，对原 ID 发出异常警报并触发现有单次自动恢复。参考基准、阈值、持续时间及旋转／遮挡／裁切的误报处理待定。
 
 ## 6. 托盘占地与有方向的朝向
 

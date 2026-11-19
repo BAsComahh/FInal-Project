@@ -8,6 +8,7 @@ import importlib.metadata
 import hashlib
 import json
 from pathlib import Path
+from threading import Lock
 from time import perf_counter
 import traceback
 from uuid import uuid4
@@ -120,15 +121,22 @@ class TaskWorker:
         self.tracker_initialized = self.tracker is None
         self.tray_search = tray_search
         self.timing_dir = None
+        self._timing_lock = Lock()
         if profile:
             self.timing_dir = PROJECT_ROOT / "outputs/tracking_comparison" / f"sam_{uuid4().hex[:12]}"
             self.timing_dir.mkdir(parents=True)
+            runtime_cfg = (
+                self.tracker.runtime_config()
+                if self.tracker is not None and hasattr(self.tracker, "runtime_config")
+                else {"model_precision": "float32", "inference_state_device": "cpu"}
+            )
             run = {"model": model_id, "tracker": tracker,
                    "tracker_model": self.tracker.model_id if self.tracker is not None else model_id,
                    "requested_device": device, "profile": True, "tray_search": tray_search,
                    "tray_stability": vars(self.tray_stability),
                    "versions": {name: importlib.metadata.version(name) for name in ("torch", "transformers", "opencv-python")},
-                   "model_precision": "float32", "inference_state_device": "cpu"}
+                   "model_precision": runtime_cfg["model_precision"],
+                   "inference_state_device": runtime_cfg["inference_state_device"]}
             root = PROJECT_ROOT
             run["source_hashes"] = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in (
                 "application/task_worker.py", "components/sam3/video/predictor.py", "components/boundary_detection/tray/detector.py",
@@ -430,6 +438,55 @@ class TaskWorker:
                               task_submitted_at=request.get("submitted_at"), task_completed_at=finished)
         return prediction
 
+    def _write_timing_record(self, request, prediction, error, *, started, finished):
+        if self.timing_dir is None:
+            return
+        metadata = request["metadata"] or {}
+        record = {"kind": request["kind"], "generation": request["generation"],
+                  "calibration_version": metadata.get("calibration_version"),
+                  "source_frame_index": metadata.get("frame_index"),
+                  "observation_time_seconds": metadata.get("timestamp_seconds"),
+                  "submitted_at": request.get("submitted_at", started), "started_at": started, "completed_at": finished,
+                  "request_seconds": finished - started, "device": self.predictor.device,
+                  "tracker": self.tracker_name, "error": error}
+        if prediction is not None:
+            record.update(object_ids=prediction["object_ids"], timings_seconds=prediction.get("timings_seconds", {}),
+                          tray_fit_stats=prediction.get("tray_fit_stats", {}),
+                          timing_gpu_synchronized=prediction.get("timing_gpu_synchronized", False),
+                          inference_call_count=prediction.get("inference_call_count"),
+                          object_score_logits=prediction.get("object_score_logits"),
+                          trays={key: {**{name: row.get(name) for name in
+                                          ("method", "mask_fill", "mask_coverage", "edge_support",
+                                           "corner_support", "acceptance")},
+                                       "fit_frame_index": row.get("fit_sample", {}).get("frame_index"),
+                                       "fit_method": row.get("fit_method", row["method"]),
+                                       "reuse_check": row.get("reuse_check")}
+                                 for key, row in prediction.get("trays", {}).items()})
+            record["tray_attempts"] = {obj: {key: row.get(key) for key in
+                ("attempted", "seconds", "error", "reuse_check")} | {
+                    "baseline_frame_index": (row.get("fit_sample") or {}).get("frame_index"),
+                    "baseline_timestamp_seconds": (row.get("fit_sample") or {}).get("timestamp_seconds")}
+                for obj, row in (request.get("tray_attempts") or {}).items()}
+        if request["kind"] == "automatic_recovery":
+            record.update(automatic_applied=request.get("automatic_applied", []),
+                          automatic_error=request.get("automatic_error"),
+                          automatic_rows=[{key: row.get(key) for key in ("unit_id", "reason", "top_two_margin")}
+                                          for row in request.get("automatic_rows", [])])
+        with self._timing_lock:
+            with (self.timing_dir / "observations.jsonl").open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(record) + "\n")
+
+    def record_direct_geometry(self, request, prediction, error=None):
+        """Record directly-accepted TrayWorker geometry in --profile logs without blocking TaskWorker."""
+        if self.timing_dir is None:
+            return
+        finished = perf_counter()
+        tray_seconds = float((prediction or {}).get("timings_seconds", {}).get("tray_fit", 0.0))
+        self._write_timing_record(
+            request, prediction, str(error) if error is not None else None,
+            started=finished - tray_seconds, finished=finished,
+        )
+
     def _recorded_run(self, request):
         started, prediction, error = perf_counter(), None, None
         try:
@@ -439,40 +496,7 @@ class TaskWorker:
             error = str(exception)
             raise
         finally:
-            finished = perf_counter()
-            metadata = request["metadata"] or {}
-            record = {"kind": request["kind"], "generation": request["generation"],
-                      "calibration_version": metadata.get("calibration_version"),
-                      "source_frame_index": metadata.get("frame_index"),
-                      "observation_time_seconds": metadata.get("timestamp_seconds"),
-                      "submitted_at": request["submitted_at"], "started_at": started, "completed_at": finished,
-                      "request_seconds": finished - started, "device": self.predictor.device,
-                      "tracker": self.tracker_name, "error": error}
-            if prediction is not None:
-                record.update(object_ids=prediction["object_ids"], timings_seconds=prediction.get("timings_seconds", {}),
-                              tray_fit_stats=prediction.get("tray_fit_stats", {}),
-                              timing_gpu_synchronized=prediction.get("timing_gpu_synchronized", False),
-                              inference_call_count=prediction.get("inference_call_count"),
-                              object_score_logits=prediction.get("object_score_logits"),
-                              trays={key: {**{name: row.get(name) for name in
-                                              ("method", "mask_fill", "mask_coverage", "edge_support",
-                                               "corner_support", "acceptance")},
-                                           "fit_frame_index": row.get("fit_sample", {}).get("frame_index"),
-                                           "fit_method": row.get("fit_method", row["method"]),
-                                           "reuse_check": row.get("reuse_check")}
-                                     for key, row in prediction.get("trays", {}).items()})
-                record["tray_attempts"] = {obj: {key: row.get(key) for key in
-                    ("attempted", "seconds", "error", "reuse_check")} | {
-                        "baseline_frame_index": (row.get("fit_sample") or {}).get("frame_index"),
-                        "baseline_timestamp_seconds": (row.get("fit_sample") or {}).get("timestamp_seconds")}
-                    for obj, row in (request.get("tray_attempts") or {}).items()}
-            if request["kind"] == "automatic_recovery":
-                record.update(automatic_applied=request.get("automatic_applied", []),
-                              automatic_error=request.get("automatic_error"),
-                              automatic_rows=[{key: row.get(key) for key in ("unit_id", "reason", "top_two_margin")}
-                                              for row in request.get("automatic_rows", [])])
-            with (self.timing_dir / "observations.jsonl").open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps(record) + "\n")
+            self._write_timing_record(request, prediction, error, started=started, finished=perf_counter())
 
     def submit(self, kind, *, frame=None, metadata=None, prompt=None, generation=0, clicks=None, prediction=None,
                tray_context=None, raw_frame=None, calibration_token=None, recovery_candidate=None, recovery_object_id=None,

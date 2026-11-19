@@ -18,6 +18,24 @@ _MODEL_ID = "yonigozlan/EdgeTAM-hf"
 _REVISION = "c266ce53b3fc00f0f495b583f6a116c4e57f53bb"
 _DOCUMENTATION = "https://huggingface.co/docs/transformers/model_doc/edgetam_video"
 
+# Controlled CUDA/HIP acceleration toggles for Transformers 5.18.0 EdgeTAM:
+# - _ENABLE_CUDA_FAST_ATTENTION: local FP16 autocast + SDPA backend selection on
+#   memory_attention & spatial_perceiver (zero Conv2d layers) plus per-_infer()
+#   Layer-0 self-attention caching across objects on the same frame.
+# - _ENABLE_CUDA_GPU_STATE: keep prune-bounded session memory on the active GPU
+#   instead of synchronous CPU<->GPU transfers on every frame.
+_ENABLE_CUDA_FAST_ATTENTION = True
+_ENABLE_CUDA_GPU_STATE = True
+
+
+def _resolve_device(device):
+    import torch
+
+    target = torch.device("cpu" if device is None else device)
+    if target.type == "cuda" and target.index is None and torch.cuda.is_available():
+        target = torch.device("cuda", torch.cuda.current_device())
+    return target
+
 
 def bind_cuda_device(device):
     """Ensure the calling worker thread's active HIP/CUDA device matches the selected GPU."""
@@ -27,6 +45,135 @@ def bind_cuda_device(device):
         target = torch.device(device)
         if target.type == "cuda":
             torch.cuda.set_device(target)
+
+
+def _install_cuda_attention_accel(model):
+    """Wrap Transformers 5.18.0 memory_attention & spatial_perceiver for CUDA/HIP."""
+    if not _ENABLE_CUDA_FAST_ATTENTION or getattr(model, "_edgetam_cuda_accel_installed", False):
+        return False
+    ma = getattr(model, "memory_attention", None)
+    sp = getattr(model, "spatial_perceiver", None)
+    layers = getattr(ma, "layers", None) if ma is not None else None
+    if ma is None or sp is None or not layers:
+        return False
+    layer0 = layers[0]
+    required_ma = ("rotary_emb", "position_ids", "position_ids_k", "layer_norm")
+    required_l0 = ("layer_norm1", "self_attn", "dropout1", "layer_norm2", "cross_attn_image",
+                   "dropout2", "layer_norm3", "mlp", "dropout3")
+    if not (all(hasattr(ma, attr) for attr in required_ma) and all(hasattr(layer0, attr) for attr in required_l0)):
+        return False
+
+    import torch
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    orig_ma_forward = ma.forward
+    orig_sp_forward = sp.forward
+    fast_backends = [SDPBackend.EFFICIENT_ATTENTION, SDPBackend.FLASH_ATTENTION, SDPBackend.MATH]
+    model._edgetam_layer0_cache = None
+
+    def fast_ma_forward(
+        current_vision_features,
+        memory,
+        current_vision_position_embeddings=None,
+        memory_posision_embeddings=None,
+        num_object_pointer_tokens=0,
+        num_spatial_memory_tokens=-1,
+    ):
+        if not current_vision_features.is_cuda:
+            return orig_ma_forward(
+                current_vision_features=current_vision_features,
+                memory=memory,
+                current_vision_position_embeddings=current_vision_position_embeddings,
+                memory_posision_embeddings=memory_posision_embeddings,
+                num_object_pointer_tokens=num_object_pointer_tokens,
+                num_spatial_memory_tokens=num_spatial_memory_tokens,
+            )
+        with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(fast_backends):
+            cache = getattr(model, "_edgetam_layer0_cache", None)
+            if (
+                cache is None
+                or current_vision_features.ndim != 3
+                or current_vision_features.shape[1] != 1
+            ):
+                return orig_ma_forward(
+                    current_vision_features=current_vision_features,
+                    memory=memory,
+                    current_vision_position_embeddings=current_vision_position_embeddings,
+                    memory_posision_embeddings=memory_posision_embeddings,
+                    num_object_pointer_tokens=num_object_pointer_tokens,
+                    num_spatial_memory_tokens=num_spatial_memory_tokens,
+                ).float()
+
+            key = (
+                id(current_vision_features),
+                current_vision_features.data_ptr(),
+                tuple(current_vision_features.shape),
+                id(current_vision_position_embeddings),
+                current_vision_position_embeddings.data_ptr()
+                if current_vision_position_embeddings is not None
+                else 0,
+            )
+            cached = cache.get(key)
+            if cached is None:
+                cache.clear()
+                out0 = current_vision_features
+                if current_vision_position_embeddings is not None:
+                    out0 = out0 + 0.1 * current_vision_position_embeddings
+                out0 = out0.transpose(0, 1)
+                rope_pe = ma.rotary_emb(out0, ma.position_ids)
+                rope_pe_k = ma.rotary_emb(out0, ma.position_ids_k)
+                q0 = out0.unsqueeze(1) if out0.ndim == 3 else out0
+                first_layer = ma.layers[0]
+                q_norm = first_layer.layer_norm1(q0)
+                q_sa, _ = first_layer.self_attn(
+                    query=q_norm, key=q_norm, value=q_norm, position_embeddings=rope_pe,
+                )
+                q_after_sa = q0 + first_layer.dropout1(q_sa)
+                q_ln2 = first_layer.layer_norm2(q_after_sa)
+                cached = (q_after_sa, q_ln2, rope_pe, rope_pe_k)
+                cache[key] = cached
+            q_after_sa, q_ln2, rope_pe, rope_pe_k = cached
+            mem = memory.transpose(0, 1).unsqueeze(1)
+            mem_pe = (
+                memory_posision_embeddings.transpose(0, 1).unsqueeze(1)
+                if memory_posision_embeddings is not None
+                else None
+            )
+            first_layer = ma.layers[0]
+            q_ca, _ = first_layer.cross_attn_image(
+                query=q_ln2,
+                key=mem if mem_pe is None else mem + mem_pe,
+                value=mem,
+                position_embeddings=rope_pe,
+                position_embeddings_k=rope_pe_k,
+                num_k_exclude_rope=num_object_pointer_tokens,
+                rope_k_repeat=num_spatial_memory_tokens,
+            )
+            queries = q_after_sa + first_layer.dropout2(q_ca)
+            output = queries + first_layer.dropout3(first_layer.mlp(first_layer.layer_norm3(queries)))
+            for layer in ma.layers[1:]:
+                output = layer(
+                    queries=output,
+                    keys=mem,
+                    key_point_embedding=mem_pe,
+                    rope_position_embeddings=rope_pe,
+                    rope_position_embeddings_k=rope_pe_k,
+                    num_k_exclude_rope=num_object_pointer_tokens,
+                    rope_k_repeat=num_spatial_memory_tokens,
+                )
+            return ma.layer_norm(output).transpose(0, 1).float()
+
+    def fast_sp_forward(hidden_states, positional_encoding=None):
+        if not hidden_states.is_cuda:
+            return orig_sp_forward(hidden_states, positional_encoding)
+        with torch.autocast("cuda", dtype=torch.float16), sdpa_kernel(fast_backends):
+            latents, pos = orig_sp_forward(hidden_states, positional_encoding)
+            return latents.float(), (pos.float() if pos is not None else None)
+
+    ma.forward = fast_ma_forward
+    sp.forward = fast_sp_forward
+    model._edgetam_cuda_accel_installed = True
+    return True
 
 
 def _store_output_pageable(
@@ -97,7 +244,7 @@ def prune_video_session(session, model, current_idx):
     min_mem_idx = current_idx - mem_window
     min_ptr_idx = current_idx - max_window
     pending_objs = set(getattr(session, "obj_with_new_inputs", ()))
-    state_device = getattr(session, "inference_state_device", "cpu")
+    state_device = _resolve_device(getattr(session, "inference_state_device", "cpu"))
 
     for obj_idx, obj_id in list(getattr(session, "_obj_idx_to_id", {}).items()):
         if obj_id not in pending_objs:
@@ -118,7 +265,7 @@ def prune_video_session(session, model, current_idx):
                 entry.pop("pred_masks", None)
             for tk, tv in list(entry.items()):
                 if isinstance(tv, torch.Tensor):
-                    if tk in ("maskmem_features", "maskmem_pos_enc") and str(tv.device) != str(state_device):
+                    if tk in ("maskmem_features", "maskmem_pos_enc") and _resolve_device(tv.device) != state_device:
                         entry[tk] = tv.detach().to(state_device, non_blocking=False).clone()
                     elif not tv.is_cuda and tv.is_pinned():
                         entry[tk] = tv.detach().clone()
@@ -136,7 +283,7 @@ def prune_video_session(session, model, current_idx):
                 entry.pop("maskmem_pos_enc", None)
             for tk, tv in list(entry.items()):
                 if isinstance(tv, torch.Tensor):
-                    if tk in ("maskmem_features", "maskmem_pos_enc") and str(tv.device) != str(state_device):
+                    if tk in ("maskmem_features", "maskmem_pos_enc") and _resolve_device(tv.device) != state_device:
                         entry[tk] = tv.detach().to(state_device, non_blocking=False).clone()
                     elif not tv.is_cuda and tv.is_pinned():
                         entry[tk] = tv.detach().clone()
@@ -291,6 +438,8 @@ class EdgeTamTracker:
             try:
                 bind_cuda_device(self.device)
                 model = model.to(device=self.device, dtype=torch.float32).eval().requires_grad_(False)
+                if _ENABLE_CUDA_FAST_ATTENTION and _resolve_device(self.device).type == "cuda":
+                    _install_cuda_attention_accel(model)
             except RuntimeError as error:
                 raise RuntimeError(
                     f"EdgeTAM could not use device {self.device}: {error}. Use a "
@@ -299,6 +448,26 @@ class EdgeTamTracker:
             self.model, self.processor = model, processor
         finally:
             self.load_progress = None
+
+    def runtime_config(self):
+        """Describe effective precision and session state placement for profile logs."""
+        import torch
+
+        if self.device is not None:
+            target = _resolve_device(self.device)
+        elif torch.cuda.is_available():
+            best = max(range(torch.cuda.device_count()), key=lambda i: torch.cuda.get_device_properties(i).total_memory)
+            target = torch.device(f"cuda:{best}")
+        else:
+            target = torch.device("cpu")
+        is_cuda = target.type == "cuda"
+        return {
+            "model_precision": (
+                "float32+fp16_memory_attention_perceiver"
+                if is_cuda and _ENABLE_CUDA_FAST_ATTENTION else "float32"
+            ),
+            "inference_state_device": str(target) if is_cuda and _ENABLE_CUDA_GPU_STATE else "cpu",
+        }
 
     def reset(self):
         """Discard the official per-video session while retaining loaded weights."""
@@ -341,34 +510,44 @@ class EdgeTamTracker:
             if self.device is not None and torch.cuda.is_available() and torch.device(self.device).type == "cuda"
             else nullcontext()
         )
-        with torch.inference_mode(), attn_ctx:
-            outputs = self.model(
-                inference_session=session, frame_idx=index, frame=inputs.pixel_values[0],
-            )
-            output_ids = list(outputs.object_ids)
-            if (len(output_ids) != len(object_ids) or set(output_ids) != set(object_ids)
-                    or outputs.frame_idx != index):
-                raise RuntimeError("EdgeTAM returned inconsistent object IDs or frame index")
-            order = [output_ids.index(obj_id) for obj_id in object_ids]
-            masks = self.processor.post_process_masks(
-                [outputs.pred_masks], original_sizes=inputs.original_sizes, binarize=True,
-                apply_non_overlapping_constraints=True,
-            )[0]
-            if tuple(masks.shape) != (len(object_ids), 1, *frame.shape[:2]):
-                raise RuntimeError(f"EdgeTAM returned unexpected mask shape {tuple(masks.shape)}")
-            prediction = {
-                "object_ids": list(object_ids),
-                "masks": masks[:, 0][order].detach().cpu().numpy().astype(bool, copy=False),
-                "frame_idx": index,
-                "source_frame_index": source_frame,
-            }
-            if outputs.object_score_logits is not None:
-                logits = outputs.object_score_logits.reshape(-1)
-                if logits.numel() != len(object_ids):
-                    raise RuntimeError("EdgeTAM returned inconsistent object presence scores")
-                prediction["object_score_logits"] = logits[order].detach().float().cpu().tolist()
-            prune_video_session(session, self.model, index)
-        return prediction
+        # Scope Layer-0 self-attention cache strictly to one _infer() invocation to prevent
+        # cross-frame data_ptr() reuse and cross-session RecoveryCandidate interference.
+        layer0_cache = {} if getattr(self.model, "_edgetam_cuda_accel_installed", False) else None
+        if layer0_cache is not None:
+            self.model._edgetam_layer0_cache = layer0_cache
+        try:
+            with torch.inference_mode(), attn_ctx:
+                outputs = self.model(
+                    inference_session=session, frame_idx=index, frame=inputs.pixel_values[0],
+                )
+                output_ids = list(outputs.object_ids)
+                if (len(output_ids) != len(object_ids) or set(output_ids) != set(object_ids)
+                        or outputs.frame_idx != index):
+                    raise RuntimeError("EdgeTAM returned inconsistent object IDs or frame index")
+                order = [output_ids.index(obj_id) for obj_id in object_ids]
+                masks = self.processor.post_process_masks(
+                    [outputs.pred_masks], original_sizes=inputs.original_sizes, binarize=True,
+                    apply_non_overlapping_constraints=True,
+                )[0]
+                if tuple(masks.shape) != (len(object_ids), 1, *frame.shape[:2]):
+                    raise RuntimeError(f"EdgeTAM returned unexpected mask shape {tuple(masks.shape)}")
+                prediction = {
+                    "object_ids": list(object_ids),
+                    "masks": masks[:, 0][order].detach().cpu().numpy().astype(bool, copy=False),
+                    "frame_idx": index,
+                    "source_frame_index": source_frame,
+                }
+                if outputs.object_score_logits is not None:
+                    logits = outputs.object_score_logits.reshape(-1)
+                    if logits.numel() != len(object_ids):
+                        raise RuntimeError("EdgeTAM returned inconsistent object presence scores")
+                    prediction["object_score_logits"] = logits[order].detach().float().cpu().tolist()
+                prune_video_session(session, self.model, index)
+            return prediction
+        finally:
+            if layer0_cache is not None:
+                layer0_cache.clear()
+                self.model._edgetam_layer0_cache = None
 
     def initialize(self, frame, object_ids, masks, *, source_frame=None):
         """Memorize the registered masks on the first processed frame."""
@@ -389,9 +568,14 @@ class EdgeTamTracker:
 
         self.reset()
         bind_cuda_device(self.device)
+        state_device = (
+            _resolve_device(self.device)
+            if _ENABLE_CUDA_GPU_STATE and _resolve_device(self.device).type == "cuda"
+            else "cpu"
+        )
         session = configure_video_session(
             self.processor.init_video_session(
-                inference_device=self.device, inference_state_device="cpu",
+                inference_device=self.device, inference_state_device=state_device,
                 video_storage_device="cpu", processing_device="cpu", dtype=torch.float32,
             ),
             self.device,
