@@ -18,15 +18,11 @@ Item {
 
     readonly property real topExtent: arcCy
     readonly property real bottomExtent: menuHeight - arcCy
+    readonly property real rightExtent: menuWidth - arcCx
     readonly property real anchorPixelX: imageRect.x + viewData.anchorX * imageRect.width
     readonly property real anchorPixelY: imageRect.y + viewData.anchorY * imageRect.height
-    readonly property real baseScale: Math.max(0, Math.min(1, (width - 24) / menuWidth, (height - 24) / (topExtent + bottomExtent)))
-    readonly property real baseX: Math.max(arcCx * baseScale + 12, Math.min(width - (menuWidth - arcCx) * baseScale - 12, anchorPixelX))
-    readonly property bool leftEdge: anchorPixelX < baseX - 55 * baseScale
-    readonly property bool rightEdge: anchorPixelX > baseX + 45 * baseScale
-    readonly property real menuScale: Math.max(0, Math.min(baseScale, leftEdge ? (width - anchorPixelX - 24) / menuWidth : rightEdge ? (anchorPixelX - 24) / menuWidth : 1))
-    readonly property real requestedX: leftEdge ? anchorPixelX + (arcCx + 20) * menuScale : rightEdge ? anchorPixelX - (menuWidth - arcCx + 20) * menuScale : anchorPixelX
-    readonly property real cx: Math.max(arcCx * menuScale + 12, Math.min(width - (menuWidth - arcCx) * menuScale - 12, requestedX))
+    readonly property real menuScale: Math.max(0, Math.min(1, (width - 24) / menuWidth, (height - 24) / (topExtent + bottomExtent)))
+    readonly property real cx: Math.max(12, Math.min(width - rightExtent * menuScale - 12, anchorPixelX))
     readonly property real cy: Math.max(topExtent * menuScale + 12, Math.min(height - bottomExtent * menuScale - 12, anchorPixelY))
 
     readonly property real cardNormX: viewData.cardX !== undefined ? viewData.cardX : 0.35

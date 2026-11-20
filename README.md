@@ -1,135 +1,258 @@
-# Board game augmentation
+# Board Game Augmentation
 
 [中文](#中文) | [English](#english)
 
+---
+
 ## 中文
 
-当前示范流程：视频首帧 → 自动检测并确认桌角／手动矫正 → 确认桌面长宽 → Homography 聚焦战场 → 点击分割、绑定单位 type → 播放并传播 mask。界面全英文，mask 和托盘矩形图层独立开关。首版游戏工具提供最近距离、基础 LOS、普通移动和 At the Double 的采样估计；冲锋延期。EdgeTAM 已接入单次自动身份恢复、候选审核及保留原 ID 的手动恢复。
+### 项目简介
+
+面向桌面战棋对局视频的增强原型系统：基于 Qt Quick 桌面客户端（界面为英文），完成战场桌面标定、首帧单位分割与军表绑定、视频实例追踪、托盘矩形拟合、基础规则几何查询、追踪恢复与动作历史棋盘回放。
+
+### 核心流程与当前能力
+
+1. **桌面标定与拉正**
+   - 首帧自动 LSD 检测桌角（支持手动四点矫正）→ 确认桌面物理长宽（默认预填 `72 × 48 in` 测试值）→ Homography 透视拉正。
+2. **首帧单位注册与军表导入**
+   - 结合 SAM3 点提示分割与手绘矩形／四点凸四边形标注；侧栏通过 `Import list A` / `Import list B` 导入 Mantic Companion PDF 军表或单方 JSON 目录（默认先载入 [ABC 测试目录](inputs/units.video_estimate.json) 到 A 栏，Type 1 约 155 × 50 mm，Type 2/3 约 205 × 80 mm）。
+   - 自动按 FAQ 标准底座表与备注推导托盘尺寸，按双方独立生成实例编号（如 `A1.1`、`B1.1`），支持 `F` 标记初始正面。
+   - 草稿保存在内存中，`S` 或首次 `Start video` 仅提交一次最终 reference 并锁定注册；支持通过 `Load registration` 或 `--registration` 复用已完成注册存档。
+3. **视频追踪与自适应托盘拟合**
+   - 默认由 **SAM3** 完成首帧注册，再将已注册 mask 交给 **EdgeTAM** 持续传播（可通过 `--tracker sam3` / `--tracker cutie` 对照，详见 [追踪说明](components/tracking/README.md)）。
+   - 托盘拟合固定为 `adaptive` 模式并由独立 CPU 线程异步运行：稳定 mask 复用几何，变化时优先局部拟合、大位移或失败后回退至完整[方向 Chamfer Beam 搜索](components/boundary_detection/tray/README.md#逐级回退)（要求矩形填充率 > 85%）。Live 中仍有 mask 但暂时拟合失败的单位以虚线保留上次接纳框。`Masks` / `Trays` 开关仅控制叠加显示。
+4. **追踪失败与身份恢复（EdgeTAM）**
+   - 持续无 mask 达到阈值（默认 10 s，见 [application/config.py](application/config.py)）后进入内部 Missing，后台对每个新失败实例执行一次自动搜索（SAM3 文本检测 + DINOv2-small 外观匹配，试运行门槛：余弦相似度 ≥ 0.85、分差 ≥ 0.10 且无占用／竞争冲突）。
+   - 未自动接回的结果进入右侧 A／B 审核列表，可 `Correct` 确认、`No` 发起一次新搜索，或通过单位菜单红色 `Correct` 进行保留原 ID 的隔离手动恢复。
+5. **直播规则查询与辅助流程**
+   - 选中单位弹出右侧半环菜单，提供 `Distance`（连线直接标注最近距离）、`LOS`、`Move`（Advance / At the Double / Back / Sidestep / Change facing / Halt 采样姿态；Charge 延期）与 `Info`（军表完整属性只读展示及状态编辑），规则范围见 [game_rules](components/game_rules/README.md)。
+   - 支持播放期间不停源的 `Recalibrate`（固定相机假设）、地形标注（计划后续移至注册页）以及 `Debug` 诊断快照导出。
+6. **历史记录与棋盘回放**
+   - 本局数据由 [GameData](components/game_data.py) 与无窗口核心 [MatchApplication](application/README.md) 管理，以原视频像素为基准持续写入 `history.sqlite3`（规则运算仍使用毫米）。
+   - 独立识别平移／旋转事件（容差 10 mm / 10°、停稳 5 s 计为一步）；`Replay` 按已完成步数重建历史棋盘，回放期间后台追踪与记录照常推进，`Back to Live` 返回最新实况。
+7. **默认关闭与待开发项**
+   - 实时正面追踪（DVMNet，`FACING_TRACKING_ENABLED = False`）默认停用，仅保留注册初始 `F` 资料与实验代码，详见 [正面说明](frontend/README.md#dvmnet-辅助正面)。
+   - 独立观众窗口、What-if 推演及 Terrain 迁入注册页见 [TODO.md](TODO.md)。
+
+### 环境配置与跨机迁移
+
+- **硬件与系统建议**：
+  - Python ≥ 3.12（开发环境为 Windows + Python 3.13.16）。
+  - 推荐使用支持 CUDA / ROCm 的独立 GPU（自动选择显存最大的设备，无 GPU 时回退 CPU，也可用 `--device` 指定）。
+  - 显存参考：默认配置（SAM3 + EdgeTAM + 自动恢复 SAM3/DINOv2，FP32）实测稳态占用约 5.4–6.6 GB 显存、峰值内存约 8 GB，推荐 **12 GB+ 显存 / 16 GB+ 内存**；若为 **8 GB 显存**且出现 OOM，可在 [application/config.py](application/config.py) 中将 `AUTO_RECOVERY_ENABLED` 设为 `False`（仍保留手动恢复）。
+
+#### 1. 安装 PyTorch（先装与目标显卡匹配的版本）
+
+> **重要**：Windows 下直接运行 `pip install -r requirements.txt` 会从默认 PyPI 安装 **CPU 版** PyTorch。请先按目标机器显卡安装匹配版本的 `torch==2.13.0` 与 `torchvision==0.28.0`（例如 NVIDIA CUDA 机器使用 PyTorch 官方 CUDA wheel 源；AMD ROCm 机器使用对应 ROCm wheel）。
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
+# 示例：创建虚拟环境（Conda 或 venv 均可）
+conda create -n tabletop-aug python=3.13 -y
+conda activate tabletop-aug
+
+# NVIDIA GPU 示例（按本机 CUDA 驱动调整 cu 版本，如 cu128）
+python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu128
 ```
 
-模型权重启动即加载；确认桌角和尺寸后准备拉正首帧特征。单位提示与 type 绑定在首次播放前编辑，S 或首次播放只保存一次最终 reference。播放后持续显示并保持编辑锁定，Space／Q 清除工具并返回最新实况，Reset 开始新注册。
+#### 2. 安装项目核心依赖与 Qt 桌面运行时
 
-注册侧栏提供 `Import list A`／`Import list B`，直接选择各方 PDF 或单方类型 JSON，下方两栏显示各方分类或名称，支持点击／拖放绑定。内部类型 A1／B1 的实例分别生成 A1.1／B1.1。无需传军表参数；默认 [ABC 测试资料](inputs/units.video_estimate.json) 先放在 A 栏，Type 1 为 155 × 50 mm，Type 2／3 为 205 × 80 mm，B 栏等待导入。锁定桌角后通过 `Length (in)`／`Width (in)` 确认默认 72 × 48 inches 或修改尺寸。默认尺寸是测试估算。独立 PDF 转换工具见 [reader 用法](components/registration/README.md#pdf-军表-reader)。
-
-注册时用 F 标记初始正面。当前默认停用实时正面更新，历史实验及资源见 [正面说明](frontend/README.md#dvmnet-辅助正面)。
-
-操作说明见 [frontend](frontend/README.md)，单位表和导出格式见 [registration](components/registration/README.md)，设计、官方依据与实验结论见 [项目思路.md](项目思路.md)。
-
-本局公共数据集中在 [GameData](components/game_data.py)：保留局部观测历史及全局平移／旋转事件，完成注册后持续写入该次输出目录的 `history.sqlite3`。平移与旋转独立判断，容差内停稳 5 秒完成，初始位置容差 10 mm、旋转容差 10°；位置以原视频像素为基准保存，距离等规则仍用毫米；仅标定切换不中断动作，真实追踪／几何缺失保存中断记录，不算完成一步。内存保留约 5～5.5 分钟及进行中／未写盘数据，R 保留旧数据库。播放页的 Replay 以步骤对应的 Homography 后截图为背景，叠加 ID 和矩形重建历史棋盘，每次已完成移动或旋转各为一步，支持 ←／→、A／D 和按钮切步。回放期间后台继续运行，Back to Live 返回最新实况。用法见 [历史棋盘回放](frontend/README.md#历史棋盘回放)。
-
-完成注册后按源视频时间检测持续无 mask，默认 10 秒，通过 [application/config.py](application/config.py) 修改。EdgeTAM 超时实例先进入内部 Missing，后台只搜索一次；满足试运行门槛（相似度 0.85、分差 0.10、无竞争／正常区域占用）才接回，其他结果才显示在 A／B 人工名单。点击名单或 `Recover units` 可审核候选，`Correct` 确认、`No` 发起新一轮单次搜索，也可清空后补点。原追踪器自行返回的 mask 仍只作 `Estimated`。门槛尚未校准，流程见[前端说明](frontend/README.md#追踪失败判定与只读名单)。
-
-播放页的 `Recalibrate` 按固定相机理想假设处理，保持原始视频持续播放，不执行相机运动检测。重新选四角及确认尺寸后，以同帧原图和 mask 迁移到独立新会话，保留 ID、原始 reference 和失败回退，成功后切换标定并显示最新帧，源时钟不重启。初始化中也可 Esc 取消；详情见[重新标定流程](frontend/README.md#比赛中重新标定)。
-
-规则查询使用标定后托盘几何及已登记规则属性。单位半环提供 Distance、LOS 和 Move。Qt 当前从 Live 编辑单位资料及地形，Terrain 移到 Registration 已列入 TODO。规则范围见 [游戏规则组件](components/game_rules/README.md)。
-
-运行核心现位于 [application](application/README.md)：一个比赛实例通过 `tick()` 无窗口推进，以明确命令及冻结快照供 UI 使用。Qt 已接入真实注册和 Live 单位选择／半环菜单、只读单位信息、Distance 连线读数、LOS／Move 底部查询抽屉及右侧 A／B 不确定单位列表；默认托盘更新为 adaptive，稳定 mask 复用几何。重拟合时质心位移超过托盘短边的 50% 则直接完整搜索，其余优先沿用旧框做局部搜索。局部与完整搜索共用[方向 Chamfer Beam 流程](components/boundary_detection/tray/README.md#逐级回退)，所有分支均要求矩形填充率严格大于 85%，可靠边角用于判断边缘贴合；Live 主路径已做受控 CPU 离屏检查，真实模型／持续追踪与原生交互仍待验收。注册包含桌角／尺寸、点提示、类型绑定、初始正面、一次保存和连续播放；部分受控接口验收已通过，两页离屏加载已通过，实际界面交互待验收，I14 验收仍未完成。使用相同模型环境与独立 Qt 依赖，启动见 [Qt 客户端](frontend/qt/README.md)：
+> **重要**：请保持 [requirements.txt](requirements.txt) 中的 `transformers==5.18.0` 精确版本，EdgeTAM 加速、有界会话裁剪与 SAM3 特征缓存依赖该版本的内部接口。
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
+# 安装核心依赖（已安装的 +cu / +rocm 构建满足 torch==2.13.0 / torchvision==0.28.0）
+python -m pip install -r requirements.txt
+
+# 安装 Qt Quick 桌面客户端依赖（二选一：直接装入当前环境，或装到隔离目录 outputs/ui_preview/deps）
+python -m pip install -r frontend/qt/requirements.txt
+# 或隔离安装：
+# python -m pip install --target outputs/ui_preview/deps -r frontend/qt/requirements.txt
 ```
 
-复用完成的注册可在注册页点 `Load registration` 选原目录的 `prompts.json`，或在上面命令中用 `--registration outputs/sam3_registration/frame_5b58dfca4481` 替换 `--start 3600`。该存档自动回到45:00，保留24个对象及原ID，模型就绪后直接 `Start video`。每次载入新建测试记录，不覆盖原存档；这是复用初始注册，不是恢复中途进度。
+#### 3. 准备模型权重与追踪依赖
 
-完整直播已下载至 `inputs/Ja5-2RIOBXU_full.mp4`（9:35:57，1080p／60fps，约 5.9 GB；大文件已忽略，来源见 [记录](inputs/Ja5-2RIOBXU_full.source.json)）。上述命令从 01:00:00 的该场第一回合开始，单位较原 02:30:00 片段分散；可修改 `--start` 秒数。省略 `--seconds` 默认播放到视频结尾，短测可显式传入时长。原五分钟片段保留。Qt 注册不画选中外接框，Points 模式赋予类型成功后自动进入下一 mask。
+所有模型加载器均默认开启 `local_files_only=True`，启动程序时**不会**自动联网下载权重；首次在新机器部署需提前准备以下资产（均位于 `.gitignore` 忽略目录或 Hugging Face 全局缓存中）：
 
-### 目录
+```powershell
+# 1) 准备 EdgeTAM 权重（outputs/model_cache）与 timm==1.0.30（outputs/tracking_dependencies）
+#    如需同时准备 Cutie 对照后端，可将 edgetam 改为 all
+python -m tools.setup_tracking --backend edgetam
+```
+
+- **SAM3 权重（`facebook/sam3`，必需）**：该仓库在 Hugging Face 上为**受限模型（gated repo）**。需使用已获 Meta 授权的账号执行 `hf auth login` 后预下载到本机 Hugging Face 缓存，或直接复制已有机器的缓存／模型目录并在启动时传入 `--segmentor <本地目录>`。
+- **DINOv2 权重（`facebook/dinov2-small`，自动恢复需要）**：公开模型，预下载至 Hugging Face 默认缓存即可（例如使用 `huggingface_hub.snapshot_download("facebook/dinov2-small")`）。若缺失，程序仍可正常启动，自动恢复会自动降级为仅手动恢复。
+- **可选资产**：Real-ESRGAN 超分（独立 Vulkan 工具，见 [real_esrgan](components/real_esrgan/README.md)）与 DVMNet 正面实验（`python -m tools.setup_facing`）在默认流程中不需要。
+
+### 快速启动
+
+桌面客户端统一由 Qt 启动（`python -m frontend.qt`、`python -m frontend` 与 `python -m tools.sam3_registration` 等价；OpenCV 视频客户端已退役）：
+
+```powershell
+# 1. 使用随仓库提供的 5 分钟测试片段（截取前 30 秒快速试跑）
+python -m frontend.qt inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
+
+# 2. 使用完整对局录像（约 5.9 GB，未入 Git，来源见 inputs/Ja5-2RIOBXU_full.source.json）
+python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
+
+# 3. 直接载入已完成的注册存档（自动定位存档帧并锁定注册，新建本次输出与历史）
+python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_registration/<存档目录>
+```
+
+> 若使用 Conda 且未手动激活环境，可在命令前加 `conda run --no-capture-output -n <环境名>`。
+
+**常用命令行参数**（完整列表与默认值见 [启动参数](frontend/README.md#启动参数默认值)）：
+
+| 参数 | 说明 |
+| --- | --- |
+| `--start <sec>` / `--seconds <sec>` | 起始秒数与播放时长；省略 `--seconds` 默认播放至视频末尾 |
+| `--registration <dir\|prompts.json>` | 载入已完成注册存档并定位到存档帧 |
+| `--device <cuda:0\|cpu>` | 指定 PyTorch 推理设备（默认自动选择显存最大的 GPU） |
+| `--segmentor <id\|path>` | 首帧注册用 SAM3 模型 ID 或本地权重目录（默认 `facebook/sam3`） |
+| `--tracker <edgetam\|sam3\|cutie>` | 传播后端（默认 `edgetam`） |
+| `--inference-fps <hz>` | 追踪推理频率上限 |
+| `--profile` | 导出同步计时与运行配置日志到 `outputs/tracking_comparison/` |
+
+### 目录导航
 
 ```text
+application/                无窗口比赛核心（MatchApplication、MatchSession、串行模型队列、异步托盘与历史）
 frontend/
-  qt/                        Qt Quick desktop video client
-  arguments.py               Video command-line options
-  shared/layers.py           Geometry-query overlays
-  image/                     Standalone image registration windows
+  qt/                       Qt Quick 桌面客户端（注册、Live 控制台、恢复、重标定、地形、Replay、Debug）
+  arguments.py              视频命令行参数定义
+  shared/layers.py          规则几何查询叠加层
+  image/                    独立单图分割与注册查看器
 components/
-  game_data.py               Shared match data and rectangle/state history
-  history.py                 Background SQLite history and indexed per-unit reads
-  motion_history.py          Independent translation / rotation event detection
-  replay.py                  Captured history index and endpoint scene reconstruction
-  recalibration.py           Board, mask and annotation coordinate migration
-  registration/              Unit catalog, bindings and reference export
-  boundary_detection/        Shared LSD, table/tray fitting and Canny
-  homography/                Rectification and coordinate transforms
-  sam3/                      Image/video model interfaces
-  tracking/                  Optional Cutie / EdgeTAM video propagation
-  dinov2/                    Frozen feature extraction
-  facing/                    DVMNet appearance selection of current tray front edge
-  image_io/                  Image reading and saving
-  video_io/                  Video decoding and timestamps
-  real_esrgan/               Optional Vulkan super-resolution
-  game_rules/                Independent KoW4 mini distance, LOS and sampled movement
-tools/                       Independent command-line entry points
-docs/                        Requirements and architecture documents
-inputs/                      Input media and unit catalogs
-outputs/                     Generated experiment results
+  game_data.py              本局共享状态与观测快照
+  history.py                后台 SQLite 历史写盘与索引查询
+  motion_history.py         独立平移／旋转事件检测
+  replay.py                 历史索引与步进场景重建
+  recalibration.py          桌角、mask 与标注跨标定坐标迁移
+  registration/             军表 PDF 解析、单位目录、绑定与 reference 导出
+  boundary_detection/       LSD 桌角检测、托盘拟合（tray/）与 Canny 诊断
+  homography/               俯视拉正与坐标变换
+  sam3/                     SAM3 图像／点提示／视频模型接口
+  tracking/                 EdgeTAM / Cutie 视频传播与自动／手动恢复
+  dinov2/                   冻结 DINOv2 特征提取与候选匹配
+  facing/                   实验性 DVMNet 正面选边（默认停用）
+  game_rules/               独立 KoW4 mini 距离、LOS 与采样移动规则计算
+  image_io/                 支持 Unicode 路径的图像读写
+  video_io/                 本地视频解码与时间戳读取
+  real_esrgan/              可选 Vulkan 4× 超分工具
+tools/                      独立命令行入口（见下表）
+design/                     Qt UI 交互稿与独立注册预览
+inputs/                     示例视频片段、测试图片与军表示例（大视频已忽略）
+outputs/                    运行输出、模型缓存与隔离依赖（已忽略）
 ```
 
-### 独立工具 / Independent tools
+> 算法组件不导入 `frontend/` 或 `tools/`，可直接从 `components/` 调用（例如 `from components.boundary_detection.table import detect_table`）。LSD 配置位于 [config.toml](components/boundary_detection/config.toml)，几何长度参数以百分比配置（`5` 表示短边的 5%），物理尺寸统一使用 mm / in。
 
-在项目根目录运行 `python -m tools.<工具名> --help` 查看参数。桌面入口为 `python -m frontend.qt`，`python -m frontend` 和 `python -m tools.sam3_registration` 也启动 Qt。
+### 独立命令行工具
 
-| 工具 / Tool | 用途 / Purpose |
+在项目根目录运行 `python -m tools.<工具名> --help` 查看完整参数：
+
+| 工具 | 用途 |
 | --- | --- |
-| `table_detector` | 图像到桌角与四边 / Table corners and edges |
-| `boundary_detection` | LSD 原始结果、逐步诊断和导出 / LSD inspection and export |
-| `canny` | 青色轮廓及可选 Hough 对照 / Canny contours and optional Hough |
-| `pick_table_corners` | 独立图片的手动四角坐标 / Manual image corner coordinates |
-| `homography` | 图像与四角到俯视图及坐标矩阵 / Rectification and mappings |
-| `sam3_segmenter` | 图片与 miniature 提示词分割 / Text-prompted image segmentation |
-| `sam3_click_segmenter` | 图片点击分割及切图 / Point segmentation and cutouts |
-| `sam3_image_registration` | 图片检测、增删及多边形注册 / Image registration |
-| `tray_detector` | mask 与实际尺寸到托盘候选 / Tray proposals from masks and dimensions |
-| `project_units` | 带 ID 的托盘、mask 投影与图层 / Unit projection and layers |
-| `update_type_features` | 从已完成注册更新 DINOv2 特征 / Update DINOv2 reference features |
-| `evaluate_recovery` | 离线验证 SAM 文本候选与仅缺失实例的 DINO 匹配；不接回直播 / Offline recovery retrieval diagnostics; no ID acceptance |
-| `super_resolution` | Real-ESRGAN 备用边缘增强 / Optional edge enhancement |
-| `image_io` | 支持中文路径及通道保留的读写 / Image conversion and saving |
-| `query_rules` | 从 scene.json 查询距离、LOS 或普通移动／Double / Query a metric scene |
-| `read_unit_list` | Mantic Companion PDF 军表转注册类型 JSON / Convert army-list PDFs to type catalogs |
-| `setup_tracking` | 准备 Cutie／EdgeTAM 的固定源码、权重及独立依赖 / Prepare optional tracker assets |
-| `setup_facing` | 准备 DVMNet 固定源码、权重及独立依赖 / Prepare experimental facing assets |
+| `setup_tracking` | 准备 EdgeTAM / Cutie 固定版本源码、权重及隔离依赖 |
+| `setup_facing` | 准备实验性 DVMNet 源码、权重及依赖 |
+| `read_unit_list` | Mantic Companion PDF 军表转注册类型 JSON |
+| `table_detector` | 单图桌角与四边自动检测 |
+| `pick_table_corners` | 单图手动选取桌角坐标 |
+| `boundary_detection` | LSD 原始结果、逐步交互诊断与导出 |
+| `canny` | 轮廓及可选 Hough 对照实验 |
+| `homography` | 图像与四角到俯视拉正图及坐标变换矩阵 |
+| `sam3_segmenter` | 单图文本提示（默认 `miniature`）实例分割 |
+| `sam3_click_segmenter` | 单图多目标点击分割与透明切图 |
+| `sam3_image_registration` | 单图自动检测、人工增删与多边形注册 |
+| `tray_detector` | 从 mask 与物理尺寸拟合托盘矩形候选 |
+| `project_units` | 俯视战场托盘、mask 投影与图层导出 |
+| `update_type_features` | 从已完成注册生成／更新 DINOv2 参考特征库（NPZ） |
+| `evaluate_recovery` | 离线评估 SAM 候选与缺失单位的 DINOv2 检索表现 |
+| `query_rules` | 对导出的 `scene.json` 执行距离、LOS 或移动查询 |
+| `super_resolution` | Real-ESRGAN Vulkan 备用 4× 图像增强 |
+| `image_io` | 支持 Unicode 路径与通道保留的图像读写转换 |
 
-算法接口直接从组件导入，例如 `from components.boundary_detection.table import detect_table`；CLI 只处理参数、展示与导出。LSD 配置位于 [config.toml](components/boundary_detection/config.toml)，源线段长度过滤默认关闭，合并后长度过滤默认开启。几何长度配置使用百分比（`5` = 5%）：桌边以图像短边为基准，托盘局部容差以托盘短边为基准；实际尺寸仍用 mm／in。完整用法见各组件 README。
+### 延伸文档
 
-前端默认由 SAM3 完成首帧注册（`--segmentor` 指定其 checkpoint），再将 mask 交给 EdgeTAM 传播（`--tracker edgetam`）；可显式选择 `--tracker sam3`／`--tracker cutie` 作对照，详见 [视频追踪](components/tracking/README.md)。正式客户端固定 adaptive 托盘更新：稳定时复用，变化时先局部、失败再完整搜索；`--profile` 导出计时。几何结果持续更新并标注观测时间，资料／地形表单采用非阻塞轮询，B08 不停源；播放页已移除 Hold／HELD。EdgeTAM 自动／手动恢复已接入，what-if 仍待实现，LK 已移除。
+| 文档 | 内容 |
+| --- | --- |
+| [Qt 客户端操作说明](frontend/qt/README.md) | 注册、Live 控制台、恢复、重标定、地形、Debug 与 Replay 交互细节 |
+| [前端架构与参数说明](frontend/README.md) | 命令行默认值、工作流边界、DVMNet 实验记录与共享数据结构 |
+| [无窗口应用核心](application/README.md) | `MatchApplication` 命令接口、快照契约与异步调度 |
+| [视频追踪与恢复](components/tracking/README.md) | EdgeTAM / Cutie 接口、裁剪策略与自动／手动恢复边界 |
+| [军表与注册数据](components/registration/README.md) | 双军表编号规则、PDF reader 与 reference 导出格式 |
+| [边界与托盘检测](components/boundary_detection/README.md) | LSD 桌角流程与[托盘拟合回退策略](components/boundary_detection/tray/README.md) |
+| [规则原型](components/game_rules/README.md) | 距离、LOS、采样移动定义与[示例场景](inputs/rules.example.json) |
+| [项目思路.md](项目思路.md) / [TODO.md](TODO.md) / [待澄清列表.md](待澄清列表.md) | 设计 rationale、算法实验记录、实施进度与已确认需求基线 |
 
-### 环境
-
-使用现有 `sam3-demo` 环境，Python 3.12 及以上；当前环境为 3.13.16。依赖版本记录在 [requirements.txt](requirements.txt)。
-
-```powershell
-conda run -n sam3-demo python -m pip install -r requirements.txt
-```
-
-新环境先安装与显卡匹配的 PyTorch／torchvision。本机使用 ROCm，依赖版本兼容现有的 `+rocm10.0.0` 构建。SAM3／DINOv2 权重需单独缓存，Real-ESRGAN 使用独立 Vulkan 程序与模型，安装方式见 [组件文档](components/real_esrgan/README.md)。
+---
 
 ## English
 
-The demo reads a video's initial frame, detects or manually corrects table corners, confirms the physical table dimensions, rectifies the battlefield with Homography, registers masks and unit types, then plays the video with propagated masks. All UI text is English. Mask and tray layers are independent. The KoW4 mini prototype adds base-to-base distance, sampled LOS and ordinary/At the Double reachable poses; Charge is deferred. EdgeTAM supports single-search automatic recovery, candidate review and manual recovery retaining existing IDs.
+### Overview
+
+A desktop prototype for augmenting tabletop wargame match videos. Built around a Qt Quick console (English UI), it performs table calibration and homography rectification, first-frame unit segmentation and army-list binding, video mask propagation, tray rectangle fitting, KoW4 mini geometry queries, failure recovery, and step-based historical board replay.
+
+### Core Workflow & Capabilities
+
+1. **Table Calibration & Rectification** — Automatic LSD corner detection (with manual 4-point correction), physical table size confirmation (prefilled with `72 × 48 in` test defaults), and perspective rectification.
+2. **First-Frame Registration & Army Lists** — SAM3 point prompting plus manual rectangle / 4-corner polygon masks; `Import list A` / `Import list B` loads Mantic Companion PDFs or single-army JSON catalogs (defaulting List A to [units.video_estimate.json](inputs/units.video_estimate.json)), infers standard base dimensions, allocates per-type IDs (`A1.1`, `B1.1`), optionally marks initial fronts (`F`), commits references once (`S` or `Start video`), and supports reloading completed archives via `Load registration` or `--registration`.
+3. **Tracking & Adaptive Tray Fitting** — Registers with **SAM3** and propagates masks with **EdgeTAM** by default (`--tracker sam3` or `--tracker cutie` available for comparison). Tray fitting runs asynchronously on a dedicated CPU worker in `adaptive` mode (reusing stable geometry, falling back from local to full directional Chamfer Beam search with >85% mask fill, and showing dashed last-accepted trays while a tracked unit temporarily fails fitting). `Masks` and `Trays` toggles control display only.
+4. **Tracking Failure & Recovery (EdgeTAM)** — After continuous mask loss (default 10 s in [application/config.py](application/config.py)), EdgeTAM runs one automatic search per newly failed unit (SAM3 text detection + DINOv2-small retrieval; trial gates: cosine ≥ 0.85, margin ≥ 0.10, no occupancy/competition conflicts). Unresolved units appear in the A/B review list for `Correct`, `No` (one retry), or isolated manual recovery via the unit menu's red `Correct` action retaining the original ID.
+5. **Live Geometry Tools & Auxiliary Flows** — Unit radial menu for `Distance` (in-canvas measurement label), `LOS`, `Move` (sampled Advance / At the Double / Back / Sidestep / Change facing / Halt poses; Charge deferred), and `Info` profile view/editing; non-blocking `Recalibrate` (fixed-camera assumption), terrain annotation, and `Debug` snapshot capture.
+6. **History & Board Replay** — Continuous SQLite logging (`history.sqlite3`) anchored in original video pixels with metric rule calculations; independent translation/rotation event detection (10 mm / 10°, 5 s settle); read-only `Replay` while live playback, tracking, and recording continue in the background.
+7. **Disabled by Default / Pending** — Live DVMNet facing tracking is disabled (`FACING_TRACKING_ENABLED = False`; initial `F` registration data is retained). Audience window, What-if simulation, and moving Terrain into Registration are tracked in [TODO.md](TODO.md).
+
+### Setup & Cross-Machine Portability
+
+- **Requirements**: Python ≥ 3.12 (verified on Windows, Python 3.13.16). A CUDA or ROCm GPU is strongly recommended (the largest-VRAM GPU is selected automatically; CPU fallback works via `--device cpu`).
+- **Memory footprint**: With default settings (SAM3 + EdgeTAM + automatic recovery SAM3/DINOv2 in FP32), measured steady GPU usage is ~5.4–6.6 GiB VRAM (~8 GiB peak RAM). **12 GB+ VRAM / 16 GB+ RAM** is recommended; on **8 GB GPUs**, set `AUTO_RECOVERY_ENABLED = False` in [application/config.py](application/config.py) if OOM occurs (manual recovery remains available).
+
+#### 1. Install GPU-Compatible PyTorch First
+
+> **Important**: On Windows, running `pip install -r requirements.txt` directly installs **CPU-only** PyTorch from PyPI. Install matching `torch==2.13.0` and `torchvision==0.28.0` for your target GPU (NVIDIA CUDA or AMD ROCm) *before* installing `requirements.txt`.
 
 ```powershell
-conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
+# Example with NVIDIA CUDA (adjust cu128 to match the machine's CUDA driver)
+python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu128
 ```
 
-Weights load at startup; rectified first-frame features are prepared after corner and dimension confirmation. Registration drafts stay in memory. S or first playback commits final references once and locks editing. Reset starts a new registration.
+#### 2. Install Core & Qt Dependencies
 
-EdgeTAM is the default propagation backend, initialized from the registered SAM3 masks; use `--tracker sam3` or `--tracker cutie` for comparison. Prepare tracker assets with `python -m tools.setup_tracking --backend all`. Geometry queries follow live observations and show their source time. Rule/terrain forms are non-blocking, and B08 keeps playback active. Hold/HELD has been removed; Space/Q clears tools and returns live. EdgeTAM searches once for failed instances before showing human requests. Trial gates are cosine 0.85 and margin 0.10, with conflict/normal-occupancy protection. Click a failed ID or Recover units to review; Correct confirms, No requests one new search, and Clear / Retry allows manual points. What-if remains pending. LK has been removed. See [tracker setup and limits](components/tracking/README.md).
+> **Important**: Keep the exact `transformers==5.18.0` pin in [requirements.txt](requirements.txt); EdgeTAM acceleration, bounded session pruning, and SAM3 feature caching rely on this version's internals.
 
-Use `Import list A` / `Import list B` in the registration sidebar to select each army's PDF or single-army JSON directly. Two independent columns show the unit classification or name, with click/drag binding. Instances of types A1/B1 become A1.1/B1.1; no catalog parameter is required. The [ABC test data](inputs/units.video_estimate.json) initially occupies List A: Type 1 is approximately 155 x 50 mm and Types 2/3 are 205 x 80 mm; List B awaits import. After locking the corners, confirm the `Length (in)` / `Width (in)` fields, prefilled with 72 / 48. These defaults are test assumptions, not verified measurements. The standalone `tools.read_unit_list` converter is available. The camera is assumed fixed between calibrations.
+```powershell
+python -m pip install -r requirements.txt
+python -m pip install -r frontend/qt/requirements.txt
+# Optional isolated Qt install:
+# python -m pip install --target outputs/ui_preview/deps -r frontend/qt/requirements.txt
+```
 
-F marks the initial front edge in Registration. In Live, select a unit for Distance, LOS, Move or rule information. Terrain is currently in Live and is scheduled to move to Registration. See [the rule component](components/game_rules/README.md) and [illustrative scene](inputs/rules.example.json).
+#### 3. Prepare Model Weights & Tracker Assets
 
-The directory tree and independent tool list above describe the current ownership. The Qt window reads snapshots and submits commands to one MatchApplication. MatchSession schedules model and tray tasks. Algorithm components never import the frontend or command-line tools. Unit data and reference export are independent of SAM. Run `python -m tools.<tool> --help` for standalone tools; `python -m tools.sam3_registration` also starts the desktop app. Geometric length settings use explicit percentages (`5` means 5%): table thresholds use the image short side, while local tray tolerances use the tray short side. Physical dimensions remain in mm/in.
+All model loaders default to `local_files_only=True` and do not auto-download during app startup:
 
-Each MatchSession owns one [GameData](components/game_data.py) instance for local observations and global translation/rotation events. The two event types run independently and finish after 5 seconds of sampled stability, initially using 10 mm / 10 degree tolerances. Original video pixels are the canonical spatial record; rule calculations remain in millimetres. Recalibration alone preserves action continuity, while actual tracking/geometry loss interrupts events without claiming a completed move. Records continuously write to `history.sqlite3`, with recent, ongoing and unsaved data cached in memory. R preserves the old database. Replay projects saved rectified step images onto the historical board and overlays unit IDs and rectangles. Each completed move or rotation forms one step, navigated with Left/Right, A/D or buttons. Source playback, tracking and recording continue in the background, and Back to Live returns to the latest view. Refresh includes newly completed events. See [replay controls](frontend/README.md#历史棋盘回放).
+```powershell
+# Download EdgeTAM checkpoint (outputs/model_cache) and timm==1.0.30 (outputs/tracking_dependencies)
+# Use --backend all if you also want Cutie
+python -m tools.setup_tracking --backend edgetam
+```
 
-During playback, `Recalibrate` assumes a stable camera and keeps the raw source view running without camera-motion detection. Matching source images and masks seed an independent tracking session using loaded weights, retaining IDs and references. Success switches calibration versions and displays the latest source frame without restarting its clock; Esc can cancel during initialization. Failures retain the old session, and unavailable masks retain their unit records without fabricated positions. See [the recalibration workflow](frontend/README.md#比赛中重新标定).
+- **`facebook/sam3` (required, gated repo)**: Request access on Hugging Face, authenticate (`hf auth login`), and pre-download into the local Hugging Face cache — or copy an existing local snapshot folder and pass `--segmentor <local_dir>`.
+- **`facebook/dinov2-small` (for automatic recovery)**: Public model; pre-cache via Hugging Face Hub. If absent, the app still starts and falls back to manual recovery only.
+- **Optional assets**: Real-ESRGAN ([setup](components/real_esrgan/README.md)) and DVMNet facing (`python -m tools.setup_facing`) are not needed for the default workflow.
 
-See [the UI guide](frontend/README.md), [registration data](components/registration/README.md), [SAM video API](components/sam3/video/README.md), [boundary detection](components/boundary_detection/README.md), [Homography](components/homography/README.md) and [DINOv2](components/dinov2/README.md). Design rationale and meaningful experimental findings are maintained in [项目思路.md](项目思路.md).
+### Quick Start
 
-Use Python 3.12 or newer with the pinned [requirements](requirements.txt). For a new environment, install a GPU-compatible PyTorch/torchvision build first. This machine uses ROCm; the pins accept its installed `+rocm10.0.0` builds. SAM3/DINOv2 weights and the Real-ESRGAN Vulkan runtime/models are separate assets.
+`python -m frontend.qt`, `python -m frontend`, and `python -m tools.sam3_registration` all launch the Qt desktop client (the legacy OpenCV video client has been retired):
 
-Live facing updates are disabled by default. Registration can still save an initial front with F. See [the facing experiments](frontend/README.md#dvmnet-辅助正面).
+```powershell
+# 5-minute clip tracked in Git (30-second test run)
+python -m frontend.qt inputs/Ja5-2RIOBXU_02-30-00_02-35-00.mp4 --seconds 30
+
+# Full match video (5.9 GB, gitignored; see inputs/Ja5-2RIOBXU_full.source.json)
+python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
+
+# Reload a completed registration archive
+python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_registration/<archive_dir>
+```
+
+See the [Chinese directory map](#目录导航) and [standalone tool table](#独立命令行工具) above (`python -m tools.<tool> --help`), plus [frontend/qt/README.md](frontend/qt/README.md), [frontend/README.md](frontend/README.md), [application/README.md](application/README.md), [components/tracking/README.md](components/tracking/README.md), [components/game_rules/README.md](components/game_rules/README.md), and [项目思路.md](项目思路.md) for full details.
