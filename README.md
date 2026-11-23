@@ -27,7 +27,7 @@ A desktop prototype for augmenting tabletop wargame match videos. Built around a
 
 #### 1. Install GPU-Compatible PyTorch First
 
-> For GPU inference on Windows, install matching `torch==2.13.0` and `torchvision==0.28.0` builds for your GPU before installing `requirements.txt`. The NVIDIA example below requires a CUDA 13.0-compatible driver. For AMD, use the corresponding ROCm builds. For CPU-only use, skip this step and launch with `--device cpu`.
+> For GPU inference on Windows, install matching `torch==2.13.0` and `torchvision==0.28.0` builds for your GPU **before** installing `requirements.txt` (otherwise `pip install -r requirements.txt` installs the CPU-only `+cpu` wheel from PyPI). The NVIDIA example below requires a CUDA 13.0-compatible driver; for AMD GPUs, install the corresponding ROCm builds. For CPU-only use, skip this step and launch with `--device cpu`.
 
 ```powershell
 # NVIDIA example for a CUDA 13.0-compatible driver
@@ -40,20 +40,31 @@ python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://down
 
 ```powershell
 python -m pip install -r requirements.txt
+
+# Optional check: confirm GPU is visible (expected e.g. 2.13.0+cu130 True / +rocm... True)
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 #### 3. Prepare Model Weights & Tracker Assets
 
-All model loaders default to `local_files_only=True` and do not auto-download during app startup:
+All model loaders default to `local_files_only=True` and do not auto-download during app startup. Pre-download the required assets before running the client:
 
 ```powershell
-# Download EdgeTAM checkpoint (outputs/model_cache) and timm==1.0.30 (outputs/tracking_dependencies)
-# Use --backend all if you also want Cutie
+# 1) EdgeTAM checkpoint (outputs/model_cache) and timm==1.0.30 (outputs/tracking_dependencies)
+#    Use --backend all if you also want Cutie
 python -m tools.setup_tracking --backend edgetam
+
+# 2) SAM3 weights (required, gated repo):
+#    First request access on https://huggingface.co/facebook/sam3, then log in and download to local HF cache:
+hf auth login
+hf download facebook/sam3
+
+# 3) DINOv2 weights (recommended, for automatic recovery):
+hf download facebook/dinov2-small
 ```
 
-- **`facebook/sam3` (required, gated repo)**: Request access on Hugging Face, authenticate (`hf auth login`), and pre-download into the local Hugging Face cache — or copy an existing local snapshot folder and pass `--segmentor <local_dir>`.
-- **`facebook/dinov2-small` (for automatic recovery)**: Public model; pre-cache via Hugging Face Hub. If absent, the app still starts and falls back to manual recovery only.
+- **Custom/offline SAM3 path**: By default `hf download` caches to `%USERPROFILE%\.cache\huggingface\hub` (or `$HF_HOME\hub`). If you copied a local snapshot folder from another machine instead, pass `--segmentor <local_dir>` at launch.
+- **`facebook/dinov2-small`**: Public model for automatic recovery; if absent, the app still starts and falls back to manual recovery only.
 - **Not suggested - Optional assets**: Real-ESRGAN ([setup](components/real_esrgan/README.md)) and DVMNet facing (`python -m tools.setup_facing`) are not needed for the default workflow.
 
 ### Quick Start
@@ -70,6 +81,8 @@ python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
 # Reload a completed registration archive
 python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_registration/<archive_dir>
 ```
+
+> **Quick try tip**: During first-frame registration, List A defaults to [units.video_estimate.json](inputs/units.video_estimate.json). To try importing real army lists, click `Import list A` / `Import list B` in the sidebar and select sample Mantic Companion PDFs from [inputs/army_lists/us_masters_2026](inputs/army_lists/us_masters_2026) (or [units.example.json](inputs/units.example.json)).
 
 ---
 
@@ -112,7 +125,7 @@ python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_re
 
 #### 1. 安装 PyTorch（先装与目标显卡匹配的版本）
 
-> Windows 上使用 GPU 推理时，请先安装与显卡匹配的 `torch==2.13.0` 与 `torchvision==0.28.0`，再安装 `requirements.txt`。下方 NVIDIA 示例要求驱动兼容 CUDA 13.0，AMD 显卡请选对应的 ROCm 构建。仅使用 CPU 时可跳过 PyTorch 的单独安装，启动时传入 `--device cpu`。
+> Windows 上使用 GPU 推理时，请务必**先**安装与显卡匹配的 `torch==2.13.0` 与 `torchvision==0.28.0`，再安装 `requirements.txt`（否则 `requirements.txt` 会从 PyPI 安装仅 CPU 的 `+cpu` 版本）。下方 NVIDIA 示例要求驱动兼容 CUDA 13.0，AMD 显卡请选对应的 ROCm 构建。仅使用 CPU 时可跳过此步，启动时传入 `--device cpu`。
 
 ```powershell
 # 示例：创建虚拟环境（Conda 或 venv 均可）
@@ -130,20 +143,31 @@ python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://down
 ```powershell
 # 安装核心依赖和 Qt（已安装的 +cu / +rocm 构建满足 torch==2.13.0 / torchvision==0.28.0）
 python -m pip install -r requirements.txt
+
+# 可选自检：确认 PyTorch 版本与 GPU 是否可用（正常 GPU 环境应输出 True）
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 #### 3. 准备模型权重与追踪依赖
 
-所有模型加载器均默认开启 `local_files_only=True`，启动程序时**不会**自动联网下载权重；首次在新机器部署需提前准备以下资产（均位于 `.gitignore` 忽略目录或 Hugging Face 全局缓存中）：
+所有模型加载器均默认开启 `local_files_only=True`，启动程序时**不会**自动联网下载权重；首次在新机器部署需提前运行以下命令准备本地缓存（均位于 `.gitignore` 忽略目录或 Hugging Face 全局缓存中）：
 
 ```powershell
 # 1) 准备 EdgeTAM 权重（outputs/model_cache）与 timm==1.0.30（outputs/tracking_dependencies）
 #    如需同时准备 Cutie 对照后端，可将 edgetam 改为 all
 python -m tools.setup_tracking --backend edgetam
+
+# 2) 下载 SAM3 权重（必需，Hugging Face 受限模型 gated repo）
+#    需先在 https://huggingface.co/facebook/sam3 申请并通过 Meta 授权，再登录并下载到本地缓存：
+hf auth login
+hf download facebook/sam3
+
+# 3) 下载 DINOv2 权重（推荐，自动恢复需要；缺失时仅影响自动恢复）
+hf download facebook/dinov2-small
 ```
 
-- **SAM3 权重（`facebook/sam3`，必需）**：该仓库在 Hugging Face 上为**受限模型（gated repo）**。需使用已获 Meta 授权的账号执行 `hf auth login` 后预下载到本机 Hugging Face 缓存，或直接复制已有机器的缓存／模型目录并在启动时传入 `--segmentor <本地目录>`。
-- **DINOv2 权重（`facebook/dinov2-small`，自动恢复需要）**：公开模型，预下载至 Hugging Face 默认缓存即可（例如使用 `huggingface_hub.snapshot_download("facebook/dinov2-small")`）。若缺失，程序仍可正常启动，自动恢复会自动降级为仅手动恢复。
+- **离线／自定义 SAM3 路径**：`hf download` 默认缓存到 `%USERPROFILE%\.cache\huggingface\hub`（或 `$HF_HOME\hub`）。若直接从其他机器复制模型快照目录（含 `config.json`、`preprocessor_config.json` 等），可在启动时传入 `--segmentor <本地目录>`。仅执行 `hf auth login` 而未执行 `hf download` 不会下载权重，启动时会报 `OSError: Can't load image processor for 'facebook/sam3'`。
+- **DINOv2 权重（`facebook/dinov2-small`）**：公开模型，用于自动恢复；若未下载，程序仍可正常启动，自动恢复会降级为仅手动恢复。
 - **不建议(未实装)可选资产**：Real-ESRGAN 超分（独立 Vulkan 工具，见 [real_esrgan](components/real_esrgan/README.md)）与 DVMNet 正面实验（`python -m tools.setup_facing`）在默认流程中不需要。
 
 ### 快速启动
@@ -161,6 +185,8 @@ python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --start 3600
 python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_registration/<存档目录>
 ```
 
+> **快速试用提示**：进入首帧注册时，A 栏默认已载入 [units.video_estimate.json](inputs/units.video_estimate.json)；如需试用军表导入，可点击侧栏 `Import list A` / `Import list B`，从 [inputs/army_lists/us_masters_2026](inputs/army_lists/us_masters_2026) 挑选示例 PDF 军表（或选择 [units.example.json](inputs/units.example.json)）导入体验。
+>
 > 若使用 Conda 且未手动激活环境，可在命令前加 `conda run --no-capture-output -n <环境名>`。
 
 **常用命令行参数**（完整列表与默认值见 [启动参数](frontend/README.md#启动参数默认值)）：
