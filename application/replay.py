@@ -73,17 +73,24 @@ class Replay:
         return CommandReceipt("rejected" if self.error else "pending", self.error, request_id=self.epoch)
 
     @command
-    def navigate(self, delta):
+    def select(self, index):
         if not self.steps:
             return CommandReceipt("rejected", "No active replay request.")
-        selected = max(0, min(len(self.steps) - 1, self.selected + delta))
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise ValueError("Replay step index must be an integer.")
+        selected = max(0, min(len(self.steps) - 1, index))
         if selected != self.selected:
             self.selected = selected
             self._scene = None
             self.error = ""
             if self._scene_future is not None and self._scene_future.cancel():
                 self._scene_future = None
-        return CommandReceipt("pending")
+            return CommandReceipt("pending")
+        return CommandReceipt("accepted")
+
+    @command
+    def navigate(self, delta):
+        return self.select(self.selected + delta)
 
     def poll(self):
         if not self.active:

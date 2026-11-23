@@ -350,11 +350,13 @@ class TaskWorker:
                         request["automatic_updates"].append((candidate, None, error))
             elif kind == "automatic_recovery":
                 prediction = self._automatic_recovery(request)
-            elif kind in ("recovery_seed", "recovery_point", "recovery_advance"):
+            elif kind in ("recovery_seed", "recovery_seed_mask", "recovery_point", "recovery_advance"):
                 candidate = request["recovery_candidate"]
                 source_frame = request["metadata"]["frame_index"]
                 if kind == "recovery_seed":
                     return candidate.seed(self.predictor, self.tracker, request["frame"], request["prompt"]["point"], source_frame)
+                if kind == "recovery_seed_mask":
+                    return candidate.seed_mask(self.tracker, request["frame"], request["prompt"]["mask"], source_frame)
                 if kind == "recovery_point":
                     return candidate.correct(request["frame"], request["prompt"]["point"], request["prompt"]["positive"], source_frame)
                 return candidate.advance(request["frame"], source_frame)
@@ -365,16 +367,39 @@ class TaskWorker:
                 if not mask.any():
                     raise ValueError("Candidate disappeared before confirmation. Retry on a visible target.")
                 candidate._check()
-                normal_ids = (request.get("prompt") or {}).get("normal_ids", [])
+                prompt = request.get("prompt") or {}
+                normal_ids = prompt.get("normal_ids", [])
+                normal_labels = prompt.get("normal_labels") or {}
                 if normal_ids:
                     if self.tracker.source_frame != request["metadata"]["frame_index"] or request.get("prediction") is None:
                         raise ValueError("Wait for matching normal-unit observations before confirming recovery")
+                    cand_area = int(np.count_nonzero(mask))
                     occupied = np.zeros(mask.shape, bool)
+                    conflicts = []
                     for obj, other in zip(request["prediction"]["object_ids"], request["prediction"]["masks"]):
-                        if obj in normal_ids:
-                            occupied |= other
-                    if np.any(mask & occupied):
-                        raise ValueError("Candidate overlaps another normally tracked unit. Clear / Retry.")
+                        if obj not in normal_ids:
+                            continue
+                        occupied |= other
+                        inter = int(np.count_nonzero(mask & other))
+                        if inter == 0:
+                            continue
+                        other_area = int(np.count_nonzero(other))
+                        ratio = max(inter / max(1, cand_area), inter / max(1, other_area))
+                        if ratio >= config.RECOVERY_OVERLAP_REJECT_RATIO:
+                            conflicts.append((normal_labels.get(obj, f"Object {obj}"), ratio))
+                    if conflicts:
+                        conflicts.sort(key=lambda item: -item[1])
+                        summary = ", ".join(f"{uid} ({ratio:.0%})" for uid, ratio in conflicts)
+                        raise ValueError(
+                            f"Candidate overlaps normally tracked unit {summary}. Adjust the mask or Correct that unit first."
+                        )
+                    total_overlap = int(np.count_nonzero(mask & occupied))
+                    if total_overlap > 0:
+                        if total_overlap / max(1, cand_area) >= 0.50:
+                            raise ValueError("Candidate is mostly covered by normally tracked units. Adjust the mask or Correct them first.")
+                        mask = mask & ~occupied
+                        if not mask.any():
+                            raise ValueError("Candidate has no unoccupied pixels left. Adjust the mask or Clear / Retry.")
                 request["recovery_applied"] = True
                 prediction = self.tracker.update_mask(request["frame"], request["recovery_object_id"], mask,
                                                       source_frame=request["metadata"]["frame_index"])

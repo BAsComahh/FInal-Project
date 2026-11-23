@@ -54,13 +54,31 @@ class SceneEditing:
         self.changed(refresh_inputs=False)
         return CommandReceipt("accepted")
 
+    def _next_terrain_id(self):
+        used = {item.get("terrain_id") for item in self._data.rules.terrain}
+        index = 1
+        while f"T{index}" in used:
+            index += 1
+        return f"T{index}"
+
+    def _terrain_polygon_mm(self, item):
+        if item.get("polygon_source") is not None and self._data.board.source_to_plane is not None:
+            return transform_points(item["polygon_source"], self._data.board.source_to_plane).tolist()
+        if item.get("polygon_image") is not None and self._data.board.image_to_plane is not None:
+            return transform_points(item["polygon_image"], self._data.board.image_to_plane).tolist()
+        raise ValueError("Confirm the table boundary before editing terrain.")
+
     @command
     def add_terrain(self, source_vertices, values, reference):
         self.validate(reference)
+        if self._data.board.homography is None or self._data.board.source_to_plane is None:
+            raise ValueError("Confirm the table boundary before editing terrain.")
+        if self._session.registration_locked:
+            raise ValueError("Terrain is locked after registration is saved. Reset registration to edit it again.")
         source = np.asarray(source_vertices, dtype=float)
         if source.ndim != 2 or source.shape[1] != 2 or len(source) < 3 or not np.isfinite(source).all():
             raise ValueError("Terrain requires at least three finite source points.")
-        terrain_id = f"T{len(self._data.rules.terrain) + 1}"
+        terrain_id = self._next_terrain_id()
         vertices = transform_points(source, self._data.board.homography["matrix"]).tolist()
         if not isinstance(values.get("label"), str) or not values["label"].strip():
             raise ValueError("Enter a terrain label.")
@@ -70,12 +88,52 @@ class SceneEditing:
         terrain.pop("polygon_mm")
         self._data.rules.terrain.append({**terrain, "terrain_id": terrain_id,
                                        "polygon_source": source.tolist(), "polygon_image": vertices})
-        self.changed()
-        return CommandReceipt("accepted")
+        self.changed(refresh_inputs=False)
+        return CommandReceipt("accepted", value=terrain_id)
+
+    @command
+    def update_terrain(self, terrain_id, values, reference):
+        self.validate(reference)
+        if self._data.board.homography is None or self._data.board.source_to_plane is None:
+            raise ValueError("Confirm the table boundary before editing terrain.")
+        if self._session.registration_locked:
+            raise ValueError("Terrain is locked after registration is saved. Reset registration to edit it again.")
+        target = next((item for item in self._data.rules.terrain if item.get("terrain_id") == terrain_id), None)
+        if target is None:
+            raise ValueError("Terrain is no longer registered.")
+        label = values.get("label")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("Enter a terrain label.")
+        candidate = deepcopy(values)
+        candidate["label"] = label.strip()
+        validated = validate_scene({"ruleset": "kow4-mini", "board_size_mm": self._data.board.board_size_mm,
+            "units": [], "terrain": [{**candidate, "terrain_id": terrain_id,
+                "polygon_mm": self._terrain_polygon_mm(target)}]})["terrain"][0]
+        target["label"] = validated["label"]
+        target["kind"] = validated["kind"]
+        target["height"] = validated["height"]
+        self.changed(refresh_inputs=False)
+        return CommandReceipt("accepted", value=terrain_id)
+
+    @command
+    def delete_terrain(self, terrain_id, reference):
+        self.validate(reference)
+        if self._session.registration_locked:
+            raise ValueError("Terrain is locked after registration is saved. Reset registration to edit it again.")
+        index = next((i for i, item in enumerate(self._data.rules.terrain) if item.get("terrain_id") == terrain_id), None)
+        if index is None:
+            raise ValueError("Terrain is no longer registered.")
+        self._data.rules.terrain.pop(index)
+        self.changed(refresh_inputs=False)
+        return CommandReceipt("accepted", value=terrain_id)
 
     @command
     def undo_terrain(self):
+        if self._session.closed:
+            raise ValueError("Match is closed.")
+        if self._session.registration_locked:
+            raise ValueError("Terrain is locked after registration is saved. Reset registration to edit it again.")
         if self._data.rules.terrain:
             self._data.rules.terrain.pop()
-            self.changed()
+            self.changed(refresh_inputs=False)
         return CommandReceipt("accepted")

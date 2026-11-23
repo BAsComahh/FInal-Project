@@ -36,32 +36,20 @@ conda run --no-capture-output -n sam3-demo python -m frontend.qt inputs/Ja5-2RIO
 
 ## UI 重构设计与 Qt 接入（D33／D34）
 
-最新 Qt 修订统一采用 [竖排信息卡／右半环参考](../design/ui/live/unit-info-reference.png)，边缘通过整体限位／缩放保持格式。Distance 数值直接标在测量连线上，不展开结果抽屉；LOS／Move 仍用抽屉，Distance 提示及完成操作留在控制栏。
+Qt 的竖排信息卡和右半环沿用[设计截图](../docs/ui-archive/unit-info-reference.png)，边缘通过整体限位／缩放保持格式。Distance 数值直接标在测量连线上，提示及完成操作留在控制栏；LOS／Move 使用结果抽屉。
 
-应用核心按 D35／I14 迁出主体，以 `292dc30` 保存阶段 checkpoint。Qt 通过 application 命令及快照工作，验收状态见 [前端解耦重构计划](../前端解耦重构计划.md)。
+应用核心按 D35／I14 迁出主体，以 `292dc30` 保存阶段 checkpoint。Qt 通过 application 命令及快照工作，验收状态见 [TODO I14](../TODO.md#7-叠加层与解说交互)。
 
 2026-11-10 确认先设计、再实施。操作者控制台保持视频为主。独立观众窗口计划自动跟随控制台 Live／Replay／What-if 模式，需求与状态见 [TODO I13](../TODO.md#7-叠加层与解说交互)。
 
 后续 D34 已选择底部抽屉：日常默认 Select，直接点单位展开环形 Move／Distance／LOS 及详情，不保留 Selected unit 下拉和重复尺寸／朝向字段；不确定项只按需显示 Estimated: mask／facing／mask + facing。手绘稿后的单位选中交互已认可为设计基线：左侧只读 Damage／Speed、右侧半环动作，菜单固定而选中框继续跟踪。Damage 编辑待后续；该版 Live 主交互现已接入 Qt，并完成受控主路径检查，后续辅助流程见 Qt 操作说明。
 
-参考文件随仓库存档：以 [单位半环／底部抽屉](../design/ui/unit-radial-console.html) 为当前设计基线，[早期双布局比较](../design/ui/match-console-wireframes.html) 仅供查看取舍。两者是样例内联 HTML，详细适用范围见重构计划第 1.1 节。
-
-### 单窗口 Qt 注册预览（D36）
-
-独立样例位于 [design/ui/registration](../design/ui/registration/preview.py)，只读已有注册画面和 mask，提供 A／B 示例类型、类型绑定及正负点／撤回。预览数据仅在内存。
-
-```powershell
-# Optional Qt modules are isolated from the model environment.
-& 'C:\Users\vasco\miniconda3\envs\sam3-demo\python.exe' -m pip install --target outputs/ui_preview/deps -r design/ui/registration/requirements.txt
-& 'C:\Users\vasco\miniconda3\envs\sam3-demo\python.exe' design/ui/registration/preview.py
-```
-
-默认样例为本地 `outputs/sam3_registration/frame_458b250a48ea`，可传 `--reference` 指向其他包含 `frame.png`、`instances.json` 及对应 mask 的已完成注册目录。`Assign type` 下先点 mask 再点列表；`Point prompts` 下左正右负，仅显示提示点；`Undo`／Ctrl+Z 撤回草稿，`Finish preview` 只锁定预览，`Reset draft` 重来。数据始终只在内存。
+[单位半环／底部抽屉原型](../docs/ui-archive/unit-radial-console.html)保留样例交互及观众窗口、What-if 草图。正式操作见 [Qt 客户端](qt/README.md)。
 
 ## 操作流程
 
 1. 自动检测首帧桌角，需要时手动修正。确认桌角和物理长宽后，程序拉正棋盘。
-2. 在 Registration 里添加正／负点，导入 A／B 军表并绑定类型。托盘尺寸来自 PDF 推导或目录，绑定确认当前 mask 后才拟合目标托盘。
+2. 在 Registration 里添加正／负点（或使用手绘 Rectangle／Four corners），导入 A／B 军表并绑定类型，并可按需使用 Terrain 标注地形。托盘尺寸来自 PDF 推导或目录，绑定确认当前 mask 后才拟合目标托盘。
 3. 用 `Front`／`F` 登记可用托盘的初始正面。`Save`／`S` 保存一次并锁定注册，`Start video`／`Space` 初始化所选追踪器后开始播放。Reset 开启新注册。
 
 直播的 Mask 和 Geom 各有观测时间。传播先发布 mask，托盘由独立 CPU worker 用同帧图像和 mask 拟合。`Masks`／`Trays` 控制显示，后台持续更新托盘，Distance、LOS 和 Move 使用最近接纳的有效几何。

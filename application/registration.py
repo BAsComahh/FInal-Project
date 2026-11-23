@@ -42,6 +42,7 @@ class Registration:
 
     def known_ids(self):
         ids = {click["object_id"] for click in self.clicks}
+        ids.update(self._manual_masks)
         if self._data.current.prediction is not None:
             ids.update(self._data.current.prediction["object_ids"])
         return sorted(ids)
@@ -278,6 +279,12 @@ class Registration:
     @property
     def can_undo(self):
         return bool(self.clicks or self._manual_edits)
+
+    @property
+    def last_manual_object(self):
+        if self._manual_edits and (not self.clicks or self._manual_edits[-1][0] > self.clicks[-1]["click_id"]):
+            return self._manual_edits[-1][1]
+        return None
 
     def _composed_masks(self):
         # Manual contours own their pixels before SAM masks, newest contour first.

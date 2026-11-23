@@ -1,8 +1,12 @@
 """Owner-thread recovery drafts; inference stays on the shared serial worker."""
 from copy import deepcopy
 
+import cv2
+import numpy as np
+
 from components.tracking.recovery import RecoveryCandidate
 from components.homography import transform_points
+from components.homography.geometry import order_corners
 from .contracts import command, CommandReceipt, freeze
 
 
@@ -15,7 +19,7 @@ class Recovery:
         self._candidate = self._preview = self.pending_prompt = self.pending_binding = None
         self.reported = set()
         self.review_unit_id = None
-        self.note = "Add positive / negative points, then drag an existing ID onto the candidate."
+        self.note = "Use Points, Rectangle, or Four corners to mark the unit, then click or drag its ID to confirm."
         session.recovery = self
 
     @property
@@ -27,7 +31,7 @@ class Recovery:
         request = self._session.worker.request
         return (self.pending_prompt is not None or self.committing
                 or (request is not None and request.get("recovery_candidate") is self._candidate
-                    and request["kind"] in ("recovery_seed", "recovery_point")))
+                    and request["kind"] in ("recovery_seed", "recovery_seed_mask", "recovery_point")))
 
     @command
     def open(self, unit_id=None):
@@ -39,14 +43,14 @@ class Recovery:
         self.cancel()
         self._session.presented_frame = None
         self.active = True
-        self.note = "Left: positive | Right: negative | Drag an existing ID to confirm."
+        self.note = "Use Points, Rectangle, or Four corners, then click or drag an existing ID to confirm."
         offers = self._session.automatic_recovery.records
         selected = unit_id or next((uid for uid in offers if offers[uid].get("candidate") is not None), None)
         if selected is not None:
             if self.select_unit(selected).status != "accepted":
                 state = self._session.data.tracking.get(selected)
                 if state is not None and (reason := state.recovery_update_error or state.recovery_note):
-                    self.note = f"{selected}: {reason}. Add points to create a manual candidate."
+                    self.note = f"{selected}: {reason}. Use Points, Rectangle, or Four corners to draw a candidate."
         self._session.mark_changed()
         return CommandReceipt("accepted")
 
@@ -152,13 +156,46 @@ class Recovery:
         return CommandReceipt("pending", request_id=self.candidate_generation)
 
     @command
+    def manual_mask(self, corners, reference):
+        if not self.active:
+            return CommandReceipt("rejected", self.note)
+        if self.busy:
+            self.note = "Wait for the candidate update; playback continues."
+            return CommandReceipt("rejected", self.note)
+        snapshot = self.sample(reference)
+        if snapshot is None:
+            return CommandReceipt("rejected", self.note)
+        height, width = snapshot["frame"].shape[:2]
+        quad = np.asarray(list(order_corners(corners).values()))
+        if np.any(quad < 0) or np.any(quad >= [width, height]):
+            raise ValueError("Draw the mask inside the video frame.")
+        pixels = np.floor(quad).astype(np.int32)
+        if not cv2.isContourConvex(pixels) or cv2.contourArea(pixels) <= 0:
+            raise ValueError("The manual mask is too small.")
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(mask, pixels, 1)
+        mask = mask.astype(bool)
+        if not mask.any():
+            raise ValueError("The manual mask is too small.")
+        if self._candidate is not None:
+            self._candidate.cancel()
+        self.candidate_generation += 1
+        self.review_unit_id = None
+        self._preview = None
+        self._candidate = RecoveryCandidate()
+        self.pending_prompt = {"kind": "recovery_seed_mask", "snapshot": snapshot, "mask": mask}
+        self.note = "Building candidate from manual shape; playback continues."
+        self._session.mark_changed()
+        return CommandReceipt("pending", request_id=self.candidate_generation)
+
+    @command
     def bind(self, unit_id, candidate_generation):
         if candidate_generation != self.candidate_generation or not self.active:
             raise ValueError("Recovery candidate changed; review the current candidate before confirming.")
         if self.busy or unit_id not in self.labels() or self._preview is None:
-            raise ValueError("Wait for a current candidate and drag an available existing ID.")
+            raise ValueError("Wait for a current candidate and choose an available existing ID.")
         if not self._preview["prediction"]["masks"][0].any():
-            raise ValueError("Candidate is missing. Add points or Clear / Retry.")
+            raise ValueError("Candidate is missing. Redraw, add points, or Clear / Retry.")
         object_id = next(obj for obj, unit in self._session.data.units.bindings.items() if unit == unit_id)
         self.pending_binding = object_id
         self.committing = True
@@ -170,9 +207,10 @@ class Recovery:
         if self.pending_prompt is not None:
             pending, self.pending_prompt = self.pending_prompt, None
             snapshot = pending["snapshot"]
-            return pending["kind"], {**snapshot, "recovery_candidate": self._candidate,
-                                     "prompt": {"point": pending["point"], "positive": pending["positive"],
-                                                "point_source": pending["point_source"]}}
+            prompt = ({"mask": pending["mask"]} if pending["kind"] == "recovery_seed_mask"
+                      else {"point": pending["point"], "positive": pending["positive"],
+                            "point_source": pending["point_source"]})
+            return pending["kind"], {**snapshot, "recovery_candidate": self._candidate, "prompt": prompt}
         if self.pending_binding is not None:
             data = self._session.data
             observed = data.current.prediction_metadata
@@ -191,10 +229,11 @@ class Recovery:
             normal = [obj for obj, uid in self._session.data.units.bindings.items()
                       if obj != object_id and self._session.data.tracking.get(uid) is not None
                       and self._session.data.tracking[uid].active and self._session.data.tracking[uid].status == "tracking"]
+            normal_labels = {obj: self._session.data.units.bindings[obj] for obj in normal}
             return "recovery_commit", {**snapshot, "recovery_candidate": self._candidate, "recovery_object_id": object_id,
                                        "prediction": self._session.data.current.prediction,
                                        "prompt": {"method": "reviewed" if self.review_unit_id is not None else "manual",
-                                                  "normal_ids": normal}}
+                                                  "normal_ids": normal, "normal_labels": normal_labels}}
         return None
 
     def for_propagation(self):
@@ -210,8 +249,13 @@ class Recovery:
                 self.cancel()
                 self._session.note = "Unit recovered with its original ID. Facing is unknown."
             elif not candidate.cancelled.is_set():
-                self._preview = None
-                self.note = f"Recovery not applied: {error}. Clear / Retry."
+                if (not request.get("recovery_applied") and candidate.backend is not None
+                        and candidate.prediction is not None and candidate.prediction["masks"][0].any()):
+                    self._preview = {"prediction": candidate.prediction, "metadata": deepcopy(request["metadata"])}
+                    self.note = f"Recovery not applied: {error}"
+                else:
+                    self._preview = None
+                    self.note = f"Recovery not applied: {error}. Clear / Retry."
             else:
                 self.cancel()
         elif self.active and not candidate.cancelled.is_set():
@@ -221,6 +265,6 @@ class Recovery:
             elif prediction is not None:
                 self._preview = {"prediction": prediction, "metadata": deepcopy(request["metadata"])}
                 self.note = ((f"Review {self.review_unit_id}: Correct confirms; No starts one new search."
-                              if self.review_unit_id is not None else "Drag an existing ID onto the candidate to confirm.")
-                             if prediction["masks"][0].any() else "Candidate missing. Add points or Clear / Retry.")
+                              if self.review_unit_id is not None else "Click or drag an existing ID from the right panel to confirm.")
+                             if prediction["masks"][0].any() else "Candidate missing. Redraw, add points, or Clear / Retry.")
         self._session.mark_changed()

@@ -16,63 +16,66 @@ ApplicationWindow {
     readonly property bool table: s.stage === "table"
     readonly property bool live: s.stage === "playback" || s.stage === "recalibrate"
     readonly property string flowKind: flow.state.kind || "live"
-    readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || workflowControls.formOpen
-    readonly property bool textInputActive: Boolean(unitInfoPanel.editingFocus)
+    readonly property bool terrainMode: !window.table && !window.live && flowKind === "terrain"
+    readonly property bool recoveryRectMode: window.live && flowKind === "recovery" && flow.state.tool === "Rectangle" && !flow.state.busy
+    readonly property bool recoveryQuadMode: window.live && flowKind === "recovery" && flow.state.tool === "Quad" && !flow.state.busy
+    readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || terrainDialogs.formOpen
+    readonly property bool textInputActive: Boolean(unitInfoPanel.editingFocus) || Boolean(terrainPanel.editingFocus)
 
     readonly property string badgeText: {
         if (window.table) return "TABLE SETUP"
+        if (window.terrainMode) return "TERRAIN"
         if (!window.live) return "REGISTER"
         if (flowKind === "replay") return "REPLAY"
         if (flowKind === "recovery") return "RECOVERY"
         if (flowKind === "recalibrate") return "RECALIBRATE"
-        if (flowKind === "terrain") return "TERRAIN"
         if (flowKind === "debug") return "DEBUG"
         return "LIVE"
     }
     readonly property color badgeColor: {
         if (window.table) return theme.inkSecondary
+        if (window.terrainMode) return theme.modeTerrain
         if (!window.live) return theme.selection
         if (flowKind === "replay") return theme.modeReplay
         if (flowKind === "recovery") return theme.modeRecovery
         if (flowKind === "recalibrate") return theme.modeRecalibrate
-        if (flowKind === "terrain") return theme.modeTerrain
         return theme.modeLive
     }
     readonly property color badgeDot: {
         if (window.table) return theme.selection
+        if (window.terrainMode) return theme.modeTerrainDot
         if (!window.live) return theme.accentHover
         if (flowKind === "replay") return theme.modeReplayDot
         if (flowKind === "recovery") return theme.modeRecoveryDot
         if (flowKind === "recalibrate") return theme.modeRecalibrateDot
-        if (flowKind === "terrain") return theme.modeTerrainDot
         return theme.modeLiveDot
     }
     readonly property color badgeSoft: {
         if (window.table) return theme.bgTrack
+        if (window.terrainMode) return theme.modeTerrainSoft
         if (!window.live) return theme.accentSoft
         if (flowKind === "replay") return theme.modeReplaySoft
         if (flowKind === "recovery") return theme.modeRecoverySoft
         if (flowKind === "recalibrate") return theme.modeRecalibrateSoft
-        if (flowKind === "terrain") return theme.modeTerrainSoft
         return theme.modeLiveSoft
     }
     readonly property color badgeBorder: {
         if (window.table) return theme.borderStrong
+        if (window.terrainMode) return theme.modeTerrainBorder
         if (!window.live) return theme.accentBorder
         if (flowKind === "replay") return theme.modeReplayBorder
         if (flowKind === "recovery") return theme.modeRecoveryBorder
         if (flowKind === "recalibrate") return theme.modeRecalibrateBorder
-        if (flowKind === "terrain") return theme.modeTerrainBorder
         return theme.modeLiveBorder
     }
 
     title: {
         if (window.table) return "Match console · Table setup"
+        if (window.terrainMode) return "Match console · Terrain"
         if (!window.live) return "Match console · Unit registration"
         if (flowKind === "replay") return "Match console · Replay"
         if (flowKind === "recovery") return "Match console · Recovery"
         if (flowKind === "recalibrate") return "Match console · Recalibrate"
-        if (flowKind === "terrain") return "Match console · Terrain"
         return "Match console · Live"
     }
     color: theme.bgCanvas
@@ -132,11 +135,11 @@ ApplicationWindow {
                 Text {
                     text: {
                         if (window.table) return "Frame the battlefield"
+                        if (window.terrainMode) return "Terrain polygon editor"
                         if (!window.live) return "Build the starting board"
                         if (flowKind === "replay") return "Historical board"
                         if (flowKind === "recovery") return "Scoped unit recovery"
                         if (flowKind === "recalibrate") return "Board corner alignment"
-                        if (flowKind === "terrain") return "Terrain polygon editor"
                         if (flowKind === "debug") return "Paused snapshot"
                         return "Match console"
                     }
@@ -265,7 +268,7 @@ ApplicationWindow {
 
             // Registration toolbar (single compact dark card)
             Rectangle {
-                visible: !window.table && !window.live
+                visible: !window.table && !window.live && !window.terrainMode
                 Layout.fillWidth: true
                 implicitHeight: regFlow.implicitHeight + 14
                 radius: theme.radiusLg
@@ -356,7 +359,7 @@ ApplicationWindow {
                             implicitHeight: 32
                             active: s.mode === "Rectangle"
                             enabled: s.editable && s.ready
-                            tooltipText: "Drag with the left mouse button to draw the selected mask."
+                            tooltipText: "Drag with the left mouse button to draw a mask."
                             onClicked: ui.setMode("Rectangle")
                         }
                         ConsoleButton {
@@ -364,7 +367,7 @@ ApplicationWindow {
                             implicitHeight: 32
                             active: s.mode === "Quad"
                             enabled: s.editable && s.ready
-                            tooltipText: "Click four corners to draw the selected mask."
+                            tooltipText: "Click four corners to draw a mask."
                             onClicked: ui.setMode("Quad")
                         }
                         ConsoleButton {
@@ -378,62 +381,148 @@ ApplicationWindow {
 
                         Rectangle { width: 1; height: 22; color: theme.borderSoft }
 
-                        Button {
-                            id: regMaskPill
+                        ConsoleButton {
+                            objectName: "openTerrain"
+                            text: s.terrainCount > 0 ? ("Terrain (" + s.terrainCount + ")") : "Terrain"
                             implicitHeight: 32
-                            leftPadding: 11; rightPadding: 11
-                            onClicked: ui.setOverlay("masks", !s.masks)
-                            background: Rectangle {
-                                radius: theme.radiusMd
-                                color: s.masks ? (regMaskPill.hovered ? theme.bgElevated : theme.accentSoft)
-                                               : (regMaskPill.hovered ? theme.bgElevated : theme.bgSubtle)
-                                border.color: s.masks ? theme.accentBorder : theme.border
-                            }
-                            contentItem: RowLayout {
-                                spacing: 6
-                                Rectangle { width: 8; height: 8; radius: 4; color: s.masks ? theme.selection : theme.borderStrong }
-                                Text {
-                                    text: "Masks"
-                                    font.pixelSize: theme.textSm
-                                    font.weight: s.masks ? Font.DemiBold : Font.Normal
-                                    color: s.masks ? theme.ink : theme.inkSecondary
-                                }
-                            }
+                            variant: "subtle"
+                            enabled: s.editable
+                            tooltipText: "Draw terrain polygons before starting playback."
+                            onClicked: flow.open("terrain")
+                        }
+                        ConsoleButton {
+                            objectName: "undoTerrain"
+                            text: "Undo terrain"
+                            implicitHeight: 32
+                            variant: "dangerSubtle"
+                            enabled: s.editable && s.terrainCount > 0
+                            tooltipText: s.terrainCount > 0
+                                         ? "Remove the most recently saved terrain polygon"
+                                         : "No saved terrain polygons to remove"
+                            onClicked: terrainDialogs.openUndoConfirm()
                         }
 
-                        Button {
-                            id: regTrayPill
-                            implicitHeight: 32
-                            leftPadding: 11; rightPadding: 11
-                            onClicked: ui.setOverlay("trays", !s.trays)
-                            background: Rectangle {
-                                radius: theme.radiusMd
-                                color: s.trays ? (regTrayPill.hovered ? theme.bgElevated : theme.accentSoft)
-                                               : (regTrayPill.hovered ? theme.bgElevated : theme.bgSubtle)
-                                border.color: s.trays ? theme.accentBorder : theme.border
-                            }
-                            contentItem: RowLayout {
-                                spacing: 6
-                                Rectangle { width: 8; height: 8; radius: 4; color: s.trays ? theme.selection : theme.borderStrong }
-                                Text {
-                                    text: "Trays"
-                                    font.pixelSize: theme.textSm
-                                    font.weight: s.trays ? Font.DemiBold : Font.Normal
-                                    color: s.trays ? theme.ink : theme.inkSecondary
-                                }
-                            }
+                        Rectangle { width: 1; height: 22; color: theme.borderSoft }
+
+                        OverlayToggles {
+                            uiState: s
+                            prefix: "reg"
                         }
                     }
 
                     Text {
                         visible: window.width >= 1040
-                        color: theme.inkMuted
+                        color: (s.replacingBound && (s.mode === "Rectangle" || s.mode === "Quad" || s.mode === "Points"))
+                               ? theme.warning : theme.inkMuted
                         font.pixelSize: theme.textXs
+                        font.weight: (s.replacingBound && (s.mode === "Rectangle" || s.mode === "Quad" || s.mode === "Points"))
+                                     ? Font.DemiBold : Font.Normal
                         text: s.mode === "Front" ? "Click the front edge of the selected tray."
-                              : s.mode === "Assign" ? "Click a mask, then choose its type."
-                              : s.mode === "Rectangle" ? "Drag to draw mask " + s.selected + " · Right-click to undo."
-                              : s.mode === "Quad" ? "Mask " + s.selected + " · " + s.manualVertices.length + "/4 corners · Right-click to undo."
+                              : s.mode === "Assign" ? "Click a mask to assign type, or click a terrain for Info."
+                              : s.mode === "Rectangle" ? (s.replacingBound
+                                    ? "Replacing " + s.selectedLabel + " · Drag to redraw · N for new mask."
+                                    : "Drag to draw Mask " + s.selected + " · Ctrl+Z to undo.")
+                              : s.mode === "Quad" ? (s.replacingBound
+                                    ? "Replacing " + s.selectedLabel + " · " + s.manualVertices.length + "/4 corners · N for new mask."
+                                    : "Mask " + s.selected + " · " + s.manualVertices.length + "/4 corners · Right-click removes vertex.")
+                              : s.replacingBound ? "Editing " + s.selectedLabel + " · N starts a new unit."
                               : "Left: + point · Right: − point · Assign type to advance."
+                    }
+                }
+            }
+
+            // Registration terrain polygon toolbar
+            Rectangle {
+                visible: window.terrainMode
+                Layout.fillWidth: true
+                implicitHeight: regTerrainCol.implicitHeight + 14
+                radius: theme.radiusLg
+                color: theme.bgSurface
+                border.color: theme.modeTerrainBorder
+                clip: true
+
+                Rectangle {
+                    width: 3
+                    height: parent.height
+                    anchors.left: parent.left
+                    color: theme.modeTerrainDot
+                }
+
+                ColumnLayout {
+                    id: regTerrainCol
+                    anchors.fill: parent
+                    anchors.leftMargin: 15
+                    anchors.rightMargin: 12
+                    anchors.topMargin: 7
+                    anchors.bottomMargin: 7
+                    spacing: 7
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Flow {
+                            Layout.fillWidth: true
+                            spacing: 8
+
+                            Rectangle {
+                                implicitWidth: regTerCntTxt.implicitWidth + 16
+                                implicitHeight: 32
+                                radius: theme.radiusSm
+                                color: theme.modeTerrainSoft
+                                border.color: theme.modeTerrainBorder
+                                Text {
+                                    id: regTerCntTxt
+                                    anchors.centerIn: parent
+                                    text: "Vertices · " + flow.state.pointCount
+                                    color: theme.modeTerrain
+                                    font.family: theme.fontMono
+                                    font.pixelSize: theme.textXs
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+                            ConsoleButton {
+                                objectName: "saveTerrainPolygon"
+                                text: "Save polygon"
+                                primary: true
+                                implicitHeight: 32
+                                enabled: flow.state.pointCount >= 3
+                                onClicked: flow.finishTerrain()
+                            }
+                            ConsoleButton {
+                                text: s.terrainCount > 0 ? ("Undo terrain (" + s.terrainCount + ")") : "Undo terrain"
+                                implicitHeight: 32
+                                variant: "dangerSubtle"
+                                enabled: s.editable && s.terrainCount > 0
+                                tooltipText: s.terrainCount > 0
+                                             ? "Remove the most recently saved terrain polygon"
+                                             : "No saved terrain polygons to remove"
+                                onClicked: terrainDialogs.openUndoConfirm()
+                            }
+
+                            Rectangle { width: 1; height: 22; color: theme.borderSoft }
+
+                            OverlayToggles {
+                                uiState: s
+                                prefix: "ter"
+                            }
+                        }
+
+                        ConsoleButton {
+                            objectName: "exitTerrain"
+                            text: "Done"
+                            shortcut: "Esc"
+                            implicitHeight: 32
+                            onClicked: flow.action("cancel")
+                        }
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        color: theme.inkSecondary
+                        font.pixelSize: theme.textXs
+                        text: "Left click adds vertices (right click removes last). Save once ≥ 3 points, or select any saved terrain on the right to edit or delete."
                     }
                 }
             }
@@ -463,7 +552,7 @@ ApplicationWindow {
                         color: theme.bgStage
                         radius: theme.radiusLg
                         border.width: 1
-                        border.color: (window.live && window.flowKind !== "live") ? window.badgeBorder : theme.border
+                        border.color: (window.terrainMode || (window.live && window.flowKind !== "live")) ? window.badgeBorder : theme.border
                         clip: true
 
                         Image {
@@ -480,8 +569,9 @@ ApplicationWindow {
 
                         Image {
                             id: boardOverlay
+                            objectName: "boardOverlay"
                             anchors.fill: board
-                            visible: Boolean(s.hasOverlay) && (!window.live || window.flowKind === "live" || window.flowKind === "recovery")
+                            visible: Boolean(s.anyOverlay) && Boolean(s.hasOverlay) && (!window.live || window.flowKind === "live" || window.flowKind === "recovery" || window.flowKind === "debug")
                             source: "image://match/overlay/" + (s.overlayRevision || 0)
                             fillMode: Image.PreserveAspectFit
                             smooth: true
@@ -509,11 +599,16 @@ ApplicationWindow {
                             readonly property real scaleX: width / s.imageWidth
                             readonly property real scaleY: height / s.imageHeight
                             function imageRevision() { return Number(board.source.toString().split("/").pop()) }
+                            onWidthChanged: if (width > 0 && height > 0) ui.setViewportSize(width, height)
+                            onHeightChanged: if (width > 0 && height > 0) ui.setViewportSize(width, height)
+                            Component.onCompleted: if (width > 0 && height > 0) ui.setViewportSize(width, height)
 
                             MouseArea {
                                 id: boardPointer
                                 objectName: "boardPointer"
                                 property bool rectGesture: false
+                                property bool rectForRecovery: false
+                                property bool skipNextClick: false
                                 property real startX: 0
                                 property real startY: 0
                                 property int startRevision: 0
@@ -523,42 +618,71 @@ ApplicationWindow {
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 enabled: board.status === Image.Ready && window.flowKind !== "debug"
                                          && (window.live || !s.locked || window.table)
-                                cursorShape: window.live ? Qt.PointingHandCursor
-                                             : (window.table || s.mode !== "Assign") ? Qt.CrossCursor : Qt.PointingHandCursor
+                                cursorShape: (window.live && window.flowKind === "recovery") ? Qt.CrossCursor
+                                             : window.live ? Qt.PointingHandCursor
+                                             : (window.table || window.terrainMode || s.mode !== "Assign") ? Qt.CrossCursor : Qt.PointingHandCursor
                                 onPressed: mouse => {
-                                    rectGesture = s.editable && s.mode === "Rectangle" && mouse.button === Qt.LeftButton
+                                    const regRect = s.editable && !window.terrainMode && s.mode === "Rectangle"
+                                    rectForRecovery = window.recoveryRectMode
+                                    rectGesture = (regRect || rectForRecovery) && mouse.button === Qt.LeftButton
+                                    skipNextClick = false
                                     startX = mouse.x
                                     startY = mouse.y
                                     startRevision = surface.imageRevision()
                                 }
                                 onReleased: mouse => {
-                                    if (rectGesture && mouse.button === Qt.LeftButton &&
-                                        Math.abs(mouse.x - startX) >= 3 && Math.abs(mouse.y - startY) >= 3) {
-                                        ui.drawMaskRectangle(startX / surface.scaleX, startY / surface.scaleY,
-                                                             mouse.x / surface.scaleX, mouse.y / surface.scaleY, startRevision)
+                                    if (rectGesture && mouse.button === Qt.LeftButton) {
+                                        const forRec = rectForRecovery
+                                        rectGesture = false
+                                        rectForRecovery = false
+                                        skipNextClick = true
+                                        if (Math.abs(dragX - startX) >= 3 && Math.abs(dragY - startY) >= 3) {
+                                            if (forRec) {
+                                                flow.drawRecoveryRectangle(startX / surface.scaleX, startY / surface.scaleY,
+                                                                           dragX / surface.scaleX, dragY / surface.scaleY)
+                                            } else {
+                                                ui.drawMaskRectangle(startX / surface.scaleX, startY / surface.scaleY,
+                                                                     dragX / surface.scaleX, dragY / surface.scaleY, startRevision)
+                                            }
+                                        }
                                     }
                                 }
+                                onCanceled: {
+                                    rectGesture = false
+                                    rectForRecovery = false
+                                    skipNextClick = false
+                                }
                                 onClicked: mouse => {
-                                    if (mouse.button !== Qt.LeftButton || !rectGesture)
-                                        ui.click(mouse.x / surface.scaleX, mouse.y / surface.scaleY,
-                                                 mouse.button === Qt.LeftButton, surface.imageRevision())
+                                    if (skipNextClick && mouse.button === Qt.LeftButton) {
+                                        skipNextClick = false
+                                        return
+                                    }
+                                    skipNextClick = false
+                                    ui.click(mouse.x / surface.scaleX, mouse.y / surface.scaleY,
+                                             mouse.button === Qt.LeftButton, surface.imageRevision())
                                 }
 
                                 Rectangle {
-                                    visible: s.mode === "Rectangle" && boardPointer.rectGesture &&
-                                             (boardPointer.pressedButtons & Qt.LeftButton) !== 0
+                                    objectName: "manualRectPreview"
+                                    visible: ((s.editable && !window.terrainMode && s.mode === "Rectangle") || window.recoveryRectMode)
+                                             && boardPointer.rectGesture && (boardPointer.pressedButtons & Qt.LeftButton) !== 0
                                     x: Math.min(boardPointer.startX, boardPointer.dragX)
                                     y: Math.min(boardPointer.startY, boardPointer.dragY)
                                     width: Math.abs(boardPointer.startX - boardPointer.dragX)
                                     height: Math.abs(boardPointer.startY - boardPointer.dragY)
-                                    color: theme.accentSoft
-                                    border.color: theme.selection
+                                    color: boardPointer.rectForRecovery
+                                           ? Qt.rgba(theme.warning.r, theme.warning.g, theme.warning.b, 0.18)
+                                           : Qt.rgba(theme.selection.r, theme.selection.g, theme.selection.b, 0.16)
+                                    border.color: boardPointer.rectForRecovery ? theme.warning : theme.selection
                                     border.width: 2
+                                    z: 2
                                 }
                             }
 
                             Repeater {
-                                model: s.editable && s.mode === "Quad" ? s.manualVertices : []
+                                model: (s.editable && !window.terrainMode && s.mode === "Quad") ? s.manualVertices
+                                     : window.recoveryQuadMode ? (flow.state.quadVertices || [])
+                                     : []
                                 Rectangle {
                                     required property var modelData
                                     x: modelData[0] * surface.scaleX - width / 2
@@ -566,7 +690,7 @@ ApplicationWindow {
                                     width: 9
                                     height: 9
                                     radius: width / 2
-                                    color: theme.selection
+                                    color: window.recoveryQuadMode ? theme.warning : theme.selection
                                     border.color: theme.bgTrack
                                     z: 2
                                 }
@@ -576,6 +700,9 @@ ApplicationWindow {
                                 anchors.fill: parent
                                 keys: ["unit-recovery"]
                                 enabled: flow.state.kind === "recovery"
+                                onEntered: drag => flow.hoverRecovery(drag.x / surface.scaleX, drag.y / surface.scaleY)
+                                onPositionChanged: drag => flow.hoverRecovery(drag.x / surface.scaleX, drag.y / surface.scaleY)
+                                onExited: flow.clearRecoveryHover()
                                 onDropped: drop => {
                                     flow.dropUnit(drop.source.unitId, drop.x / surface.scaleX, drop.y / surface.scaleY,
                                                   surface.imageRevision(), drop.source.candidateGeneration)
@@ -586,7 +713,7 @@ ApplicationWindow {
                             DropArea {
                                 anchors.fill: parent
                                 keys: ["unit-type"]
-                                enabled: s.editable && board.status === Image.Ready
+                                enabled: s.editable && !window.terrainMode && board.status === Image.Ready
                                 onEntered: drag => ui.hoverType(drag.x / surface.scaleX, drag.y / surface.scaleY, surface.imageRevision())
                                 onPositionChanged: drag => ui.hoverType(drag.x / surface.scaleX, drag.y / surface.scaleY, surface.imageRevision())
                                 onExited: ui.clearHover()
@@ -598,14 +725,31 @@ ApplicationWindow {
 
                             // Crisp vector rounded-pill unit & terrain badges (never intercept clicks)
                             BoardBadges {
+                                objectName: "boardBadges"
                                 anchors.fill: parent
                                 z: 1
-                                visible: !window.table && (!window.live || window.flowKind === "live" || window.flowKind === "recovery" || window.flowKind === "replay")
+                                visible: Boolean(s.labels) && !window.table && (!window.live || window.flowKind === "live" || window.flowKind === "recovery" || window.flowKind === "debug" || window.flowKind === "replay")
                                 badges: ui.badges
                                 hoverObjectId: s.editable ? (s.hoverObjectId || -1) : -1
                                 selectedUnitId: window.live && window.flowKind === "live" ? (s.console.unitId || "") : ""
                                 targetUnitId: window.live && window.flowKind === "live" ? (s.console.targetId || "") : ""
+                                selectedTerrainId: (!window.table && !window.live) ? (flow.state.selectedTerrainId || "") : ""
                             }
+                        }
+
+                        TerrainHud {
+                            id: terrainHud
+                            objectName: "terrainHud"
+                            anchors.fill: parent
+                            visible: !window.table && !window.live && !window.terrainMode && Boolean(flow.state.selectedTerrainId)
+                            terrainData: flow.state.selectedTerrain || ({})
+                            centerX: flow.state.terrainCenterX !== undefined ? flow.state.terrainCenterX : 0.5
+                            centerY: flow.state.terrainCenterY !== undefined ? flow.state.terrainCenterY : 0.5
+                            cardX: flow.state.terrainCardX !== undefined ? flow.state.terrainCardX : 0.35
+                            cardY: flow.state.terrainCardY !== undefined ? flow.state.terrainCardY : 0.5
+                            infoOpen: Boolean(flow.state.terrainInfoOpen)
+                            z: 2
+                            imageRect: Qt.rect(surface.x, surface.y, surface.width, surface.height)
                         }
 
                         UnitHud {
@@ -775,12 +919,21 @@ ApplicationWindow {
                 }
 
                 CatalogPanel {
-                    visible: !window.table && !window.live
+                    visible: !window.table && !window.live && !window.terrainMode && !Boolean(flow.state.terrainInfoOpen)
                     Layout.preferredWidth: 300
                     Layout.fillHeight: true
                     state: s
                     dragLayer: Overlay.overlay
                     onImportRequested: side => { armyFile.side = side; armyFile.open() }
+                }
+
+                TerrainPanel {
+                    id: terrainPanel
+                    objectName: "terrainPanel"
+                    visible: !window.table && !window.live && (window.terrainMode || Boolean(flow.state.terrainInfoOpen))
+                    drawMode: window.terrainMode
+                    Layout.preferredWidth: 300
+                    Layout.fillHeight: true
                 }
 
                 RecoveryPanel {
@@ -948,17 +1101,29 @@ ApplicationWindow {
         }
         onAccepted: ui.reset()
     }
-    Shortcut { sequences: [StandardKey.Undo]; enabled: !window.live && !window.modalOpen; onActivated: ui.undo() }
-    Shortcut { sequence: "N"; enabled: s.editable && !window.modalOpen; onActivated: ui.newObject() }
-    Shortcut { sequence: "F"; enabled: s.canFront && !window.modalOpen; onActivated: ui.setMode("Front") }
-    Shortcut { sequence: "S"; enabled: s.editable && !window.modalOpen; onActivated: ui.finish() }
-    Shortcut { sequence: "Space"; enabled: !window.table && !window.live && !window.modalOpen; onActivated: ui.start() }
-    Shortcut { sequence: "Tab"; enabled: s.editable && !window.modalOpen; onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
+    TerrainDialogs {
+        id: terrainDialogs
+    }
+    Shortcut { sequences: [StandardKey.Undo]; enabled: !window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.undo() }
+    Shortcut { sequence: "N"; enabled: s.editable && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.newObject() }
+    Shortcut { sequence: "F"; enabled: s.canFront && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.setMode("Front") }
+    Shortcut { sequence: "S"; enabled: s.editable && !window.modalOpen && !window.textInputActive; onActivated: ui.finish() }
+    Shortcut { sequence: "Space"; enabled: !window.table && !window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.start() }
+    Shortcut { sequence: "Tab"; enabled: s.editable && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
+    Shortcut { sequence: "O"; enabled: !window.table && !window.modalOpen && !window.textInputActive; onActivated: ui.toggleAllOverlays() }
+    Shortcut { sequence: "Escape"; enabled: window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: flow.action("cancel") }
+    Shortcut {
+        sequence: "Escape"
+        enabled: !window.table && !window.live && !window.terrainMode && !window.modalOpen && !window.textInputActive
+                 && (Boolean(flow.state.terrainInfoOpen) || Boolean(flow.state.selectedTerrainId))
+        onActivated: flow.state.terrainInfoOpen ? flow.closeTerrainInfo() : flow.clearTerrainSelection()
+    }
     Shortcut { sequence: "D"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("distance") }
     Shortcut { sequence: "L"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("los") }
     Shortcut { sequence: "V"; enabled: window.live && window.flowKind === "live" && s.console.canQuery && !window.modalOpen && !window.textInputActive; onActivated: ui.liveTool("move") }
     Shortcut { sequences: ["Left", "A"]; enabled: window.flowKind === "replay" && !window.modalOpen && !window.textInputActive; onActivated: flow.action("previous") }
     Shortcut { sequences: ["Right", "D"]; enabled: window.flowKind === "replay" && !window.modalOpen && !window.textInputActive; onActivated: flow.action("next") }
+    Shortcut { sequences: [StandardKey.Undo]; enabled: window.recoveryQuadMode && !window.modalOpen && !window.textInputActive; onActivated: flow.undoRecoveryVertex() }
     Shortcut { sequence: "Escape"; enabled: window.live && !window.modalOpen && !window.textInputActive; onActivated: flow.state.profileOpen ? flow.closeProfile() : ui.escapeLive() }
-    Shortcut { sequences: ["Q", "Space"]; enabled: window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.clearSelection() }
+    Shortcut { sequences: ["Q", "Space"]; enabled: window.live && window.flowKind === "live" && !window.modalOpen && !window.textInputActive; onActivated: ui.clearSelection() }
 }

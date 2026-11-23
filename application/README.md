@@ -31,10 +31,10 @@ finally:
 - 注册：`point(object_id, source_point, FrameRef, positive=True)`、`undo_point()`、`bind(object_id, type_id)`、`unbind(object_id)`、目录导入／尺寸更新、`finish_registration(overlay=None)`。未提供 overlay 时导出源观测的 mask 着色图；S 锁定后只允许 R 开启新注册。
 - 启动：`start(overlay=None)` 在一次保存后初始化所选 tracker，再启动源；`reset()` 与 `close()` 统一作废旧工作及处理历史，关闭幂等。
 - 标定：`confirm_table(corners, boundary, board_size_in=...)`；B08 使用 `begin_recalibration()`／`apply_recalibration(...)`／`cancel_recalibration()`，只读 status 不含初始化后端或草稿 GameData。
-- 恢复：`open(unit_id=None)`、`point(source_point, positive, FrameRef)`、`clear_candidate()`／`cancel()`、`bind(unit_id, candidate_generation)`、`reject()`／`report_error(unit_id)`。`snapshot().recovery` 提供候选、阶段及代次；最终 mask 由应用同帧推进并验证，调用方不能提交任意旧 mask。
+- 恢复：`open(unit_id=None)`、`point(source_point, positive, FrameRef)`、`manual_mask(corners, FrameRef)`、`clear_candidate()`／`cancel()`、`bind(unit_id, candidate_generation)`、`reject()`／`report_error(unit_id)`。`snapshot().recovery` 提供候选、阶段及代次；最终 mask 由应用同帧推进并验证（低于 `RECOVERY_OVERLAP_REJECT_RATIO` 的轻微贴边接触自动裁去，实质重叠则拒绝并保留候选草稿），调用方不能提交任意旧 mask。
 - 查询：`query(mode, unit_ids, observation_ref, view_revision)` 合并尚未启动的旧请求。result／result_request 是只读结果；`result_current(snapshot)` 检查叠加是否仍有效。源帧前进本身不伪造新观测。
-- 资料：`update_unit_profile(unit_id, values, FrameRef)`、`set_front(unit_id, source_point, observation_ref)`、`add_terrain(source_vertices, values, FrameRef)`；表单与屏幕草稿留 frontend。
-- 回放：`open()`／`refresh()`／`navigate(delta)`／`clear()`，通过只读 scene 与 steps 展示。它不暂停源，也不进入模型队列。
+- 资料：`update_unit_profile(unit_id, values, FrameRef)`、`set_front(unit_id, source_point, observation_ref)`、`add_terrain(source_vertices, values, FrameRef)`、`update_terrain(terrain_id, values, FrameRef)`、`delete_terrain(terrain_id, FrameRef)` 与 `undo_terrain()`（地形编辑与初始正面仅在注册锁定前允许）；表单与屏幕草稿留 frontend。
+- 回放：`open()`／`refresh()`／`select(index)`／`navigate(delta)`／`clear()`，通过只读 scene 与 steps 展示。它不暂停源，也不进入模型队列。
 
 `present(source_ref)` 只固定实际显示的交互采样帧，不负责驱动追踪。点输入可使用该帧；过期代次／标定或已无法取得的帧明确拒绝。模型若已越过被点击帧，也不能回退记忆或把点击改解释到最新帧。采样帧／在途请求之外不缓存整段视频。`start_tracker` 交接独立追踪后端后立即释放首帧注册 SAM3 会话；运行期在输出目录启用 `crash_traceback.log`（`faulthandler`），并在当前会话目录持久记录 `runtime_diagnostics.jsonl`（阶段事件、每 30 步传播及首次异常的进程 RAM、物理 GPU 名称与显存、会话帧／锁页内存统计及完整 traceback）。
 

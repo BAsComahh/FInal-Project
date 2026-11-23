@@ -6,6 +6,7 @@ Item {
     property var badges: []
     property string selectedUnitId: ""
     property string targetUnitId: ""
+    property string selectedTerrainId: ""
     property int hoverObjectId: -1
     readonly property Theme theme: Theme {}
 
@@ -16,10 +17,9 @@ Item {
             required property var modelData
             readonly property bool isTerrain: modelData.kind === "terrain"
             readonly property bool isDropHover: !isTerrain && badgeLayer.hoverObjectId > 0 && modelData.objectId === badgeLayer.hoverObjectId
-            readonly property bool isSelected: !isTerrain && (
-                Boolean(modelData.active)
-                || (badgeLayer.selectedUnitId.length > 0 && modelData.unitId === badgeLayer.selectedUnitId)
-            )
+            readonly property bool isSelected: isTerrain
+                ? (Boolean(modelData.active) || (badgeLayer.selectedTerrainId.length > 0 && modelData.unitId === badgeLayer.selectedTerrainId))
+                : (Boolean(modelData.active) || (badgeLayer.selectedUnitId.length > 0 && modelData.unitId === badgeLayer.selectedUnitId))
             readonly property bool isTarget: !isTerrain && badgeLayer.targetUnitId.length > 0 && modelData.unitId === badgeLayer.targetUnitId
             readonly property bool isNeedsWork: !isTerrain && ((modelData.unitId || "").length === 0 || Boolean(modelData.unconfirmed))
             readonly property real targetH: Math.max(18, Math.round(modelData.h * badgeLayer.height))

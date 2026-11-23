@@ -27,11 +27,11 @@ A desktop prototype for augmenting tabletop wargame match videos. Built around a
 
 #### 1. Install GPU-Compatible PyTorch First
 
-> **Important**: On Windows, running `pip install -r requirements.txt` directly installs **CPU-only** PyTorch from PyPI. Install matching `torch==2.13.0` and `torchvision==0.28.0` for your target GPU (NVIDIA CUDA or AMD ROCm) *before* installing `requirements.txt`.
+> For GPU inference on Windows, install matching `torch==2.13.0` and `torchvision==0.28.0` builds for your GPU before installing `requirements.txt`. The NVIDIA example below requires a CUDA 13.0-compatible driver. For AMD, use the corresponding ROCm builds. For CPU-only use, skip this step and launch with `--device cpu`.
 
 ```powershell
-# Example with NVIDIA CUDA (adjust cu128 to match the machine's CUDA driver)
-python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu128
+# NVIDIA example for a CUDA 13.0-compatible driver
+python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu130
 ```
 
 #### 2. Install Core & Qt Dependencies
@@ -40,9 +40,6 @@ python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://down
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m pip install -r frontend/qt/requirements.txt
-# Optional isolated Qt install:
-# python -m pip install --target outputs/ui_preview/deps -r frontend/qt/requirements.txt
 ```
 
 #### 3. Prepare Model Weights & Tracker Assets
@@ -115,15 +112,15 @@ python -m frontend.qt inputs/Ja5-2RIOBXU_full.mp4 --registration outputs/sam3_re
 
 #### 1. 安装 PyTorch（先装与目标显卡匹配的版本）
 
-> **重要**：Windows 下直接运行 `pip install -r requirements.txt` 会从默认 PyPI 安装 **CPU 版** PyTorch。请先按目标机器显卡安装匹配版本的 `torch==2.13.0` 与 `torchvision==0.28.0`（例如 NVIDIA CUDA 机器使用 PyTorch 官方 CUDA wheel 源；AMD ROCm 机器使用对应 ROCm wheel）。
+> Windows 上使用 GPU 推理时，请先安装与显卡匹配的 `torch==2.13.0` 与 `torchvision==0.28.0`，再安装 `requirements.txt`。下方 NVIDIA 示例要求驱动兼容 CUDA 13.0，AMD 显卡请选对应的 ROCm 构建。仅使用 CPU 时可跳过 PyTorch 的单独安装，启动时传入 `--device cpu`。
 
 ```powershell
 # 示例：创建虚拟环境（Conda 或 venv 均可）
 conda create -n tabletop-aug python=3.13 -y
 conda activate tabletop-aug
 
-# NVIDIA GPU 示例（按本机 CUDA 驱动调整 cu 版本，如 cu128）
-python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu128
+# NVIDIA 示例，适用于兼容 CUDA 13.0 的驱动
+python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://download.pytorch.org/whl/cu130
 ```
 
 #### 2. 安装项目核心依赖与 Qt 桌面运行时
@@ -131,13 +128,8 @@ python -m pip install torch==2.13.0 torchvision==0.28.0 --index-url https://down
 > **重要**：请保持 [requirements.txt](requirements.txt) 中的 `transformers==5.18.0` 精确版本，EdgeTAM 加速、有界会话裁剪与 SAM3 特征缓存依赖该版本的内部接口。
 
 ```powershell
-# 安装核心依赖（已安装的 +cu / +rocm 构建满足 torch==2.13.0 / torchvision==0.28.0）
+# 安装核心依赖和 Qt（已安装的 +cu / +rocm 构建满足 torch==2.13.0 / torchvision==0.28.0）
 python -m pip install -r requirements.txt
-
-# 安装 Qt Quick 桌面客户端依赖（二选一：直接装入当前环境，或装到隔离目录 outputs/ui_preview/deps）
-python -m pip install -r frontend/qt/requirements.txt
-# 或隔离安装：
-# python -m pip install --target outputs/ui_preview/deps -r frontend/qt/requirements.txt
 ```
 
 #### 3. 准备模型权重与追踪依赖
@@ -210,7 +202,7 @@ components/
   video_io/                 本地视频解码与时间戳读取
   real_esrgan/              可选 Vulkan 4× 超分工具
 tools/                      独立命令行入口（见下表）
-design/                     Qt UI 交互稿与独立注册预览
+docs/ui-archive/            Qt UI 交互原型与参考截图
 inputs/                     示例视频片段、测试图片与军表示例（大视频已忽略）
 outputs/                    运行输出、模型缓存与隔离依赖（已忽略）
 ```

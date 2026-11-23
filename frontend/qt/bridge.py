@@ -29,11 +29,16 @@ class MatchBridge(QObject):
         self.live = LiveSelection(match)
         self.selected = 1
         self._last_bound = None
+        self._edit_existing = False
         self._hover_object_id = None
         self.mode = "Points"
         self._manual_vertices = []
         self.show_masks = True
         self.show_trays = True
+        self.show_labels = True
+        self.show_terrain = True
+        self._saved_overlays = None
+        self._saved_replay_overlays = None
         self.table_mode = "detecting"
         self.corners, self.corner_points = None, []
         self.corner_method = "lsd"
@@ -136,6 +141,7 @@ class MatchBridge(QObject):
             flow_kind,
             self.match.replay.selected if flow_kind == "replay" else None,
             state.revision if flow_kind == "replay" else None,
+            (self.show_trays, self.show_labels) if flow_kind == "replay" else None,
         )
         if video_key != self._video_key:
             video_frame = self.flow.render_video(state, state.current.frame)
@@ -148,7 +154,13 @@ class MatchBridge(QObject):
         self._shown = state
 
         overlay_updated, overlay_rgba = self.renderer.sync_overlay(
-            state, selected=selected, masks=self.show_masks, trays=self.show_trays
+            state,
+            selected=selected,
+            masks=self.show_masks,
+            trays=self.show_trays,
+            labels=self.show_labels,
+            terrain=self.show_terrain,
+            selected_terrain=self.flow.selected_terrain_id,
         )
         if overlay_updated:
             self.images.publish(overlay_rgba, kind="overlay")
@@ -171,8 +183,9 @@ class MatchBridge(QObject):
             self._interactive_revision += 1
 
         active_badges = (
-            self.flow.replay_badges if flow_kind == "replay"
-            else self.renderer.badges if (self._has_overlay and (not live or flow_kind in ("live", "recovery")))
+            [] if not self.show_labels
+            else self.flow.replay_badges if flow_kind == "replay"
+            else self.renderer.badges if (self._has_overlay and (not live or flow_kind in ("live", "recovery", "debug")))
             else []
         )
         if active_badges != self._badges:
@@ -213,6 +226,7 @@ class MatchBridge(QObject):
                if observation is not None else None)
         geometry = (prediction or {}).get("geometry_metadata")
         editable = state.stage == "register" and not state.registration_locked
+        terrain_active = editable and flow_kind == "terrain"
         self._view = dict(
             stage=state.stage,
             locked=state.registration_locked,
@@ -221,10 +235,11 @@ class MatchBridge(QObject):
             mode=self.mode,
             manualVertices=self._manual_vertices.copy(),
             selected=self.selected,
-            hoverObjectId=self._hover_object_id if (editable and self._hover_object_id in object_ids) else -1,
+            hoverObjectId=self._hover_object_id if (editable and not terrain_active and self._hover_object_id in object_ids) else -1,
             selectedLabel=selected_unit or f"Mask {self.selected}",
             hasSelection=self.selected in object_ids,
-            canFront=bool(editable and selected_unit and prediction is not None and
+            replacingBound=bool(editable and selected_unit is not None and self.selected in object_ids),
+            canFront=bool(editable and not terrain_active and selected_unit and prediction is not None and
                           self.selected in prediction.get("trays", {})),
             assigned=len(state.units.bindings),
             total=len(object_ids),
@@ -236,7 +251,7 @@ class MatchBridge(QObject):
                 dict(id=int(obj), label=f"{state.units.bindings[obj]} · Mask {obj}")
                 for obj in sorted(unconfirmed_ids & state.units.bindings.keys()) if obj in object_ids
             ],
-            undo=bool(self._manual_vertices) or self.match.registration.can_undo,
+            undo=bool(self.flow.points) if terrain_active else (bool(self._manual_vertices) or self.match.registration.can_undo),
             typesA=self._catalog_a,
             typesB=self._catalog_b,
             types=self._catalog_a + self._catalog_b,
@@ -268,6 +283,16 @@ class MatchBridge(QObject):
             reference=str(state.reference_folder or ""),
             masks=self.show_masks,
             trays=self.show_trays,
+            labels=self.show_labels,
+            terrain=self.show_terrain,
+            anyOverlay=bool(
+                (self.show_trays or self.show_labels) if flow_kind == "replay"
+                else (self.show_masks or self.show_trays or self.show_labels or self.show_terrain)
+            ),
+            allOverlays=bool(
+                (self.show_trays and self.show_labels) if flow_kind == "replay"
+                else (self.show_masks and self.show_trays and self.show_labels and self.show_terrain)
+            ),
             trayStatus=state.tray_status,
             terrainCount=len(state.rules.terrain),
             inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString(),
@@ -322,7 +347,19 @@ class MatchBridge(QObject):
             return
         if self.mode in ("Quad", "Rectangle"):
             if not positive:
-                self.undo()
+                if self._manual_vertices:
+                    self._manual_vertices.pop()
+                    self._refresh()
+                else:
+                    last_manual = self.match.registration.last_manual_object
+                    bindings = shown.units.bindings
+                    unconfirmed = set(getattr(shown, "registration_unconfirmed", ()))
+                    if last_manual == self.selected and (self.selected not in bindings or self.selected in unconfirmed):
+                        self.undo()
+                    else:
+                        self.notice = "Use Undo (Ctrl+Z) to remove a previous mask."
+                        self._local_revision += 1
+                        self._publish()
             elif self.mode == "Quad":
                 vertices = [*self._manual_vertices, [x, y]]
                 if len(vertices) == 4:
@@ -332,14 +369,27 @@ class MatchBridge(QObject):
                     self._refresh()
             return
         if self.mode == "Assign":
-            hit = self._unit_object_at(shown, x, y)
-            if hit is None:
-                self.notice = "No mask here. Click a mask or its label to select it."
-                self._local_revision += 1
-                self._publish()
+            if not positive:
+                if self.flow.selected_terrain_id:
+                    self.flow.clearTerrainSelection()
                 return
-            self.selected = hit
-            self._refresh()
+            hit = self._unit_object_at(shown, x, y)
+            if hit is not None:
+                self._clear_terrain_ui()
+                self.selected = hit
+                self._edit_existing = True
+                self._refresh()
+                return
+            terrain_hit = self._terrain_at(shown, x, y)
+            if terrain_hit is not None:
+                self.flow.selectTerrain(terrain_hit, False, x / max(1, width), y / max(1, height))
+                return
+            if self.flow.selected_terrain_id:
+                self.flow.clearTerrainSelection()
+                return
+            self.notice = "No mask or terrain here. Click a mask, label, or terrain to select it."
+            self._local_revision += 1
+            self._publish()
             return
         source = transform_points([x, y], shown.board.homography["inverse_matrix"])
         if self.mode == "Front":
@@ -352,6 +402,7 @@ class MatchBridge(QObject):
             receipt = self.match.scene_editing.set_front(unit_id, source, shown.observation_ref)
             if receipt.status != "rejected":
                 self.mode = "Assign"
+                self._edit_existing = False
         else:
             receipt = self.match.registration.point(self.selected, source, shown.source_ref, positive=positive)
         self._refresh(receipt)
@@ -364,11 +415,12 @@ class MatchBridge(QObject):
 
     @Slot(float, float, float, float, int)
     def drawMaskRectangle(self, x0, y0, x1, y1, image_revision):
-        if self._closed or self.mode != "Rectangle" or not self._view["editable"] or image_revision != self._image_revision:
+        if (self._closed or self.mode != "Rectangle" or not self._view["editable"]
+                or self.flow.mode == "terrain" or image_revision != self._image_revision):
             return
         width, height = self._display_size
-        left, right = sorted((x0, min(max(x1, 0), width - 1)))
-        top, bottom = sorted((y0, min(max(y1, 0), height - 1)))
+        left, right = sorted((min(max(x0, 0), width - 1), min(max(x1, 0), width - 1)))
+        top, bottom = sorted((min(max(y0, 0), height - 1), min(max(y1, 0), height - 1)))
         self._submit_manual_mask([[left, top], [right, top], [right, bottom], [left, bottom]])
 
     def _unit_object_at(self, state, x, y):
@@ -399,43 +451,83 @@ class MatchBridge(QObject):
                     return int(badge["objectId"])
         return None
 
+    def _terrain_at(self, state, x, y):
+        if state is None or state.board.homography is None or not state.rules.terrain or not self.show_terrain:
+            return None
+        height, width = state.current.frame.shape[:2]
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        if self.show_labels:
+            nx, ny = x / max(1, width), y / max(1, height)
+            pad_x, pad_y = 4.0 / max(1, width), 4.0 / max(1, height)
+            for badge in reversed(self._badges):
+                if badge.get("kind") == "terrain" and badge.get("unitId"):
+                    bx, by, bw, bh = badge["x"], badge["y"], badge["w"], badge["h"]
+                    if bx - pad_x <= nx <= bx + bw + pad_x and by - pad_y <= ny <= by + bh + pad_y:
+                        return str(badge["unitId"])
+        matrix = state.board.homography["matrix"]
+        for item in reversed(state.rules.terrain):
+            polygon = (transform_points(item["polygon_source"], matrix)
+                       if item.get("polygon_source") is not None else np.asarray(item["polygon_image"], dtype=float))
+            if len(polygon) >= 3 and cv2.pointPolygonTest(np.asarray(polygon, np.float32), (float(x), float(y)), False) >= 0:
+                return str(item.get("terrain_id") or "")
+        return None
+
+    def _clear_terrain_ui(self):
+        self.flow._selected_terrain_id = ""
+        self.flow._terrain_info_open = False
+        self.flow._form_error = ""
+
     @Slot(str)
     def setMode(self, mode):
-        if mode in ("Points", "Assign", "Front", "Quad", "Rectangle") and self._view["editable"]:
+        if mode in ("Points", "Assign", "Front", "Quad", "Rectangle") and self._view["editable"] and self.flow.mode != "terrain":
             if mode != self.mode:
                 self._manual_vertices.clear()
+            if mode != "Assign":
+                self._clear_terrain_ui()
             self.mode = mode
-            ids = (self.match.snapshot().current.prediction or {}).get("object_ids", ())
+            state = self.match.snapshot()
+            ids = (state.current.prediction or {}).get("object_ids", ())
             if mode == "Assign" and self.selected not in ids and ids:
-                # Points mode pre-selects a not-yet-created mask; fall back to the last assigned one.
+                # Drawing/points mode pre-selects a not-yet-created mask; fall back to the last assigned one.
                 self.selected = self._last_bound if self._last_bound in ids else ids[-1]
+                self._edit_existing = False
+            elif mode in ("Points", "Quad", "Rectangle") and self.selected in state.units.bindings and not self._edit_existing:
+                # After binding/front/fallback on a unit, returning to a drawing tool starts a new unit instead of overwriting it.
+                self.selected = max(self.match.registration.known_ids(), default=0) + 1
             self._refresh()
 
     @Slot(int)
     def selectMask(self, object_id):
-        if self._view["editable"]:
+        if self._view["editable"] and self.flow.mode != "terrain":
             self._manual_vertices.clear()
+            self._clear_terrain_ui()
             self.selected, self.mode = object_id, "Assign"
+            self._edit_existing = True
             self._refresh()
 
     @Slot()
     def newObject(self):
-        if self._view["editable"]:
+        if self._view["editable"] and self.flow.mode != "terrain":
             self._manual_vertices.clear()
+            self._clear_terrain_ui()
             self.selected = max(self.match.registration.known_ids(), default=0) + 1
+            self._edit_existing = False
             if self.mode not in ("Quad", "Rectangle"):
                 self.mode = "Points"
             self._refresh()
 
     @Slot(str)
     def assign(self, type_id, object_id=None):
-        if not self._closed:
+        if not self._closed and self.flow.mode != "terrain":
+            self._clear_terrain_ui()
             object_id = self.selected if object_id is None else object_id
             receipt = self.match.registration.bind(object_id, type_id)
             self._hover_object_id = None
             if receipt.status != "rejected":
                 self._manual_vertices.clear()
                 self.selected = self._last_bound = object_id
+                self._edit_existing = False
                 if self.mode in ("Points", "Quad", "Rectangle"):
                     self.newObject()
                     return
@@ -444,7 +536,7 @@ class MatchBridge(QObject):
 
     @Slot(float, float, int)
     def hoverType(self, x, y, image_revision):
-        if image_revision != self._image_revision or not self._view["editable"]:
+        if image_revision != self._image_revision or not self._view["editable"] or self.flow.mode == "terrain":
             hit = None
         else:
             hit = self._unit_object_at(self._shown, x, y)
@@ -463,7 +555,7 @@ class MatchBridge(QObject):
     @Slot(str, float, float, int)
     def dropType(self, type_id, x, y, image_revision):
         self._hover_object_id = None
-        if image_revision != self._image_revision or not self._view["editable"]:
+        if image_revision != self._image_revision or not self._view["editable"] or self.flow.mode == "terrain":
             return
         object_id = self._unit_object_at(self._shown, x, y)
         if object_id is None:
@@ -475,8 +567,11 @@ class MatchBridge(QObject):
 
     @Slot()
     def unbind(self):
+        if self.flow.mode == "terrain":
+            return
         if self._last_bound == self.selected:
             self._last_bound = None
+        self._edit_existing = True
         self._hover_object_id = None
         self._refresh(self.match.registration.unbind(self.selected))
 
@@ -487,6 +582,10 @@ class MatchBridge(QObject):
                 self.corner_points.pop()
                 self.corners = None
             self._refresh()
+        elif self.flow.mode == "terrain":
+            if self.flow.points:
+                self.flow.points.pop()
+                self._refresh()
         else:
             if self._manual_vertices:
                 self._manual_vertices.pop()
@@ -496,8 +595,10 @@ class MatchBridge(QObject):
             receipt = self.match.registration.undo_point()
             if receipt.value is not None:
                 self.selected = receipt.value
+                self._edit_existing = False
             elif prompts and receipt.status != "rejected":
                 self.selected = prompts[-1]["object_id"]
+                self._edit_existing = False
             self._refresh(receipt)
 
     @Slot()
@@ -552,6 +653,12 @@ class MatchBridge(QObject):
         if self._manual_vertices:
             self._refresh(CommandReceipt("rejected", "Finish the four corners or undo the draft before saving."))
             return
+        if self.flow.mode == "terrain":
+            if self.flow.points:
+                self._refresh(CommandReceipt("rejected", "Finish or cancel the terrain polygon before saving."))
+                return
+            self.flow.mode = "live"
+        self._clear_terrain_ui()
         self._refresh(self.match.registration.finish_registration())
 
     @Slot()
@@ -559,6 +666,12 @@ class MatchBridge(QObject):
         if self._manual_vertices:
             self._refresh(CommandReceipt("rejected", "Finish the four corners or undo the draft before starting."))
             return
+        if self.flow.mode == "terrain":
+            if self.flow.points:
+                self._refresh(CommandReceipt("rejected", "Finish or cancel the terrain polygon before starting."))
+                return
+            self.flow.mode = "live"
+        self._clear_terrain_ui()
         self._refresh(self.match.start())
 
     @Slot()
@@ -569,6 +682,7 @@ class MatchBridge(QObject):
             self.selected, self.mode = 1, "Points"
             self._manual_vertices.clear()
             self._last_bound = None
+            self._edit_existing = False
             self._hover_object_id = None
             self.live.clear()
         self._refresh(receipt)
@@ -577,10 +691,12 @@ class MatchBridge(QObject):
     def loadArchive(self, path):
         receipt = self.match.registration.load_archive(path.toLocalFile())
         if receipt.status != "rejected":
+            self.flow.action("cancel")
             self.live.clear()
             state = self.match.snapshot()
             self.selected = next(iter(state.current.prediction["object_ids"]), 1)
             self._last_bound = None
+            self._edit_existing = False
             self._hover_object_id = None
             self.mode = "Assign"
             self._manual_vertices.clear()
@@ -604,6 +720,11 @@ class MatchBridge(QObject):
         if not self._closed:
             self.live.set_card_anchor(x, y)
             self._refresh()
+
+    @Slot(float, float)
+    def setViewportSize(self, width, height):
+        if not self._closed:
+            self.live.set_viewport_size(width, height)
 
     @Slot(str)
     def moveOrder(self, order):
@@ -634,10 +755,49 @@ class MatchBridge(QObject):
 
     @Slot(str, bool)
     def setOverlay(self, overlay, enabled):
+        flag = bool(enabled)
         if overlay == "masks":
-            self.show_masks = enabled
+            self.show_masks = flag
         elif overlay == "trays":
-            self.show_trays = enabled
+            self.show_trays = flag
+        elif overlay == "labels":
+            self.show_labels = flag
+        elif overlay == "terrain":
+            self.show_terrain = flag
+        else:
+            return
+        self._saved_overlays = None
+        self._saved_replay_overlays = None
+        self._refresh()
+
+    @Slot()
+    def toggleAllOverlays(self):
+        if self._closed:
+            return
+        if self.flow.kind(self._snapshot) == "replay":
+            if self.show_trays or self.show_labels:
+                self._saved_replay_overlays = (self.show_trays, self.show_labels)
+                self.show_trays = self.show_labels = False
+            else:
+                saved = self._saved_replay_overlays
+                if saved is not None and any(saved):
+                    self.show_trays, self.show_labels = saved
+                else:
+                    self.show_trays = self.show_labels = True
+                self._saved_replay_overlays = None
+            self._refresh()
+            return
+        any_on = self.show_masks or self.show_trays or self.show_labels or self.show_terrain
+        if any_on:
+            self._saved_overlays = (self.show_masks, self.show_trays, self.show_labels, self.show_terrain)
+            self.show_masks = self.show_trays = self.show_labels = self.show_terrain = False
+        else:
+            saved = self._saved_overlays
+            if saved is not None and any(saved):
+                self.show_masks, self.show_trays, self.show_labels, self.show_terrain = saved
+            else:
+                self.show_masks = self.show_trays = self.show_labels = self.show_terrain = True
+            self._saved_overlays = None
         self._refresh()
 
     @Slot()

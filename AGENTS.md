@@ -20,20 +20,26 @@ treat them as disposable handoff notes just because a task is complete.
 | `项目思路.md` | Design rationale, assumptions, algorithms, sources and experimental evidence for the dissertation. |
 | `TODO.md` | Implementation status, remaining tasks and known issues; not a source of new approved requirements. |
 | `待澄清列表.md` | Confirmed tracking-failure/recovery requirements, terminology and unresolved decisions; proposed answers remain unapproved. |
-| `追踪优化调研与执行计划.md` | Scoped tracking research, candidate approaches and experiment plans; dated findings and proposals must be checked against current code and later decisions. |
-| `前端解耦重构计划.md` | D35 / I14 execution plan, interface boundaries, code-simplification requirements and acceptance checks; planned work is not completed functionality. |
 | `待人工确认.md` | Local verification checklist. Git-ignored; do not stage or commit it. |
 
 Store new maintained documents and final reports in `docs/`, with their
 supporting figures, data, and experiment archives in a topic folder. Keep the
 root project records listed above in place. Reserve `outputs/` for temporary
 or reproducible generated files. Archive any important result in `docs/`
-before treating it as a maintained project artifact.
+before treating it as a maintained project artifact. The historical tracking
+research and D35/I14 plan are archived in `docs/tracking/` and `docs/frontend/`.
+Use the root records for current requirements, implementation and open checks.
+
+Install Qt through the root `requirements.txt` in a new environment. Existing
+installations can still load PySide6 from `outputs/ui_preview/deps`. The tracker
+setup also uses `outputs/tracking_dependencies` and `outputs/model_cache`.
+Check whether the current environment uses these directories before cleaning
+`outputs/`.
 
 The 2026-11-18 decision retires the OpenCV video client. Qt is the desktop
 video client. Keep the existing video commands as Qt entry points and retain
-the independent image and boundary tools. Move Terrain from Live into
-Registration in a later task tracked in TODO.md.
+the independent image and boundary tools. Terrain editing now belongs to
+unlocked Registration (moved from Live on 2026-11-21).
 
 Before substantial implementation, read this file and the relevant sections
 of `项目思路.md` and `TODO.md`; inspect `git status` and the current diff before
@@ -42,13 +48,15 @@ Use section-level reading when possible rather than loading every document
 in full for each small change. Keep these records synchronized when their
 requirements, implementation status or design changes. Remove temporary
 handoffs only after retaining their lasting content in the appropriate record
-and updating references.
+and updating references. Commit or push only with explicit user authorization.
 
 Use the confirmed decisions and terminology in `待澄清列表.md` as the current
 requirement baseline for tracking failure and unit recovery. Open questions
 and suggested answers are not approved requirements. New explicit user
 decisions take precedence and must be synchronized into these documents;
 do not silently replace a recorded decision with a conversational assumption.
+
+## Runtime and operator workflows
 
 Frontend workflow ownership and navigation are documented in
 `frontend/README.md`. Keep the shared runtime independent of the displayed
@@ -64,82 +72,22 @@ recording continue; returning live must show the latest data.
 Opening replay selects the latest completed step; Refresh preserves the
 currently selected event, including Step 0 (confirmed 2026-11-08).
 
-The 2026-11-10 D33 UI target is design-first: retain the existing operator
-workflows and video-centered structure, redesign the interactions, and add a
-separate clean audience window that automatically follows Live/Replay/What-if.
-There is no manual publish/take step for mode changes. This remains a design
-target (I13), not an implemented second window or what-if workflow. Review the
-interaction sketches before choosing a UI framework or rebuilding the UI;
-auxiliary-tool drafts and audience overlay policies still need design review.
+The D33 audience window is a design target. It follows the operator's
+Live/Replay/What-if mode automatically. Refer to D33 and TODO I13 for current
+scope and outstanding design choices.
 
-The later 2026-11-10 D35 decision separates the application runtime before the
-new UI. Follow `前端解耦重构计划.md` (I14): keep the existing UI as the first
-client of a headless application boundary, preserve one authoritative match
-state and serialize model operations. Simplify duplicate state, forwarding
-shells and speculative defensive branches; retain frame alignment, identity,
-cancellation/generation, isolated recovery and history-write protections.
-The 2026-11-11 instruction explicitly starts I14 implementation in the current
-working tree from checkpoint f08876d, preserving the uncommitted prototypes and
-Qt-preview additions. The later instruction authorizes committing this phase
-checkpoint and starting the Qt main-window/real-registration milestone.
-Do not push or add test files. Keep later UI workflows outside this milestone.
-The headless boundary now lives in application/app.py; frontend is its existing
-client. Keep I14 open until its remaining acceptance checks are complete.
-The Qt registration/basic-live client now lives in frontend/qt and uses the
-same public application boundary. Keep the independent design preview intact.
-The later 2026-11-11 instruction starts the Live console milestone: follow
-design/ui/unit-radial-console.html for selection, fixed unit menus, read-only
-unit information and the bottom query drawer. Keep source playback running
-and use existing application geometry commands. Other operator workflows,
-the audience window and What-if remain separate work.
-The latest UI revision uses design/ui/live/unit-info-reference.png uniformly:
-vertical information card on the left and semicircle menu on the right, with
-whole-group bounds/scaling instead of alternate compact layouts. Distance
-values belong on the current measurement line; Distance has no result drawer.
-The later uncertainty UI decision moves mask/facing notices to a right-side
-A/B list, separate from the unit card and video labels. Facing review lists
-only suspicious, pending, failed or unknown items; ordinary recovery phase
-tracking is not a persistent alert merely because its source is inferred.
-Keep backend provenance/history/rule warnings and recovery thresholds intact.
-The later tray optimization is authorized: gate stable masks using centroid
-motion plus cheap shape/axis checks, reuse accepted geometry for noise, then
-try local fitting before full fallback when refitting is required. Keep the
-baseline at the last actual fit so slow motion accumulates. Never reuse across
-identity/calibration/size changes, reset, missing masks or recovery targets.
+Qt in `frontend/qt` uses the public headless boundary in `application/app.py`.
+Maintain one authoritative match state and serialize model operations.
+Remove duplicate state, forwarding shells and speculative defensive branches
+while preserving frame alignment, identity, cancellation/generation, isolated
+recovery and history-write protections. The application and frontend READMEs
+describe the public interfaces and workflow ownership.
 
-The 2026-11-13 follow-up authorizes Qt migration of existing recovery review,
-manual correction, B08 recalibration, unit/terrain editing and replay. Add a
-red correction action to the unit menu using isolated recovery of the original
-ID. Keep playback/history running. Audience/What-if remain TODO. Tray refit
-frequency/latency and ineffective automatic recovery are high-priority issues.
-The later 2026-11-13 P0 decision authorizes a 5% centroid-motion gate and exact
-image-space mask IoU (retain 0.90), removing independent area, normalized-shape
-and axis gates. Keep the last actual successful/failed attempt's mask baseline;
-failed fits wait for accumulated mask change rather than retrying unchanged masks.
-Use bounded asynchronous CPU tray batches, keep all model operations serial,
-and retain separate mask/geometry times, same-frame geometry queries, original-frame
-history and invalidation across tracking gaps, recovery, identity and calibration.
-Record the removed gates for rollback. The user will run this milestone's practical
-checks; do not delegate acceptance or add test files for it.
-
-The 2026-11-16 decision restores the Trays/T switch to display visibility
-only (superseding the 2026-11-14 pause/snapshot-Distance exception now that
-async CPU tray batches and three-layer overlay rendering resolved GUI stutter).
-Background tray fitting continues uninterrupted when Trays is hidden, and
-Distance/LOS/Move queries always run continuously against accepted trays
-without one-shot snapshot fitting or "Not implemented" placeholders.
-The latest 2026-11-14 decision retains facing implementation but disables its
-runtime use by default: no DVMNet loading/checks/recovery or directed-front
-continuity updates. Keep initial registration evidence; do not carry it as live
-facing. Hide Missing and facing attention notices without changing internal
-failure, automatic recovery, identity or query-validity protections.
-
-The 2026-11-11 D36 follow-up separately authorized a minimal registration-only
-Qt preview and accepted its feasibility. Keep it isolated in
-`design/ui/registration`; it uses saved masks and sample catalogs without SAM,
-reference export or production-session changes. PySide6/Qt Quick is the UI
-technology direction. The preview itself did not start I14; the later explicit
-instruction above starts decoupling, without a full UI migration. Native desktop interaction still requires notification and a reply.
+The unit menu reference is `docs/ui-archive/unit-info-reference.png`. Keep the
+vertical information card on the left and the semicircle menu on the right.
+Display Distance on the measurement line and use the result drawer for LOS
+and Move. Trays/T controls display visibility. Geometry queries use current
+accepted trays regardless of this setting.
 
 The later 2026-11-08 coordinate decision uses original video pixels as the
 canonical spatial record. Keep source anchors, frame/size and calibration
@@ -164,7 +112,7 @@ confirms a targeted mask update. Original tracking/history/rules continue until
 the drop; cancelling a draft leaves the original state unchanged. Only an
 already-failed unit remains failed on cancellation. Clear/retry replaces temporal
 prompt undo. Success clears only the target's old facing and interrupts only its
-unfinished motion; a separate D32 appearance estimate may select its new front.
+unfinished motion.
 Confirmed update failures must not reset unrelated objects.
 Automatic recovery searches once per newly failed instance. Only current Missing
 references participate in identity conflicts; already unresolved IDs are not
@@ -180,25 +128,6 @@ errors must not reset unrelated objects or set global model_failed. B08, R and
 close invalidate pending automatic results.
 EdgeTAM is now the default propagation backend, initialized from SAM3's
 registered masks; explicit SAM3 and Cutie selection remain available.
-
-The 2026-11-10 D32 trial uses DVMNet only to select a current tray front edge;
-the rectangle supplies the exact angle. Both initial-F reference and current
-query use source-frame masks with mean RGB background. References freeze only
-after successful registration; no initial F means no inferred front. The
-image-plane projection and configurable 20-degree candidate-error margin are
-experimental, not calibrated confidence. Normal updates now use rectangle
-continuity plus a cheap foreground check; DVMNet runs only for suspicious or
-missing facing, and after accepted mask recovery. Direction-only suspicion
-and failed recovery retain the previous Estimated front with pending/failed
-provenance; actual tracking loss still invalidates old facing under D22.
-Retries require changed appearance and a configurable minimum source-time gap.
-Detector templates are runtime-only; commit proposed detector state only after
-the corresponding observation is accepted. Facing-only recovery must not
-replace masks/IDs or interrupt valid position actions. Model errors must not
-fail tracking globally. R clears
-references; B08 retains compatible source references. H03 still detects
-undirected tray-axis rotation, not directed 180-degree facing changes.
-External pinned assets stay in ignored cache, prepared by tools.setup_facing.
 
 ## SAM-related work
 
@@ -234,17 +163,12 @@ playback. Starting playback locks point editing, including while paused;
 explicit reset starts a new registration. Later corrections belong to future
 algorithms. Avoid implementing temporal prompt rollback for this workflow.
 
-The scoped recovery workflow confirmed on 2026-11-02 is separate from initial
-registration: reuse its UI only for failed existing instances, retain their
-IDs and attributes, and preserve unaffected units. It does not reopen global
-point/type editing, create replacement instance IDs, or change the table
-Homography. This manual session integration is implemented for EdgeTAM; other propagation
-backends retain their existing workflows.
-The 2026-11-06 manual-intervention requirement also allows the operator to
-mark a tracked instance as a detection error and request scoped manual
-recovery directly. It does not allow silently taking another assigned unit's
-identity. Ambiguous instance matches require human assignment, even with
-high appearance similarity; never randomly swap physical IDs or histories.
+EdgeTAM manual recovery can correct a failed unit or a normally tracked unit
+that the operator marks as a detection error. Correct only the selected
+original unit ID and preserve its attributes, prior history, and unaffected
+units. Keep initial registration locked and the table Homography intact.
+Ambiguous instance matches require human assignment. Preserve each physical
+unit's identity and history.
 
 The input unit catalog supplies types only. Assigning type A to successive
 masks generates A1, A2, etc.; each type has its own counter. Do not require
@@ -255,12 +179,6 @@ Registration edits are drafts held in memory. Persist final references only
 when the user finishes registration (S, or the first playback action). Commit
 once per registration, then lock point and type editing. Undoing a draft unit
 releases its instance number for reuse without renumbering other units.
-
-The 2026-11-13 registration decision defers tray fitting until type assignment
-confirms the current mask. Point edits/undo invalidate only that object's tray;
-binding/refitting must preserve all other accepted trays. Reconfirm the type after
-editing a bound mask. Registration and Live share update_trays with an explicit
-target set; per-object versions reject stale registration fits.
 
 ## Design record for dissertation
 
@@ -279,22 +197,10 @@ The project is exploratory. The user requested that we avoid spending effort
 writing test files. Use focused inline checks and practical runs appropriate
 to the change.
 
-The user authorized assistant-run module and practical video checks on
-2026-11-02. The later 2026-11-11 instruction limits the default cadence:
-do not proactively run regressions or tests during implementation. Complete
-an agreed implementation milestone first, then batch its acceptance work to
-GPT-6.1 Terra with medium reasoning and an independent context. Under the
-latest 2026-11-11 follow-up, the main agent directly handles small targeted
-reproductions, startup failures and local fix checks using its existing
-context; do not delegate these by default. This supersedes the earlier
-Terra-low preference for small checks and does not expand proactive testing.
-For delegated milestone acceptance, give Terra acceptance criteria, public
-entry points and necessary project constraints,
-without implementation explanations or suspected fault locations. It reports
-reproduced failures with steps/evidence and concise coverage counts; the main
-agent independently locates and fixes code. Do not start per-edit retesting
-cycles; include fixes in the next agreed batch unless the user requests an
-earlier check. This does not authorize new test files or desktop interaction.
+The main agent handles targeted reproductions, startup failures and local fix
+checks directly. Module and practical video checks are allowed within the
+agreed scope. Avoid proactive regression runs during implementation and
+per-edit retesting cycles.
 For GPU checks on this machine, explicitly select and verify the
 AMD Radeon RX 7900 XT; another visible GPU is AMD Radeon(TM) Graphics.
 Record the physical GPU name, not just a cuda index (HIP visibility filtering

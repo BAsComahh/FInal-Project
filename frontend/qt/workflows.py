@@ -14,12 +14,15 @@ from .board import (
     _SELECTION_BGR,
     _SIDE_A_BGR,
     _SIDE_B_BGR,
+    _TERRAIN_KIND_BGR,
     _badge_dict,
+    _bgr_hex,
     _draw_dashed_poly,
     _ui_font,
     draw_corner_brackets,
     nearest_rect_points,
     place_badges,
+    unit_badge_label,
 )
 
 
@@ -175,7 +178,7 @@ def _draw_rotation_cue(canvas, start_poly, end_poly, rot_deg, scale):
     return radius
 
 
-def _replay_board(state, replay, preview_size):
+def _replay_board(state, replay, preview_size, *, trays=True, labels=True):
     width = max(320, int(preview_size[0]))
     height = max(220, int(preview_size[1]))
     panel = np.full((height, width, 3), (19, 14, 9), dtype=np.uint8)
@@ -216,7 +219,6 @@ def _replay_board(state, replay, preview_size):
     highlight = step["unit_id"]
     event = step.get("event")
     draw_scale = max(1.0, height / 720.0)
-    overlay = board.copy()
     valid = []
     for unit_id, unit in scene["units"].items():
         corners = unit.get("corners_mm")
@@ -231,28 +233,32 @@ def _replay_board(state, replay, preview_size):
             front_edge = unit.get("front_edge")
             valid.append((unit_id, side, front_edge, np.rint(points * scale).astype(np.int32)))
 
-    # Translucent 13% tray fill so miniatures underneath remain crisp and visible
-    for unit_id, side, _, polygon in valid:
-        is_active = unit_id == highlight
-        fill_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
-        cv2.fillPoly(overlay, [polygon], fill_bgr)
-    cv2.addWeighted(overlay, 0.13, board, 0.87, 0, board)
-
-    # Extra subtle tint for the highlighted step unit
-    for unit_id, _, _, polygon in valid:
-        if unit_id == highlight:
-            hi = board.copy()
-            cv2.fillPoly(hi, [polygon], _SELECTION_BGR)
-            cv2.addWeighted(hi, 0.10, board, 0.90, 0, board)
-            break
-
     occ = np.zeros((height, width), np.uint8)
     end_active_poly = None
+    if trays:
+        overlay = board.copy()
+        # Translucent 13% tray fill so miniatures underneath remain crisp and visible
+        for unit_id, side, _, polygon in valid:
+            is_active = unit_id == highlight
+            fill_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
+            cv2.fillPoly(overlay, [polygon], fill_bgr)
+        cv2.addWeighted(overlay, 0.13, board, 0.87, 0, board)
+
+        # Extra subtle tint for the highlighted step unit
+        for unit_id, _, _, polygon in valid:
+            if unit_id == highlight:
+                hi = board.copy()
+                cv2.fillPoly(hi, [polygon], _SELECTION_BGR)
+                cv2.addWeighted(hi, 0.10, board, 0.90, 0, board)
+                break
+
     for unit_id, side, front_edge, polygon in valid:
         is_active = unit_id == highlight
-        stroke_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
         panel_poly = polygon + np.array([origin_x, origin_y], dtype=np.int32)
         cv2.fillPoly(occ, [panel_poly], 1)
+        if not trays:
+            continue
+        stroke_bgr = _SELECTION_BGR if is_active else (_SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0])
         if is_active:
             end_active_poly = polygon.astype(float)
             cv2.polylines(board, [polygon], True, (26, 20, 12), max(4, round(4.8 * draw_scale)), cv2.LINE_AA)
@@ -275,8 +281,8 @@ def _replay_board(state, replay, preview_size):
             cv2.line(board, p0, p1, (255, 255, 255), max(2, round(2.4 * draw_scale)), cv2.LINE_AA)
 
     # Render start ghost + motion trajectory / rotation arc for Move & Rotate steps
-    start_corners_mm = _step_start_corners_mm(event, scene)
-    if event is not None and start_corners_mm is not None and end_active_poly is not None:
+    start_corners_mm = _step_start_corners_mm(event, scene) if trays else None
+    if trays and event is not None and start_corners_mm is not None and end_active_poly is not None:
         start_poly = start_corners_mm * scale
         start_int = np.rint(start_poly).astype(np.int32)
         cv2.fillPoly(occ, [start_int + np.array([origin_x, origin_y], dtype=np.int32)], 1)
@@ -302,9 +308,12 @@ def _replay_board(state, replay, preview_size):
     cv2.rectangle(board, (0, 0), (int(board_w) - 1, int(board_h) - 1), (96, 78, 62), 1)
     panel[origin_y:origin_y + int(board_h), origin_x:origin_x + int(board_w)] = board
 
+    if not labels:
+        return panel, []
+
     # Place non-overlapping capsule labels using the shared integral occupancy solver
     entries = []
-    for unit_id, side, _, polygon in valid:
+    for idx, (unit_id, side, _, polygon) in enumerate(valid):
         is_active = unit_id == highlight
         px0 = max(0, int(polygon[:, 0].min()) + origin_x)
         py0 = max(0, int(polygon[:, 1].min()) + origin_y)
@@ -314,26 +323,106 @@ def _replay_board(state, replay, preview_size):
         area = max(1, (px1 - px0) * (py1 - py0))
         dot = _SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0]
         border_bgr = _SELECTION_BGR if is_active else dot
-        entries.append((area, unit_box, unit_id, dot, border_bgr, -1, is_active))
+        entries.append((area, unit_box, unit_badge_label(state, unit_id), dot, border_bgr, idx, is_active))
 
     placed = place_badges(entries, occ, width, height, draw_scale)
     badges = []
     for box, entry, dist in placed:
-        _, unit_box, unit_id, dot, border_bgr, _, is_active = entry
+        _, unit_box, label, dot, border_bgr, idx, is_active = entry
+        unit_id = valid[idx][0]
         if dist > round(9 * draw_scale):
             p_lbl, p_unit = nearest_rect_points(box, unit_box)
             cv2.line(panel, p_lbl, p_unit, (26, 20, 12), max(3, round(3.0 * draw_scale)), cv2.LINE_AA)
             cv2.line(panel, p_lbl, p_unit, border_bgr, max(1, round(1.5 * draw_scale)), cv2.LINE_AA)
             cv2.circle(panel, p_unit, max(3, round(3.2 * draw_scale)), (247, 243, 237), -1, cv2.LINE_AA)
         badges.append(_badge_dict(
-            box, width, height, unit_id, dot, border_bgr,
+            box, width, height, label, dot, border_bgr,
             kind="unit", unit_id=unit_id, active=is_active,
         ))
     return panel, badges
 
 
+def _step_summary_text(step):
+    if step is None:
+        return ""
+    event = step.get("event")
+    if event is None:
+        return "Baseline snapshot"
+    if event.get("kind") == "translation":
+        disp = event.get("net_displacement_mm")
+        if isinstance(disp, (int, float)) and math.isfinite(disp):
+            return f"{disp / 25.4:.2f} in · {disp:.1f} mm"
+    elif event.get("kind") == "rotation":
+        deg = event.get("rotation_deg_estimate")
+        if isinstance(deg, (int, float)) and math.isfinite(deg):
+            return f"{deg:+.1f}°"
+    return ""
+
+
+def _terrain_row(state, item):
+    tid = str(item.get("terrain_id") or "")
+    kind = str(item.get("kind") or "blocking")
+    label = str(item.get("label") or tid or "Terrain")
+    height = item.get("height")
+    is_obstacle = kind == "obstacle"
+    height_text = "1 (fixed)" if is_obstacle else (f"{height:g}" if isinstance(height, (int, float)) else "—")
+    height_raw = "1" if is_obstacle else ("" if height is None else f"{height:g}")
+    bgr = _TERRAIN_KIND_BGR.get(kind, (162, 174, 184))
+
+    frame_h, frame_w = state.current.frame.shape[:2]
+    matrix = state.board.homography["matrix"] if state.board.homography is not None else None
+    if item.get("polygon_source") is not None and matrix is not None:
+        poly_img = transform_points(item["polygon_source"], matrix)
+    elif item.get("polygon_image") is not None:
+        poly_img = np.asarray(item["polygon_image"], dtype=float)
+    else:
+        poly_img = np.empty((0, 2), dtype=float)
+    vertices = int(len(poly_img))
+    if vertices >= 3 and np.isfinite(poly_img).all():
+        center = poly_img.mean(axis=0)
+        cx = float(np.clip(center[0] / max(1, frame_w), 0.02, 0.98))
+        cy = float(np.clip(center[1] / max(1, frame_h), 0.02, 0.98))
+    else:
+        cx, cy = 0.5, 0.5
+
+    area_text = f"{vertices} vertices"
+    try:
+        if item.get("polygon_source") is not None and state.board.source_to_plane is not None:
+            pts_mm = transform_points(item["polygon_source"], state.board.source_to_plane)
+        elif item.get("polygon_image") is not None and state.board.image_to_plane is not None:
+            pts_mm = transform_points(item["polygon_image"], state.board.image_to_plane)
+        else:
+            pts_mm = None
+        if pts_mm is not None and len(pts_mm) >= 3 and np.isfinite(pts_mm).all():
+            xs, ys = pts_mm[:, 0], pts_mm[:, 1]
+            area_mm2 = 0.5 * abs(float(np.dot(xs, np.roll(ys, -1)) - np.dot(ys, np.roll(xs, -1))))
+            if area_mm2 > 0:
+                area_in2 = area_mm2 / (25.4 * 25.4)
+                area_text = f"{vertices} pts · {area_in2:.1f} sq in"
+    except (TypeError, ValueError):
+        pass
+
+    return dict(
+        id=tid,
+        label=label,
+        kind=kind,
+        kindLabel=kind.title(),
+        heightText=height_text,
+        heightRaw=height_raw,
+        color=_bgr_hex(bgr),
+        vertices=vertices,
+        areaText=area_text,
+        centerX=cx,
+        centerY=cy,
+    )
+
+
 class Workflows(QObject):
     changed = Signal()
+    recoveryRowsChanged = Signal()
+    replayStepsChanged = Signal()
+    terrainRowsChanged = Signal()
+    terrainLoaded = Signal()
     formRequested = Signal()
     profileLoaded = Signal()
 
@@ -342,6 +431,17 @@ class Workflows(QObject):
         self.bridge, self.match = bridge, bridge.match
         self.mode = "live"
         self.points = []
+        self.recovery_tool = "Points"
+        self.recovery_vertices = []
+        self._recovery_target = ""
+        self._recovery_hover = False
+        self._recovery_rows = []
+        self._replay_steps = []
+        self._replay_steps_key = None
+        self._terrain_rows = []
+        self._selected_terrain_id = ""
+        self._terrain_info_open = False
+        self._terrain_card_anchor = (0.35, 0.5)
         self._reference = None
         self._fields = []
         self._form_kind = self._unit_id = ""
@@ -351,11 +451,16 @@ class Workflows(QObject):
         self._calibration_pending = False
         self._data = dict(
             kind="live", rows=[], note="", busy=False, review=False,
+            reviewUnitId="", targetUnitId="", hasCandidate=False, canConfirmTarget=False,
+            tool="Points", quadVertices=[],
             candidateGeneration=0, candidateTime="—", pointCount=0,
             step=0, steps=0, calibrationPending=False,
             profileOpen=False, profileUnitId="",
+            selectedTerrainId="", terrainInfoOpen=False, selectedTerrain={},
+            terrainCenterX=0.5, terrainCenterY=0.5, terrainCardX=0.35, terrainCardY=0.5,
             replayInfo=dict(stepText="", stepLabel="", stepUnit="", stepKind="", stepSide="",
-                            stepSummary="", endTime="—", observedTime="—", recordedTime="—",
+                            stepSummary="", endTime="—", firstTime="—", lastTime="—",
+                            observedTime="—", recordedTime="—",
                             calibrationVersion="—", unavailable="", unavailableCount=0,
                             backgroundNote="", boardDimensions="",
                             loading=False, error="", hasIndex=False),
@@ -366,6 +471,22 @@ class Workflows(QObject):
     @Property("QVariantMap", notify=changed)
     def state(self):
         return self._data
+
+    @Property("QVariantList", notify=recoveryRowsChanged)
+    def recoveryRows(self):
+        return self._recovery_rows
+
+    @Property("QVariantList", notify=replayStepsChanged)
+    def replaySteps(self):
+        return self._replay_steps
+
+    @Property("QVariantList", notify=terrainRowsChanged)
+    def terrainRows(self):
+        return self._terrain_rows
+
+    @property
+    def selected_terrain_id(self):
+        return self._selected_terrain_id
 
     @Property("QVariantList", notify=changed)
     def fields(self):
@@ -435,12 +556,26 @@ class Workflows(QObject):
             self._form_error = ""
             self.refresh()
 
+    @staticmethod
+    def _place_terrain_card(cx, cy):
+        card_x = cx - 0.16 if cx > 0.30 else cx + 0.16
+        return (float(np.clip(card_x, 0.12, 0.88)), float(np.clip(cy, 0.14, 0.86)))
+
     def publish(self, state):
         recovery, replay = state.recovery, self.match.replay
         if self._calibration_pending and self.match.calibration.status is None:
             self.mode, self._calibration_pending = "live", False
             self.points = []
+        if state.stage != "register" or state.registration_locked:
+            if self.mode == "terrain":
+                self.mode, self.points, self._form_error = "live", [], ""
+            self._selected_terrain_id = ""
+            self._terrain_info_open = False
         kind = self.kind(state)
+        if kind != "recovery":
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
+            self._recovery_target = ""
         if self._profile_open:
             uid = self.bridge.live.unit_id
             if state.stage != "playback" or kind != "live" or not uid or uid not in state.units.units:
@@ -448,8 +583,25 @@ class Workflows(QObject):
             elif uid != self._unit_id:
                 self._form_error = ""
                 self._load_profile(state, uid)
+
+        terrain_rows = (
+            [_terrain_row(state, item) for item in state.rules.terrain]
+            if state.stage == "register" and state.board.homography is not None else []
+        )
+        if terrain_rows != self._terrain_rows:
+            self._terrain_rows = terrain_rows
+            self.terrainRowsChanged.emit()
+        selected_terrain = next((row for row in terrain_rows if row["id"] == self._selected_terrain_id), None)
+        if self._selected_terrain_id and selected_terrain is None:
+            self._selected_terrain_id = ""
+            self._terrain_info_open = False
+
+        labels = list(recovery["labels"])
+        if self._recovery_target and self._recovery_target not in labels:
+            self._recovery_target = ""
+        target_uid = self._recovery_target or (labels[0] if len(labels) == 1 else "")
         rows = []
-        for uid in recovery["labels"]:
+        for uid in labels:
             unit = state.units.units[uid]
             catalog = state.units.types[unit["type_id"]]
             tracking = state.tracking.get(uid)
@@ -460,9 +612,43 @@ class Workflows(QObject):
             rows.append(dict(
                 id=uid,
                 side=catalog.get("list_id", "A"),
-                name=catalog.get("classification") or catalog.get("unit_name") or catalog.get("name") or unit["type_id"],
+                name=catalog.get("unit_name") or catalog.get("name") or catalog.get("classification") or unit["type_id"],
+                subtitle=catalog.get("classification") or catalog.get("formation") or "",
                 status=status,
             ))
+        if rows != self._recovery_rows:
+            self._recovery_rows = rows
+            self.recoveryRowsChanged.emit()
+
+        replay_steps_key = (
+            kind == "replay",
+            replay.epoch,
+            len(replay.steps),
+            replay.steps[-1]["event_id"] if replay.steps else None,
+            id(state.units.types),
+        )
+        if replay_steps_key != self._replay_steps_key:
+            self._replay_steps_key = replay_steps_key
+            timeline = []
+            if kind == "replay" and replay.steps:
+                for idx, entry in enumerate(replay.steps):
+                    u_id = entry.get("unit_id") or ""
+                    u_side = ""
+                    if u_id and u_id in state.units.units:
+                        u_type = state.units.units[u_id]["type_id"]
+                        u_side = state.units.types.get(u_type, {}).get("list_id", "")
+                    timeline.append(dict(
+                        index=idx,
+                        kind=entry["kind"],
+                        label=entry["label"],
+                        unit=u_id,
+                        side=u_side,
+                        time=f"{entry['end_timestamp_seconds']:.1f}s",
+                        summary=_step_summary_text(entry),
+                    ))
+            if timeline != self._replay_steps:
+                self._replay_steps = timeline
+                self.replayStepsChanged.emit()
 
         note = recovery["note"] if kind == "recovery" else replay.error if kind == "replay" else state.note
         if kind == "debug":
@@ -499,19 +685,7 @@ class Workflows(QObject):
         if step_unit and step_unit in state.units.units:
             step_type = state.units.units[step_unit]["type_id"]
             step_side = state.units.types.get(step_type, {}).get("list_id", "")
-        step_summary = ""
-        if step is not None:
-            event = step.get("event")
-            if event is None:
-                step_summary = "Baseline snapshot"
-            elif event.get("kind") == "translation":
-                disp = event.get("net_displacement_mm")
-                if isinstance(disp, (int, float)) and math.isfinite(disp):
-                    step_summary = f"{disp / 25.4:.2f} in · {disp:.1f} mm"
-            elif event.get("kind") == "rotation":
-                deg = event.get("rotation_deg_estimate")
-                if isinstance(deg, (int, float)) and math.isfinite(deg):
-                    step_summary = f"{deg:+.1f}°"
+        step_summary = _step_summary_text(step)
 
         replay_info = dict(
             stepText=(f"Step {replay.selected} / {len(replay.steps) - 1}" if replay.steps
@@ -522,6 +696,8 @@ class Workflows(QObject):
             stepSide=step_side,
             stepSummary=step_summary,
             endTime=f"{step['end_timestamp_seconds']:.2f}s" if step else "—",
+            firstTime=f"{replay.steps[0]['end_timestamp_seconds']:.1f}s" if replay.steps else "—",
+            lastTime=f"{replay.steps[-1]['end_timestamp_seconds']:.1f}s" if replay.steps else "—",
             observedTime=observed_time,
             recordedTime=recorded_time,
             calibrationVersion=calib_ver,
@@ -537,12 +713,21 @@ class Workflows(QObject):
             note = f"Step {replay.selected}: {step['label']} | " + (note or "")
 
         candidate = recovery["preview"]
+        has_candidate = bool(candidate is not None and candidate["prediction"]["masks"][0].any())
+        busy = recovery["busy"] or recovery["committing"]
+        review = recovery["review_unit_id"] is not None
         self._data = dict(
             kind=kind,
             rows=rows,
             note=note,
-            busy=recovery["busy"] or recovery["committing"],
-            review=recovery["review_unit_id"] is not None,
+            busy=busy,
+            review=review,
+            reviewUnitId=recovery["review_unit_id"] or "",
+            targetUnitId=target_uid,
+            hasCandidate=has_candidate,
+            canConfirmTarget=bool(has_candidate and not review and target_uid and not busy),
+            tool=self.recovery_tool,
+            quadVertices=self.recovery_vertices.copy(),
             candidateGeneration=recovery["candidate_generation"],
             candidateTime=(f"{candidate['metadata']['timestamp_seconds']:.2f}s" if candidate else "—"),
             pointCount=len(self.points),
@@ -551,6 +736,13 @@ class Workflows(QObject):
             calibrationPending=self._calibration_pending,
             profileOpen=self._profile_open,
             profileUnitId=self._unit_id,
+            selectedTerrainId=self._selected_terrain_id,
+            terrainInfoOpen=self._terrain_info_open,
+            selectedTerrain=selected_terrain or {},
+            terrainCenterX=selected_terrain["centerX"] if selected_terrain else 0.5,
+            terrainCenterY=selected_terrain["centerY"] if selected_terrain else 0.5,
+            terrainCardX=float(self._terrain_card_anchor[0]),
+            terrainCardY=float(self._terrain_card_anchor[1]),
             replayInfo=replay_info,
         )
         self.changed.emit()
@@ -563,6 +755,14 @@ class Workflows(QObject):
         if self.bridge._closed:
             return
         state = self.match.snapshot()
+        if tool == "terrain":
+            if state.stage != "register" or state.registration_locked or state.board.homography is None:
+                return
+            self.bridge._manual_vertices.clear()
+            self.mode, self.points, self._reference = "terrain", [], state.source_ref
+            self._form_error = ""
+            self.refresh()
+            return
         if state.stage != "playback" or state.recovery["committing"]:
             return
         if self.mode == "debug":
@@ -594,6 +794,10 @@ class Workflows(QObject):
         self.mode, self.points, self._calibration_pending = "live", [], False
         if tool in ("correct", "recover"):
             uid = self.bridge.live.unit_id if tool == "correct" else None
+            self.recovery_tool = "Points"
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
+            self._recovery_target = uid or ""
             receipt = self.match.recovery.open(uid)
             if receipt.status != "rejected" and uid:
                 receipt = self.match.recovery.report_error(uid)
@@ -605,9 +809,6 @@ class Workflows(QObject):
             self.refresh(receipt)
         elif tool == "replay":
             self.refresh(self.match.replay.open())
-        elif tool == "terrain":
-            self.mode, self._reference = "terrain", state.source_ref
-            self.refresh()
 
     def show_form(self, kind, rows):
         self._form_kind = kind
@@ -645,7 +846,12 @@ class Workflows(QObject):
         else:
             receipt = self.match.scene_editing.add_terrain(self.points, values, self._reference)
             if receipt.status != "rejected":
-                self.mode, self.points = "live", []
+                self.points = []
+                state = self.match.snapshot()
+                self._reference = state.source_ref
+                self.match.set_note(
+                    f"Terrain saved ({len(state.rules.terrain)} total). Click vertices for another polygon, or press Esc / Done."
+                )
 
         if receipt.status == "rejected":
             self._form_error = receipt.reason
@@ -667,6 +873,143 @@ class Workflows(QObject):
                   ("hill", "Hill"), ("decorative", "Decorative")]),
                 ("height", "Rule height (optional)", None, "number", None),
             ])
+
+    @Slot(int)
+    def selectReplayStep(self, index):
+        if self.bridge._closed:
+            return
+        if self.match.replay.active:
+            self.refresh(self.match.replay.select(int(index)))
+
+    @Slot(str)
+    @Slot(str, bool)
+    @Slot(str, bool, float, float)
+    def selectTerrain(self, terrain_id, open_info=False, anchor_x=-1.0, anchor_y=-1.0):
+        if self.bridge._closed:
+            return
+        state = self.match.snapshot()
+        if state.stage != "register" or state.registration_locked:
+            return
+        item = next((t for t in state.rules.terrain if t.get("terrain_id") == terrain_id), None)
+        if item is None:
+            return
+        row = _terrain_row(state, item)
+        self._selected_terrain_id = terrain_id
+        if open_info:
+            self._terrain_info_open = True
+        cx = row["centerX"] if anchor_x < 0 else float(np.clip(anchor_x, 0.02, 0.98))
+        cy = row["centerY"] if anchor_y < 0 else float(np.clip(anchor_y, 0.02, 0.98))
+        self._terrain_card_anchor = self._place_terrain_card(cx, cy)
+        self._form_error = ""
+        self.refresh()
+        self.terrainLoaded.emit()
+
+    @Slot()
+    @Slot(str)
+    def openTerrainInfo(self, terrain_id=""):
+        if self.bridge._closed:
+            return
+        state = self.match.snapshot()
+        if state.stage != "register" or state.registration_locked:
+            return
+        tid = terrain_id or self._selected_terrain_id
+        if not tid:
+            return
+        if not any(t.get("terrain_id") == tid for t in state.rules.terrain):
+            return
+        if tid != self._selected_terrain_id:
+            self.selectTerrain(tid, True)
+            return
+        self._terrain_info_open = not self._terrain_info_open if not terrain_id else True
+        self._form_error = ""
+        self.refresh()
+        if self._terrain_info_open:
+            self.terrainLoaded.emit()
+
+    @Slot()
+    def closeTerrainInfo(self):
+        if self.bridge._closed:
+            return
+        changed = False
+        if self.mode == "terrain":
+            if self._selected_terrain_id or self._terrain_info_open or self._form_error:
+                self._selected_terrain_id = ""
+                self._terrain_info_open = False
+                self._form_error = ""
+                changed = True
+        elif self._terrain_info_open or self._form_error:
+            self._terrain_info_open = False
+            self._form_error = ""
+            changed = True
+        if changed:
+            self.refresh()
+
+    @Slot()
+    def clearTerrainSelection(self):
+        if self._selected_terrain_id or self._terrain_info_open or self._form_error:
+            self._selected_terrain_id = ""
+            self._terrain_info_open = False
+            self._form_error = ""
+            self.refresh()
+
+    @Slot(float, float)
+    def moveTerrainCard(self, x, y):
+        if not self.bridge._closed:
+            self._terrain_card_anchor = (float(np.clip(x, 0.04, 0.96)), float(np.clip(y, 0.04, 0.96)))
+            self.refresh()
+
+    @Slot(str, str, str, str, result=bool)
+    def saveTerrainEdit(self, terrain_id, label, kind, height_text):
+        if self.bridge._closed:
+            return False
+        state = self.match.snapshot()
+        try:
+            clean_label = str(label or "").strip()
+            if not clean_label:
+                raise ValueError("Enter a terrain label.")
+            clean_kind = str(kind or "").strip() or "blocking"
+            values = {"label": clean_label, "kind": clean_kind}
+            if clean_kind != "obstacle":
+                raw_h = str(height_text if height_text is not None else "").strip()
+                if raw_h == "":
+                    values["height"] = None
+                else:
+                    h_val = float(raw_h)
+                    if not math.isfinite(h_val) or h_val < 0:
+                        raise ValueError("Enter a finite, non-negative height, or leave unknown values empty.")
+                    values["height"] = h_val
+        except ValueError as error:
+            self._form_error = str(error)
+            self.changed.emit()
+            return False
+        receipt = self.match.scene_editing.update_terrain(terrain_id, values, state.source_ref)
+        if receipt.status == "rejected":
+            self._form_error = receipt.reason
+            self.changed.emit()
+            return False
+        self._form_error = ""
+        self.match.set_note(f"Updated terrain {clean_label} ({terrain_id}).")
+        self.refresh(receipt)
+        self.terrainLoaded.emit()
+        return True
+
+    @Slot(str, result=bool)
+    def deleteTerrain(self, terrain_id):
+        if self.bridge._closed:
+            return False
+        state = self.match.snapshot()
+        receipt = self.match.scene_editing.delete_terrain(terrain_id, state.source_ref)
+        if receipt.status == "rejected":
+            self._form_error = receipt.reason
+            self.changed.emit()
+            return False
+        if self._selected_terrain_id == terrain_id:
+            self._selected_terrain_id = ""
+            self._terrain_info_open = False
+        self._form_error = ""
+        self.match.set_note(f"Removed terrain {terrain_id}.")
+        self.refresh(receipt)
+        return True
 
     @Slot(str)
     def action(self, action):
@@ -692,14 +1035,23 @@ class Workflows(QObject):
             self.match.replay.clear()
             self.match.calibration.cancel_recalibration()
             self.mode, self.points, self._calibration_pending = "live", [], False
+            self._selected_terrain_id = ""
+            self._terrain_info_open = False
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
+            self._recovery_target = ""
             self._form_error = ""
             self.refresh()
         elif action == "clear":
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
             self.refresh(self.match.recovery.clear_candidate())
         elif action == "correct":
             state = self.bridge._shown
             self.refresh(self.match.recovery.bind(state.recovery["review_unit_id"], state.recovery["candidate_generation"]))
         elif action == "reject":
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
             self.refresh(self.match.recovery.reject())
         elif action == "refresh":
             self.refresh(self.match.replay.refresh())
@@ -707,8 +1059,73 @@ class Workflows(QObject):
             self.refresh(self.match.replay.navigate(-1 if action == "previous" else 1))
 
     @Slot(str)
+    def setRecoveryTool(self, tool):
+        if not self.bridge._closed and tool in ("Points", "Rectangle", "Quad"):
+            if tool != self.recovery_tool:
+                self.recovery_vertices.clear()
+            self.recovery_tool = tool
+            self.refresh()
+
+    @Slot()
+    def undoRecoveryVertex(self):
+        if not self.bridge._closed and self.recovery_vertices:
+            self.recovery_vertices.pop()
+            self.refresh()
+
+    @Slot(float, float, float, float)
+    def drawRecoveryRectangle(self, x0, y0, x1, y1):
+        if self.bridge._closed or self.recovery_tool != "Rectangle":
+            return
+        state = self.bridge._shown or self.match.snapshot()
+        if self.kind(state) != "recovery" or state.recovery["busy"] or state.recovery["committing"]:
+            return
+        width, height = self.bridge._display_size
+        left, right = sorted((min(max(x0, 0), width - 1), min(max(x1, 0), width - 1)))
+        top, bottom = sorted((min(max(y0, 0), height - 1), min(max(y1, 0), height - 1)))
+        receipt = self.match.recovery.manual_mask([[left, top], [right, top], [right, bottom], [left, bottom]], state.source_ref)
+        if receipt.status != "rejected":
+            self.recovery_vertices.clear()
+            self._recovery_hover = False
+        self.refresh(receipt)
+
+    @Slot()
+    def confirmTarget(self):
+        if self.bridge._closed:
+            return
+        state = self.match.snapshot()
+        target = self._data.get("targetUnitId") or ""
+        if self.kind(state) == "recovery" and target:
+            self.refresh(self.match.recovery.bind(target, state.recovery["candidate_generation"]))
+
+    @Slot(str)
     def selectCandidate(self, uid):
-        self.refresh(self.match.recovery.select_unit(uid))
+        if self.bridge._closed:
+            return
+        state = self.match.snapshot()
+        rec = state.recovery
+        if self.kind(state) != "recovery" or rec["busy"] or rec["committing"]:
+            return
+        preview = rec["preview"]
+        has_candidate = preview is not None and preview["prediction"]["masks"][0].any()
+        if has_candidate and rec["review_unit_id"] is None:
+            self._recovery_hover = False
+            self.refresh(self.match.recovery.bind(uid, rec["candidate_generation"]))
+            return
+        if uid != rec["review_unit_id"]:
+            receipt = self.match.recovery.select_unit(uid)
+            if receipt.status != "rejected":
+                self._recovery_target = uid
+                self.recovery_vertices.clear()
+                self.refresh(receipt)
+                return
+        self._recovery_target = uid
+        self.bridge.notice = (
+            f"Reviewing {uid}: click Correct to confirm, No to search again, or redraw."
+            if uid == rec["review_unit_id"]
+            else f"Target {uid} selected. Use Points, Rectangle, or Four corners to draw a mask, then click or drag {uid} to confirm."
+        )
+        self.bridge._local_revision += 1
+        self.bridge._publish()
 
     @Slot(str, str, result=bool)
     def applyCalibration(self, width, depth):
@@ -737,10 +1154,40 @@ class Workflows(QObject):
                 self.points.pop()
             self.refresh()
         elif kind in ("recovery", "terrain"):
-            source = transform_points([x, y], state.board.homography["inverse_matrix"])
+            if kind == "terrain" and (state.stage != "register" or state.registration_locked or state.board.homography is None):
+                return False
             if kind == "recovery":
+                if self.recovery_tool == "Quad":
+                    if not positive:
+                        if self.recovery_vertices:
+                            self.recovery_vertices.pop()
+                            self.refresh()
+                        else:
+                            self.bridge.notice = "Right-click removes unfinished corners. Use Clear / Retry to clear the candidate."
+                            self.bridge._local_revision += 1
+                            self.bridge._publish()
+                        return True
+                    vertices = [*self.recovery_vertices, [x, y]]
+                    if len(vertices) == 4:
+                        receipt = self.match.recovery.manual_mask(vertices, state.source_ref)
+                        if receipt.status != "rejected":
+                            self.recovery_vertices.clear()
+                            self._recovery_hover = False
+                        self.refresh(receipt)
+                    else:
+                        self.recovery_vertices = vertices
+                        self.refresh()
+                    return True
+                if self.recovery_tool == "Rectangle":
+                    if not positive:
+                        self.bridge.notice = "Drag with the left button to draw a rectangle, or use Clear / Retry."
+                        self.bridge._local_revision += 1
+                        self.bridge._publish()
+                    return True
+                source = transform_points([x, y], state.board.homography["inverse_matrix"])
                 self.refresh(self.match.recovery.point(source, positive, state.source_ref))
             else:
+                source = transform_points([x, y], state.board.homography["inverse_matrix"])
                 if positive:
                     self.points.append(source.tolist())
                 elif self.points:
@@ -748,29 +1195,59 @@ class Workflows(QObject):
                 self.refresh()
         return True
 
+    @staticmethod
+    def _hits_candidate(candidate, x, y, pad=8):
+        if candidate is None:
+            return False
+        mask = candidate["prediction"]["masks"][0]
+        h, w = mask.shape[:2]
+        if not (0 <= y < h and 0 <= x < w):
+            return False
+        ix, iy = int(x), int(y)
+        if mask[iy, ix]:
+            return True
+        x0, x1 = max(0, ix - pad), min(w, ix + pad + 1)
+        y0, y1 = max(0, iy - pad), min(h, iy + pad + 1)
+        return bool(mask[y0:y1, x0:x1].any())
+
+    @Slot(float, float)
+    def hoverRecovery(self, x, y):
+        state = self.bridge._shown or self.match.snapshot()
+        hit = self.kind(state) == "recovery" and self._hits_candidate(state.recovery["preview"], x, y)
+        if hit != self._recovery_hover:
+            self._recovery_hover = hit
+            self.bridge._local_revision += 1
+            self.bridge._publish()
+
+    @Slot()
+    def clearRecoveryHover(self):
+        if self._recovery_hover:
+            self._recovery_hover = False
+            self.bridge._local_revision += 1
+            self.bridge._publish()
+
     @Slot(str, float, float, int, int)
     def dropUnit(self, uid, x, y, revision, generation):
-        state = self.bridge._shown
+        self._recovery_hover = False
+        state = self.bridge._shown or self.match.snapshot()
         candidate = state.recovery["preview"]
-        if revision != self.bridge._image_revision or candidate is None:
+        if self.kind(state) != "recovery" or candidate is None:
+            self.bridge.notice = "Draw a candidate mask first, then click or drag the unit ID."
+            self.bridge._local_revision += 1
+            self.bridge._publish()
             return
-        mask = candidate["prediction"]["masks"][0]
-        if not (0 <= y < mask.shape[0] and 0 <= x < mask.shape[1] and mask[int(y), int(x)]):
+        if not self._hits_candidate(candidate, x, y):
+            self.bridge.notice = "Drop the unit ID onto the yellow candidate mask, or click its card to confirm."
+            self.bridge._local_revision += 1
+            self.bridge._publish()
             return
-        prediction = state.current.prediction
-        if prediction is not None:
-            for obj, normal in zip(prediction["object_ids"], prediction["masks"]):
-                other = state.units.bindings.get(obj)
-                tracking = state.tracking.get(other)
-                if other != uid and tracking and tracking.active and tracking.status == "tracking" and normal[int(y), int(x)]:
-                    return
         self.refresh(self.match.recovery.bind(uid, generation))
 
     def interactive_key(self, state):
         kind = self.kind(state)
         if kind == "recovery":
             candidate = state.recovery["preview"]
-            return (kind, state.recovery["candidate_generation"], id(candidate))
+            return (kind, state.recovery["candidate_generation"], id(candidate), self._recovery_hover)
         if kind in ("terrain", "recalibrate"):
             return (kind, tuple(map(tuple, self.points)), state.board.calibration_version)
         return None
@@ -794,14 +1271,22 @@ class Workflows(QObject):
                 if len(xs):
                     x0, y0, x1, y1 = int(xs[0]), int(ys[0]), int(xs[-1]) + 1, int(ys[-1]) + 1
                     sub = mask[y0:y1, x0:x1].astype(np.uint8)
-                    rgba[y0:y1, x0:x1][sub != 0] = (64, 208, 250, 92)
+                    fill = (120, 210, 90, 82) if self._recovery_hover else (64, 208, 250, 72)
+                    stroke = (153, 211, 54, 255) if self._recovery_hover else (72, 224, 255, 255)
+                    rgba[y0:y1, x0:x1][sub != 0] = fill
                     contours, _ = cv2.findContours(sub, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE, offset=(x0, y0))
                     cv2.drawContours(rgba, contours, -1, (26, 20, 12, 240), max(4, round(4.4 * scale)), cv2.LINE_AA)
-                    cv2.drawContours(rgba, contours, -1, (72, 224, 255, 255), max(2, round(2.4 * scale)), cv2.LINE_AA)
+                    cv2.drawContours(rgba, contours, -1, stroke, max(2, round(2.4 * scale)), cv2.LINE_AA)
         if self.points and kind in ("terrain", "recalibrate"):
+            if kind == "terrain" and state.board.homography is None:
+                return
             points = np.asarray(self.points) if kind == "recalibrate" else transform_points(self.points, state.board.homography["matrix"])
             points = np.rint(points).astype(np.int32)
             line_bgra = (150, 218, 100, 255) if kind == "terrain" else (255, 232, 76, 255)
+            if kind == "terrain" and len(points) >= 3:
+                cv2.fillPoly(rgba, [points], (130, 212, 92, 34))
+                cv2.line(rgba, tuple(points[-1]), tuple(points[0]), (28, 22, 14, 150), max(3, round(3.0 * scale)), cv2.LINE_AA)
+                cv2.line(rgba, tuple(points[-1]), tuple(points[0]), (150, 218, 100, 170), max(1, round(1.5 * scale)), cv2.LINE_AA)
             if len(points) >= 2:
                 cv2.polylines(rgba, [points], False, (28, 22, 14, 235), max(4, round(4.4 * scale)), cv2.LINE_AA)
                 cv2.polylines(rgba, [points], False, line_bgra, max(2, round(2.2 * scale)), cv2.LINE_AA)
@@ -834,15 +1319,19 @@ class Workflows(QObject):
             replay = self.match.replay
             scene = replay.scene
             observed = scene["observation"] if scene is not None else {}
+            show_trays = bool(self.bridge.show_trays)
+            show_labels = bool(self.bridge.show_labels)
             key = (
                 replay.epoch, replay.selected, replay.has_index, scene is None, replay.error,
                 replay.steps[replay.selected]["event_id"] if replay.steps else None,
                 replay.steps[replay.selected]["end_sequence"] if replay.steps else None,
                 observed.get("timestamp_seconds"), observed.get("observation_timestamp_seconds"),
-                observed.get("calibration_version"), width, height,
+                observed.get("calibration_version"), width, height, show_trays, show_labels,
             )
             if key != self._replay_key:
-                self._replay_image, self.replay_badges = _replay_board(state, replay, (width, height))
+                self._replay_image, self.replay_badges = _replay_board(
+                    state, replay, (width, height), trays=show_trays, labels=show_labels,
+                )
                 self._replay_key = key
             return self._replay_image
         if kind == "recalibrate":

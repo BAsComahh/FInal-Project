@@ -90,6 +90,22 @@ def _side_for_object(state, object_id):
     return state.units.types.get(unit["type_id"], {}).get("list_id", "A")
 
 
+def unit_badge_label(state, unit_id):
+    """Display the unit's readable army-list name on board badges, falling back to unit_id."""
+    if not unit_id:
+        return ""
+    unit = state.units.units.get(unit_id)
+    if unit is None:
+        return str(unit_id)
+    catalog = state.units.types.get(unit["type_id"], {})
+    name = str(catalog.get("unit_name") or "").strip()
+    if not name:
+        raw = str(catalog.get("name") or "").strip()
+        if raw and len(raw) <= 28:
+            name = raw
+    return name or str(unit_id)
+
+
 def _object_color(object_id, side):
     palette = _SIDE_A_BGR if side == "A" else _SIDE_B_BGR if side == "B" else _UNBOUND_BGR
     return palette[(object_id - 1) % len(palette)]
@@ -313,14 +329,20 @@ def _draw_dashed_poly(canvas, points, color, *, halo=(26, 20, 12), thickness=2, 
             pos += dash + gap
 
 
-def _bake_static_overlay(state, size, *, selected, masks, trays):
+def _bake_static_overlay(state, size, *, selected, masks, trays, labels=True, terrain=True, selected_terrain=""):
     """Build transparent BGRA overlay (terrain + masks + trays + leader lines) & crisp QML badge coords."""
     width, height = size
     scale = max(1.0, height / 720.0)
     rgba = np.zeros((height, width, 4), np.uint8)
-    has_terrain = state.stage in ("register", "playback") and state.board.homography is not None and bool(state.rules.terrain)
+    has_terrain = (
+        terrain
+        and state.stage in ("register", "playback")
+        and state.board.homography is not None
+        and bool(state.rules.terrain)
+    )
     prediction = state.current.prediction
-    if not has_terrain and (prediction is None or (not masks and not trays)):
+    has_units = prediction is not None and (masks or trays or labels)
+    if not has_terrain and not has_units:
         return None, []
 
     badges = []
@@ -333,20 +355,32 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
                        if item.get("polygon_source") is not None else np.asarray(item["polygon_image"]))
             points = np.clip(np.rint(polygon), -1_000_000_000, 1_000_000_000).astype(np.int32)
             if len(points) >= 3:
+                tid = str(item.get("terrain_id") or "")
+                is_sel_terrain = state.stage == "register" and bool(selected_terrain) and tid == selected_terrain
                 bgr = _TERRAIN_KIND_BGR.get(item.get("kind"), (162, 174, 184))
-                cv2.fillPoly(rgba, [points], (*bgr, 40))
-                cv2.polylines(rgba, [points], True, (14, 22, 28, 195), max(3, round(3.4 * scale)), cv2.LINE_AA)
-                cv2.polylines(rgba, [points], True, (*bgr, 235), max(1, round(1.8 * scale)), cv2.LINE_AA)
-                center = points.mean(axis=0)
-                label = item.get("label") or item.get("terrain_id") or "Terrain"
-                bw, bh = measure_pill_box(label, scale * 0.92, has_dot=True)
-                bx = int(max(4, min(width - bw - 4, round(center[0] - bw * 0.5))))
-                by = int(max(4, min(height - bh - 4, round(center[1] - bh * 0.5))))
-                t_box = (bx, by, bx + bw, by + bh)
-                pre_placed.append(t_box)
-                badges.append(_badge_dict(t_box, width, height, label, bgr, bgr, kind="terrain"))
+                if is_sel_terrain:
+                    cv2.fillPoly(rgba, [points], (*bgr, 76))
+                    cv2.polylines(rgba, [points], True, (14, 22, 28, 235), max(4, round(4.8 * scale)), cv2.LINE_AA)
+                    cv2.polylines(rgba, [points], True, (*_SELECTION_BGR, 255), max(2, round(2.6 * scale)), cv2.LINE_AA)
+                else:
+                    cv2.fillPoly(rgba, [points], (*bgr, 40))
+                    cv2.polylines(rgba, [points], True, (14, 22, 28, 195), max(3, round(3.4 * scale)), cv2.LINE_AA)
+                    cv2.polylines(rgba, [points], True, (*bgr, 235), max(1, round(1.8 * scale)), cv2.LINE_AA)
+                if labels:
+                    center = points.mean(axis=0)
+                    label = item.get("label") or tid or "Terrain"
+                    bw, bh = measure_pill_box(label, scale * 0.92, has_dot=True)
+                    bx = int(max(4, min(width - bw - 4, round(center[0] - bw * 0.5))))
+                    by = int(max(4, min(height - bh - 4, round(center[1] - bh * 0.5))))
+                    t_box = (bx, by, bx + bw, by + bh)
+                    pre_placed.append(t_box)
+                    badges.append(_badge_dict(
+                        t_box, width, height, label, bgr,
+                        _SELECTION_BGR if is_sel_terrain else bgr,
+                        kind="terrain", unit_id=tid, active=is_sel_terrain,
+                    ))
 
-    if prediction is None or (not masks and not trays):
+    if not has_units:
         return rgba, badges
 
     occ = np.zeros((height, width), np.uint8)
@@ -413,36 +447,37 @@ def _bake_static_overlay(state, size, *, selected, masks, trays):
                 _draw_dashed_poly(rgba, corners, (*color, 185), halo=(12, 20, 26, 135),
                                   thickness=max(1, round(1.6 * scale)), dash=round(9 * scale), gap=round(8 * scale))
 
-        if x0 is not None:
+        if labels and x0 is not None:
             unit_box = (max(0, x0), max(0, y0), min(width, x1), min(height, y1))
             area = max(1, (unit_box[2] - unit_box[0]) * (unit_box[3] - unit_box[1]))
             unit_id = bindings.get(object_id, "")
-            label = unit_id or f"Mask {object_id}"
+            label = unit_badge_label(state, unit_id) if unit_id else f"Mask {object_id}"
             dot = _SIDE_A_BGR[0] if side == "A" else _SIDE_B_BGR[0] if side == "B" else None
             items.append((area, unit_box, label, dot, _SELECTION_BGR if is_reg_selected else color, object_id, is_reg_selected))
 
-    # Avoid covering registration prompt pins as well.
-    if state.stage == "register":
-        pin_occ_r = max(12, round(14 * scale))
-        for prompt in state.registration_prompts:
-            if prompt["object_id"] == selected:
-                px, py = (int(round(v)) for v in prompt["point"])
-                cv2.circle(occ, (px, py), pin_occ_r, 1, -1)
+    if labels:
+        # Avoid covering registration prompt pins as well.
+        if state.stage == "register":
+            pin_occ_r = max(12, round(14 * scale))
+            for prompt in state.registration_prompts:
+                if prompt["object_id"] == selected:
+                    px, py = (int(round(v)) for v in prompt["point"])
+                    cv2.circle(occ, (px, py), pin_occ_r, 1, -1)
 
-    placed = place_badges(items, occ, width, height, scale, pre_placed=pre_placed)
-    for box, entry, dist in placed:
-        _, unit_box, label, dot, border_bgr, object_id, is_active = entry
-        if dist > round(9 * scale):
-            p_lbl, p_unit = nearest_rect_points(box, unit_box)
-            cv2.line(rgba, p_lbl, p_unit, (12, 20, 26, 220), max(3, round(3.2 * scale)), cv2.LINE_AA)
-            cv2.line(rgba, p_lbl, p_unit, (*border_bgr, 245), max(1, round(1.6 * scale)), cv2.LINE_AA)
-            cv2.circle(rgba, p_unit, max(3, round(3.5 * scale)), (12, 20, 26, 240), -1, cv2.LINE_AA)
-            cv2.circle(rgba, p_unit, max(2, round(2.5 * scale)), (237, 243, 247, 255), -1, cv2.LINE_AA)
-        badges.append(_badge_dict(
-            box, width, height, label, dot, border_bgr,
-            kind="unit", object_id=object_id, unit_id=bindings.get(object_id, ""),
-            active=is_active, unconfirmed=object_id in unconfirmed_ids,
-        ))
+        placed = place_badges(items, occ, width, height, scale, pre_placed=pre_placed)
+        for box, entry, dist in placed:
+            _, unit_box, label, dot, border_bgr, object_id, is_active = entry
+            if dist > round(9 * scale):
+                p_lbl, p_unit = nearest_rect_points(box, unit_box)
+                cv2.line(rgba, p_lbl, p_unit, (12, 20, 26, 220), max(3, round(3.2 * scale)), cv2.LINE_AA)
+                cv2.line(rgba, p_lbl, p_unit, (*border_bgr, 245), max(1, round(1.6 * scale)), cv2.LINE_AA)
+                cv2.circle(rgba, p_unit, max(3, round(3.5 * scale)), (12, 20, 26, 240), -1, cv2.LINE_AA)
+                cv2.circle(rgba, p_unit, max(2, round(2.5 * scale)), (237, 243, 247, 255), -1, cv2.LINE_AA)
+            badges.append(_badge_dict(
+                box, width, height, label, dot, border_bgr,
+                kind="unit", object_id=object_id, unit_id=bindings.get(object_id, ""),
+                active=is_active, unconfirmed=object_id in unconfirmed_ids,
+            ))
 
     return rgba, badges
 
@@ -498,18 +533,23 @@ class BoardRenderer:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     @staticmethod
-    def overlay_key(state, *, selected, masks, trays):
+    def overlay_key(state, *, selected, masks, trays, labels=True, terrain=True, selected_terrain=""):
         size = state.current.frame.shape[1::-1]
         return (
             state.source_ref.generation,
             state.current.view_revision,
             selected if state.stage == "register" else None,
+            selected_terrain if state.stage == "register" else "",
             size,
             state.stage,
             masks,
             trays,
+            labels,
+            terrain,
             state.board.calibration_version,
-            len(state.rules.terrain),
+            tuple((item.get("terrain_id"), item.get("label"), item.get("kind"), item.get("height"))
+                  for item in state.rules.terrain),
+            id(state.units.types),
             tuple(sorted(state.units.bindings.items())),
             tuple(getattr(state, "registration_unconfirmed", ())) if state.stage == "register" else (),
             tuple(prompt["click_id"] for prompt in state.registration_prompts) if state.stage == "register" else (),
@@ -525,24 +565,33 @@ class BoardRenderer:
 
     @staticmethod
     def _bake_task(key, args):
-        state, size, selected, masks, trays = args
-        rgba, badges = _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+        state, size, selected, masks, trays, labels, terrain, selected_terrain = args
+        rgba, badges = _bake_static_overlay(
+            state, size, selected=selected, masks=masks, trays=trays,
+            labels=labels, terrain=terrain, selected_terrain=selected_terrain,
+        )
         return key, rgba, badges
 
-    def sync_overlay(self, state, *, selected, masks, trays):
+    def sync_overlay(self, state, *, selected, masks, trays, labels=True, terrain=True, selected_terrain=""):
         """Return (updated, overlay_rgba_or_None); updates self.badges in lockstep."""
-        key = self.overlay_key(state, selected=selected, masks=masks, trays=trays)
+        key = self.overlay_key(
+            state, selected=selected, masks=masks, trays=trays,
+            labels=labels, terrain=terrain, selected_terrain=selected_terrain,
+        )
         if key == self._overlay_key:
             return False, None
         size = state.current.frame.shape[1::-1]
         if not state.playing:
             self._pending_overlay = None
             self._overlay_key = key
-            rgba, badges = _bake_static_overlay(state, size, selected=selected, masks=masks, trays=trays)
+            rgba, badges = _bake_static_overlay(
+                state, size, selected=selected, masks=masks, trays=trays,
+                labels=labels, terrain=terrain, selected_terrain=selected_terrain,
+            )
             self.badges = badges
             return True, rgba
         if key != self._in_flight_key:
-            self._pending_overlay = (key, (state, size, selected, masks, trays))
+            self._pending_overlay = (key, (state, size, selected, masks, trays, labels, terrain, selected_terrain))
             self._start_pending()
         return False, None
 

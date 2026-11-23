@@ -16,7 +16,7 @@ def main():
         from PySide6.QtCore import QCoreApplication, QEvent
         from .window import create_window
     except ModuleNotFoundError as error:
-        parser.error(f"{error}. Install the optional Qt requirements in frontend/qt/requirements.txt.")
+        parser.error(f"{error}. Install project dependencies with python -m pip install -r requirements.txt.")
     match = None
     try:
         app = QGuiApplication(sys.argv[:1])

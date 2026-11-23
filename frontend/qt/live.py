@@ -24,6 +24,11 @@ class LiveSelection:
         self._generation = None
         self._center_key = None
         self._center = None
+        self.viewport_size = None
+
+    def set_viewport_size(self, width, height):
+        if width > 0 and height > 0 and np.isfinite(width) and np.isfinite(height):
+            self.viewport_size = (float(width), float(height))
 
     def clear(self):
         self.unit_id = self.target_id = None
@@ -57,38 +62,62 @@ class LiveSelection:
         return boxes
 
     def _place_card(self, state, selected_obj, arc_anchor):
-        """Place the floating left stat card via sparse sampling, excluding the semicircle menu."""
+        """Place the floating left stat card near the unit while excluding the semicircle menu."""
         height, width = state.current.frame.shape[:2]
-        # Approximate QML board viewport pixels (e.g. ~820x540 at default window size) so
-        # fixed-pixel QML HUD cards and menu buttons keep realistic normalized footprints.
-        display_w = min(float(width), 820.0)
-        display_h = min(float(height), 540.0)
-        cw = min(0.45, max(0.27, 228.0 / max(1.0, display_w)))
-        ch = min(0.55, max(0.34, 192.0 / max(1.0, display_h)))
-        min_x, max_x = cw * 0.5 + 0.015, max(cw * 0.5 + 0.015, 1.0 - cw * 0.5 - 0.015)
-        min_y, max_y = ch * 0.5 + 0.02, max(ch * 0.5 + 0.02, 1.0 - ch * 0.5 - 0.02)
+        # Prefer actual QML boardSurface dimensions so fixed-pixel card & menu footprints stay exact.
+        vw, vh = (self.viewport_size if self.viewport_size is not None
+                  else (min(float(width), 1080.0), min(float(height), 620.0)))
+        scale = max(0.25, min(1.0, (vw - 24.0) / 416.0, (vh - 24.0) / 266.0))
+        eff_w = max(1.0, vw / scale)
+        eff_h = max(1.0, vh / scale)
+        card_px_h = 181.0
+        uid = state.units.bindings.get(selected_obj) if getattr(state, "units", None) is not None else None
+        if uid is not None and uid in state.units.units:
+            unit = state.units.units[uid]
+            catalog = state.units.types.get(unit["type_id"], {})
+            profile = {**catalog.get("attributes", {}), **unit.get("attributes", {})}
+            if profile.get("engaged") or profile.get("wavering"):
+                card_px_h = 204.0
+        cw = min(0.42, max(0.14, 228.0 / eff_w))
+        ch = min(0.50, max(0.18, card_px_h / eff_h))
+        min_x, max_x = cw * 0.5 + 0.01, max(cw * 0.5 + 0.01, 1.0 - cw * 0.5 - 0.01)
+        min_y, max_y = ch * 0.5 + 0.015, max(ch * 0.5 + 0.015, 1.0 - ch * 0.5 - 0.015)
 
         ux, uy = float(arc_anchor[0]), float(arc_anchor[1])
-        menu_w = min(0.40, max(0.22, 184.0 / max(1.0, display_w)))
-        menu_left_pad = max(0.02, 14.0 / max(1.0, display_w))
-        menu_half_h = min(0.45, max(0.25, 136.0 / max(1.0, display_h)))
-        menu_cx = float(np.clip(ux, 0.015, max(0.015, 1.0 - menu_w - 0.015)))
-        menu_cy = float(np.clip(uy, menu_half_h + 0.015, max(menu_half_h + 0.015, 1.0 - menu_half_h - 0.015)))
-        arc_box = np.array([[max(0.0, menu_cx - menu_left_pad), max(0.0, menu_cy - menu_half_h),
-                             min(1.0, menu_cx + menu_w), min(1.0, menu_cy + menu_half_h)]], dtype=float)
+        menu_w = min(0.36, max(0.12, 166.0 / eff_w))
+        menu_right_ext = min(0.38, max(0.14, 180.0 / eff_w))
+        menu_half_h = min(0.42, max(0.16, 126.0 / eff_h))
+        menu_clamp_h = min(0.45, max(0.17, 133.0 / eff_h))
+        menu_cx = float(np.clip(ux, 0.01, max(0.01, 1.0 - menu_right_ext - 0.01)))
+        menu_cy = float(np.clip(uy, menu_clamp_h + 0.01, max(menu_clamp_h + 0.01, 1.0 - menu_clamp_h - 0.01)))
+        ax0 = max(0.0, menu_cx + 2.0 / eff_w)
+        ay0 = max(0.0, menu_cy - menu_half_h)
+        ax1 = min(1.0, menu_cx + menu_w)
+        ay1 = min(1.0, menu_cy + menu_half_h)
+        arc_box = np.array([[ax0, ay0, ax1, ay1]], dtype=float)
 
         boxes = self._unit_boxes(state)
         self_raw = boxes.get(selected_obj)
-        self_boxes = (np.array([[max(0.0, self_raw[0] - 0.01), max(0.0, self_raw[1] - 0.01),
-                                 min(1.0, self_raw[2] + 0.01), min(1.0, self_raw[3] + 0.01)]], dtype=float)
+        self_boxes = (np.array([[max(0.0, self_raw[0] - 0.005), max(0.0, self_raw[1] - 0.005),
+                                 min(1.0, self_raw[2] + 0.005), min(1.0, self_raw[3] + 0.005)]], dtype=float)
                       if self_raw is not None else np.empty((0, 4), dtype=float))
         others = [box for obj, box in boxes.items() if obj != selected_obj]
         other_boxes = np.asarray(others, dtype=float) if others else np.empty((0, 4), dtype=float)
 
-        # Ultra-sparse candidate set: preferred spot left of menu + 4 local rings (x16) + 8x6 grid
-        cands = [(menu_cx - menu_left_pad - cw * 0.5 - 0.025, uy)]
+        # Ultra-sparse candidate set: adjacent menu-hugging anchors + 4 local rings + 8x6 full-screen grid
+        gap = 0.012
+        cands = [
+            (ax0 - cw * 0.5 - gap, uy),
+            (ax0 - cw * 0.5 - gap, uy - ch * 0.45),
+            (ax0 - cw * 0.5 - gap, uy + ch * 0.45),
+            (ux - cw * 0.25, ay0 - ch * 0.5 - gap),
+            (ux, ay0 - ch * 0.5 - gap),
+            (ux - cw * 0.25, ay1 + ch * 0.5 + gap),
+            (ux, ay1 + ch * 0.5 + gap),
+            (ax1 + cw * 0.5 + gap, uy),
+        ]
         angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
-        for radius in (0.18, 0.27, 0.36, 0.46):
+        for radius in (0.14, 0.22, 0.30, 0.40):
             for ang in angles:
                 cands.append((ux + radius * float(np.cos(ang)), uy + radius * 0.85 * float(np.sin(ang))))
         gx = np.linspace(min_x, max_x, 8)
@@ -109,28 +138,38 @@ class LiveSelection:
 
         def overlap_metrics(targets):
             if not len(targets):
-                return np.zeros(len(centers)), np.zeros(len(centers))
+                zeros = np.zeros(len(centers))
+                return zeros, zeros, zeros
             ix = np.maximum(0.0, np.minimum(rect_x1, targets[:, 2][None, :]) - np.maximum(rect_x0, targets[:, 0][None, :]))
             iy = np.maximum(0.0, np.minimum(rect_y1, targets[:, 3][None, :]) - np.maximum(rect_y0, targets[:, 1][None, :]))
             inter = ix * iy
             ratio = inter.sum(axis=1) / max(1e-6, card_area)
             count = (inter > 1e-5).sum(axis=1).astype(float)
-            return ratio, count
+            return ratio, count, inter
 
-        self_ratio, self_cnt = overlap_metrics(self_boxes)
-        arc_ratio, arc_cnt = overlap_metrics(arc_box)
-        other_ratio, other_cnt = overlap_metrics(other_boxes)
+        _, self_cnt, self_inter = overlap_metrics(self_boxes)
+        if len(self_boxes):
+            self_area = max(1e-4, float((self_boxes[0, 2] - self_boxes[0, 0]) * (self_boxes[0, 3] - self_boxes[0, 1])))
+            self_occ = self_inter[:, 0] / self_area
+        else:
+            self_occ = np.zeros(len(centers))
+        arc_ratio, arc_cnt, _ = overlap_metrics(arc_box)
+        other_ratio, other_cnt, _ = overlap_metrics(other_boxes)
 
         aspect = width / max(1.0, height)
-        dist = np.hypot((centers[:, 0] - ux) * aspect, centers[:, 1] - uy) / np.hypot(aspect, 1.0)
+        dx_edge = np.maximum(0.0, np.maximum(rect_x0[:, 0] - ux, ux - rect_x1[:, 0]))
+        dy_edge = np.maximum(0.0, np.maximum(rect_y0[:, 0] - uy, uy - rect_y1[:, 0]))
+        lead_dist = np.hypot(dx_edge * aspect, dy_edge)
+        ctr_dist = np.hypot((centers[:, 0] - ux) * aspect, centers[:, 1] - uy)
+        dist_cost = 2.8 * lead_dist + 3.0 * (lead_dist ** 2) + 0.95 * ctr_dist
         right_bias = np.where(centers[:, 0] > ux, 0.04, 0.0)
         menu_exclude = np.where(arc_cnt > 0, 1e6, 0.0) if (arc_cnt == 0).any() else 0.0
 
         cost = (menu_exclude
-                + 8.0 * self_ratio + 2.5 * self_cnt
+                + 2.4 * self_occ + 0.35 * self_cnt
                 + 6.0 * arc_ratio + 1.8 * arc_cnt
-                + 4.0 * other_ratio + 0.85 * other_cnt
-                + 1.35 * dist + right_bias)
+                + 4.5 * other_ratio + 0.06 * other_cnt
+                + dist_cost + right_bias)
         best = int(np.argmin(cost))
         return float(centers[best, 0]), float(centers[best, 1])
 

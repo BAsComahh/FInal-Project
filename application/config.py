@@ -5,7 +5,7 @@ from pathlib import Path
 # Source-video seconds of consecutive missing-mask observations before failure.
 TRACKING_DISAPPEARANCE_SECONDS = 10.0
 DEFAULT_TRACKER = "edgetam"
-DEFAULT_INFERENCE_FPS = 5
+DEFAULT_INFERENCE_FPS = 1
 DEFAULT_TRAY_SEARCH = "adaptive"
 # Trial mask-stability gates, relative to the last actual rectangle fit.
 TRAY_STABLE_CENTROID_PCT = 5.0
@@ -18,6 +18,8 @@ AUTO_RECOVERY_SIMILARITY = 0.85
 AUTO_RECOVERY_MARGIN = 0.10
 AUTO_RECOVERY_PROMPT = "miniature"
 AUTO_RECOVERY_DETECTION_THRESHOLD = 0.30
+# Trial overlap guard for manual/reviewed recovery commits; minor edge contact below this ratio is trimmed.
+RECOVERY_OVERLAP_REJECT_RATIO = 0.20
 
 # Experimental tray-motion event thresholds, measured in geometry-source time.
 MOTION_POSITION_TOLERANCE_MM = 10.0

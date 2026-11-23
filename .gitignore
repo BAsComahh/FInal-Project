@@ -2,7 +2,6 @@ __pycache__/
 *.py[cod]
 .idea
 outputs/
-docs/
 /vendor/real_esrgan/
 /vendor/cutie/
 /待人工确认.md

@@ -6,7 +6,6 @@ ColumnLayout {
     id: controls
     required property var uiState
     property bool replayDetailsOpen: false
-    readonly property bool formOpen: editor.visible || undoTerrainDialog.visible
     readonly property Theme theme: Theme {}
     readonly property string kind: (flow.state && flow.state.kind) ? flow.state.kind : "live"
     readonly property var replayInfo: (flow.state && flow.state.replayInfo) ? flow.state.replayInfo : ({})
@@ -17,75 +16,25 @@ ColumnLayout {
         if (kind === "replay") return theme.modeReplay
         if (kind === "recovery") return theme.modeRecovery
         if (kind === "recalibrate") return theme.modeRecalibrate
-        if (kind === "terrain") return theme.modeTerrain
         return theme.accent
     }
     readonly property color modeDot: {
         if (kind === "replay") return theme.modeReplayDot
         if (kind === "recovery") return theme.modeRecoveryDot
         if (kind === "recalibrate") return theme.modeRecalibrateDot
-        if (kind === "terrain") return theme.modeTerrainDot
         return theme.accent
     }
     readonly property color modeSoft: {
         if (kind === "replay") return theme.modeReplaySoft
         if (kind === "recovery") return theme.modeRecoverySoft
         if (kind === "recalibrate") return theme.modeRecalibrateSoft
-        if (kind === "terrain") return theme.modeTerrainSoft
         return theme.bgSurface
     }
     readonly property color modeBorder: {
         if (kind === "replay") return theme.modeReplayBorder
         if (kind === "recovery") return theme.modeRecoveryBorder
         if (kind === "recalibrate") return theme.modeRecalibrateBorder
-        if (kind === "terrain") return theme.modeTerrainBorder
         return theme.border
-    }
-
-    // Inline layer toggle pill
-    component LayerPill: Button {
-        id: pill
-        property bool checkedState: true
-        property string badgeText: ""
-        readonly property Theme t: controls.theme
-        implicitHeight: 32
-        leftPadding: 11
-        rightPadding: 11
-        background: Rectangle {
-            radius: pill.t.radiusMd
-            color: pill.checkedState ? (pill.hovered ? pill.t.bgElevated : pill.t.accentSoft)
-                                     : (pill.hovered ? pill.t.bgElevated : pill.t.bgSubtle)
-            border.color: pill.checkedState ? pill.t.accentBorder : pill.t.border
-        }
-        contentItem: RowLayout {
-            spacing: 6
-            Rectangle {
-                width: 8; height: 8; radius: 4
-                color: pill.checkedState ? pill.t.selection : pill.t.borderStrong
-            }
-            Text {
-                text: pill.text
-                font.family: pill.t.fontBody
-                font.pixelSize: pill.t.textSm
-                font.weight: pill.checkedState ? Font.DemiBold : Font.Normal
-                color: pill.checkedState ? pill.t.ink : pill.t.inkSecondary
-            }
-            Rectangle {
-                visible: pill.badgeText.length > 0
-                implicitWidth: bTxt.implicitWidth + 8
-                implicitHeight: 17
-                radius: pill.t.radiusXs
-                color: pill.t.bgTrack
-                Text {
-                    id: bTxt
-                    anchors.centerIn: parent
-                    text: pill.badgeText
-                    font.family: pill.t.fontMono
-                    font.pixelSize: pill.t.textXs
-                    color: pill.checkedState ? pill.t.selection : pill.t.inkMuted
-                }
-            }
-        }
     }
 
     // Styled dark numeric/text field
@@ -152,15 +101,9 @@ ColumnLayout {
 
                     Rectangle { width: 1; height: 22; color: controls.theme.borderSoft }
 
-                    LayerPill {
-                        text: "Masks"
-                        checkedState: controls.uiState.masks
-                        onClicked: ui.setOverlay("masks", !controls.uiState.masks)
-                    }
-                    LayerPill {
-                        text: "Trays"
-                        checkedState: controls.uiState.trays
-                        onClicked: ui.setOverlay("trays", !controls.uiState.trays)
+                    OverlayToggles {
+                        uiState: controls.uiState
+                        prefix: "live"
                     }
 
                     Rectangle { width: 1; height: 22; color: controls.theme.borderSoft }
@@ -189,22 +132,6 @@ ColumnLayout {
                         onClicked: flow.open("recalibrate")
                     }
                     ConsoleButton {
-                        text: "Terrain"
-                        implicitHeight: 32
-                        variant: "subtle"
-                        onClicked: flow.open("terrain")
-                    }
-                    ConsoleButton {
-                        text: "Undo terrain"
-                        implicitHeight: 32
-                        variant: "dangerSubtle"
-                        enabled: controls.uiState.terrainCount > 0
-                        tooltipText: controls.uiState.terrainCount > 0
-                                     ? "Remove the most recently saved terrain polygon"
-                                     : "No saved terrain polygons to remove"
-                        onClicked: undoTerrainDialog.open()
-                    }
-                    ConsoleButton {
                         text: "Debug"
                         implicitHeight: 32
                         variant: "subtle"
@@ -214,7 +141,7 @@ ColumnLayout {
                 }
             }
 
-            // Sub-workflow contextual bars (Recovery / Recalibrate / Terrain / Replay)
+            // Sub-workflow contextual bars (Recovery / Recalibrate / Replay / Debug)
             RowLayout {
                 visible: controls.kind !== "live"
                 Layout.fillWidth: true
@@ -231,17 +158,10 @@ ColumnLayout {
                         implicitHeight: 32
                         onClicked: flow.action("saveDebug")
                     }
-                    LayerPill {
+                    OverlayToggles {
                         visible: controls.kind === "debug"
-                        text: "Masks"
-                        checkedState: controls.uiState.masks
-                        onClicked: ui.setOverlay("masks", !controls.uiState.masks)
-                    }
-                    LayerPill {
-                        visible: controls.kind === "debug"
-                        text: "Trays"
-                        checkedState: controls.uiState.trays
-                        onClicked: ui.setOverlay("trays", !controls.uiState.trays)
+                        uiState: controls.uiState
+                        prefix: "debug"
                     }
 
                     // Replay header title & action delta (no button border)
@@ -336,24 +256,53 @@ ColumnLayout {
                         visible: controls.kind === "replay"
                         onClicked: flow.action("refresh")
                     }
+                    OverlayToggles {
+                        visible: controls.kind === "replay"
+                        uiState: controls.uiState
+                        prefix: "replay"
+                        showMasksPill: false
+                        showTerrainPill: false
+                    }
 
-                    // Recovery controls
-                    Rectangle {
-                        visible: controls.kind === "recovery"
-                        implicitWidth: recCandTxt.implicitWidth + 16
+                    // Recovery controls (aligned with Registration tools)
+                    ConsoleButton {
+                        objectName: "recoveryPoints"
+                        text: "Points"
                         implicitHeight: 32
-                        radius: controls.theme.radiusSm
-                        color: controls.modeSoft
-                        border.color: controls.modeBorder
-                        Text {
-                            id: recCandTxt
-                            anchors.centerIn: parent
-                            text: "Candidate · " + flow.state.candidateTime
-                            color: controls.modeAccent
-                            font.family: controls.theme.fontMono
-                            font.pixelSize: controls.theme.textXs
-                            font.weight: Font.DemiBold
-                        }
+                        visible: controls.kind === "recovery"
+                        active: flow.state.tool === "Points"
+                        enabled: !flow.state.busy
+                        tooltipText: "Left click + / right click − points to segment the candidate."
+                        onClicked: flow.setRecoveryTool("Points")
+                    }
+                    ConsoleButton {
+                        objectName: "recoveryRectangle"
+                        text: "Rectangle"
+                        implicitHeight: 32
+                        visible: controls.kind === "recovery"
+                        active: flow.state.tool === "Rectangle"
+                        enabled: !flow.state.busy
+                        tooltipText: "Drag with the left mouse button to draw the recovery candidate."
+                        onClicked: flow.setRecoveryTool("Rectangle")
+                    }
+                    ConsoleButton {
+                        objectName: "recoveryQuad"
+                        text: "Four corners"
+                        implicitHeight: 32
+                        visible: controls.kind === "recovery"
+                        active: flow.state.tool === "Quad"
+                        enabled: !flow.state.busy
+                        tooltipText: "Click four corners to draw the recovery candidate."
+                        onClicked: flow.setRecoveryTool("Quad")
+                    }
+                    ConsoleButton {
+                        objectName: "confirmRecoveryTarget"
+                        text: "Confirm " + (flow.state.targetUnitId || "")
+                        primary: true
+                        implicitHeight: 32
+                        visible: controls.kind === "recovery" && Boolean(flow.state.canConfirmTarget)
+                        enabled: !flow.state.busy
+                        onClicked: flow.confirmTarget()
                     }
                     ConsoleButton {
                         text: "Correct"
@@ -378,32 +327,27 @@ ColumnLayout {
                         enabled: !flow.state.busy
                         onClicked: flow.action("clear")
                     }
-
-                    // Terrain controls
+                    OverlayToggles {
+                        visible: controls.kind === "recovery"
+                        uiState: controls.uiState
+                        prefix: "recovery"
+                    }
                     Rectangle {
-                        visible: controls.kind === "terrain"
-                        implicitWidth: terCntTxt.implicitWidth + 16
+                        visible: controls.kind === "recovery"
+                        implicitWidth: recCandTxt.implicitWidth + 16
                         implicitHeight: 32
                         radius: controls.theme.radiusSm
                         color: controls.modeSoft
                         border.color: controls.modeBorder
                         Text {
-                            id: terCntTxt
+                            id: recCandTxt
                             anchors.centerIn: parent
-                            text: "Vertices · " + flow.state.pointCount
+                            text: "Candidate · " + flow.state.candidateTime
                             color: controls.modeAccent
                             font.family: controls.theme.fontMono
                             font.pixelSize: controls.theme.textXs
                             font.weight: Font.DemiBold
                         }
-                    }
-                    ConsoleButton {
-                        text: "Save polygon"
-                        primary: true
-                        implicitHeight: 32
-                        visible: controls.kind === "terrain"
-                        enabled: flow.state.pointCount >= 3
-                        onClicked: flow.finishTerrain()
                     }
 
                     // Recalibrate inline inputs
@@ -507,6 +451,154 @@ ColumnLayout {
                 }
             }
 
+            // Replay discrete step timeline slider (P02)
+            RowLayout {
+                id: replayTimelineRow
+                visible: controls.kind === "replay" && flow.state.steps > 0
+                Layout.fillWidth: true
+                spacing: 10
+
+                readonly property int stepCount: flow.state.steps || 0
+                readonly property int maxStep: Math.max(0, stepCount - 1)
+                readonly property var timelineList: flow.replaySteps || []
+                property int previewStep: flow.state.step || 0
+
+                function formatStepTip(idx) {
+                    if (idx < 0 || idx >= timelineList.length) return "Step " + idx
+                    const s = timelineList[idx]
+                    const who = s.unit ? (s.unit + " ") : ""
+                    const detail = s.summary ? (" · " + s.summary) : ""
+                    return "Step " + s.index + " · " + who + s.label + detail + " · " + s.time
+                }
+
+                Text {
+                    text: "0 · " + (controls.replayInfo.firstTime || "0.0s")
+                    color: controls.theme.inkMuted
+                    font.family: controls.theme.fontMono
+                    font.pixelSize: controls.theme.textXs
+                }
+
+                Item {
+                    Layout.fillWidth: true
+                    implicitHeight: 28
+
+                    Slider {
+                        id: replaySlider
+                        objectName: "replaySlider"
+                        anchors.fill: parent
+                        from: 0
+                        to: Math.max(1, replayTimelineRow.maxStep)
+                        stepSize: 1
+                        snapMode: Slider.SnapAlways
+                        enabled: replayTimelineRow.stepCount > 1
+                        live: true
+
+                        Binding {
+                            target: replaySlider
+                            property: "value"
+                            value: replayTimelineRow.stepCount > 1 ? (flow.state.step || 0) : 0
+                            when: !replaySlider.pressed
+                        }
+
+                        onMoved: {
+                            const nextStep = Math.round(value)
+                            replayTimelineRow.previewStep = nextStep
+                            if (nextStep !== flow.state.step) {
+                                flow.selectReplayStep(nextStep)
+                            }
+                        }
+
+                        HoverHandler {
+                            id: sliderHover
+                            onPointChanged: {
+                                if (!replaySlider.pressed && replayTimelineRow.maxStep > 0 && replaySlider.availableWidth > 0) {
+                                    const frac = Math.max(0, Math.min(1, (point.position.x - replaySlider.leftPadding) / replaySlider.availableWidth))
+                                    replayTimelineRow.previewStep = Math.round(frac * replayTimelineRow.maxStep)
+                                }
+                            }
+                        }
+
+                        background: Item {
+                            x: replaySlider.leftPadding
+                            y: replaySlider.topPadding + replaySlider.availableHeight / 2 - 4
+                            width: replaySlider.availableWidth
+                            height: 8
+
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: parent.width
+                                height: 6
+                                radius: 3
+                                color: controls.theme.bgTrack
+                                border.color: controls.theme.borderSoft
+                            }
+
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: replayTimelineRow.stepCount > 1 ? (replaySlider.visualPosition * parent.width) : 0
+                                height: 6
+                                radius: 3
+                                color: controls.theme.modeReplayDot
+                            }
+
+                            // Discrete step markers along the track
+                            Repeater {
+                                model: (replayTimelineRow.stepCount > 1 && replayTimelineRow.stepCount <= 80)
+                                       ? replayTimelineRow.timelineList : []
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    readonly property real pos: replayTimelineRow.maxStep > 0 ? (modelData.index / replayTimelineRow.maxStep) : 0
+                                    x: Math.round(pos * parent.width - width / 2)
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: modelData.index === flow.state.step ? 6 : 4
+                                    height: modelData.index === flow.state.step ? 12 : 8
+                                    radius: 2
+                                    color: modelData.index === 0 ? controls.theme.inkSecondary
+                                           : modelData.side === "A" ? controls.theme.sideA
+                                           : modelData.side === "B" ? controls.theme.sideB
+                                           : controls.theme.modeReplay
+                                    opacity: modelData.index <= flow.state.step ? 0.95 : 0.45
+                                }
+                            }
+                        }
+
+                        handle: Rectangle {
+                            x: replaySlider.leftPadding + (replayTimelineRow.stepCount > 1 ? replaySlider.visualPosition * (replaySlider.availableWidth - width) : 0)
+                            y: replaySlider.topPadding + replaySlider.availableHeight / 2 - height / 2
+                            width: replaySlider.pressed ? 18 : 16
+                            height: replaySlider.pressed ? 18 : 16
+                            radius: width / 2
+                            color: replaySlider.enabled
+                                   ? (replaySlider.pressed ? controls.theme.selection : controls.theme.modeReplay)
+                                   : controls.theme.borderStrong
+                            border.width: 2
+                            border.color: controls.theme.bgHeader
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 5; height: 5; radius: 2.5
+                                color: controls.theme.bgHeader
+                            }
+                        }
+
+                        ToolTip {
+                            visible: (sliderHover.hovered || replaySlider.pressed) && replayTimelineRow.stepCount > 0
+                            text: replayTimelineRow.formatStepTip(replaySlider.pressed ? Math.round(replaySlider.value) : replayTimelineRow.previewStep)
+                            y: -height - 8
+                        }
+                    }
+                }
+
+                Text {
+                    text: replayTimelineRow.stepCount > 1
+                          ? (replayTimelineRow.maxStep + " · " + (controls.replayInfo.lastTime || "—"))
+                          : "Initial snapshot only"
+                    color: controls.theme.inkMuted
+                    font.family: controls.theme.fontMono
+                    font.pixelSize: controls.theme.textXs
+                }
+            }
+
             // Secondary guidance (non-replay) or collapsible replay telemetry row
             RowLayout {
                 visible: controls.kind !== "live" && (
@@ -525,9 +617,15 @@ ColumnLayout {
                     color: controls.theme.inkSecondary
                     font.pixelSize: controls.theme.textXs
                     text: {
-                        if (controls.kind === "terrain") return "Left click adds polygon vertices; right click removes the last vertex. Save once ≥ 3 points."
                         if (controls.kind === "recalibrate") return "Click four corners directly on the continuous raw video; right click undoes. Playback continues."
-                        if (controls.kind === "recovery") return "Left click + / right click − points, then drag an existing ID onto the yellow candidate. " + (flow.state.note || "")
+                        if (controls.kind === "recovery") {
+                            const hint = flow.state.tool === "Rectangle"
+                                         ? "Drag a rectangle over the unit, then click or drag its ID."
+                                         : flow.state.tool === "Quad"
+                                         ? ("Click 4 corners (" + ((flow.state.quadVertices || []).length) + "/4 · Right-click removes vertex), then click or drag its ID.")
+                                         : "Left: + point · Right: − point, then click or drag an ID."
+                            return hint + (flow.state.note ? (" · " + flow.state.note) : "")
+                        }
                         return flow.state.note || ""
                     }
                 }
@@ -562,234 +660,6 @@ ColumnLayout {
                     }
                 }
             }
-        }
-    }
-
-    Dialog {
-        id: undoTerrainDialog
-        anchors.centerIn: Overlay.overlay
-        modal: true
-        title: "Remove last terrain?"
-        standardButtons: Dialog.Yes | Dialog.No
-        Overlay.modal: Rectangle { color: controls.theme.scrim }
-        background: Rectangle {
-            color: controls.theme.bgSurface
-            radius: controls.theme.radiusLg
-            border.color: controls.theme.borderStrong
-        }
-        header: Rectangle {
-            implicitHeight: 44
-            color: "transparent"
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: 18
-                text: undoTerrainDialog.title
-                color: controls.theme.ink
-                font.family: controls.theme.fontDisplay
-                font.pixelSize: controls.theme.textLg
-                font.weight: Font.DemiBold
-            }
-        }
-        Label {
-            text: "Remove the most recently saved terrain polygon from the match scene?"
-            color: controls.theme.inkSecondary
-            font.pixelSize: controls.theme.textSm
-        }
-        onAccepted: flow.action("undoTerrain")
-    }
-
-    Dialog {
-        id: editor
-        property var rows: []
-        property bool obstacle: false
-        title: flow.formTitle
-        modal: true
-        anchors.centerIn: Overlay.overlay
-        width: Math.min(540, Overlay.overlay.width - 40)
-        height: Math.min(600, Overlay.overlay.height - 40)
-        onClosed: flow.clearFormError()
-        Overlay.modal: Rectangle { color: controls.theme.scrim }
-        background: Rectangle {
-            color: controls.theme.bgSurface
-            radius: controls.theme.radiusLg
-            border.color: controls.theme.borderStrong
-        }
-        header: Rectangle {
-            implicitHeight: 46
-            color: "transparent"
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.left: parent.left
-                anchors.leftMargin: 18
-                text: editor.title
-                color: controls.theme.ink
-                font.family: controls.theme.fontDisplay
-                font.pixelSize: controls.theme.textLg
-                font.weight: Font.DemiBold
-            }
-            Rectangle {
-                anchors.bottom: parent.bottom
-                width: parent.width
-                height: 1
-                color: controls.theme.borderSoft
-            }
-        }
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: 10
-
-            ScrollView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                contentWidth: availableWidth
-                clip: true
-
-                ColumnLayout {
-                    width: parent.width
-                    spacing: 10
-
-                    Repeater {
-                        model: editor.rows
-                        ColumnLayout {
-                            required property var modelData
-                            required property int index
-                            readonly property bool fixedHeight: editor.obstacle && modelData.key === "height"
-                            Layout.fillWidth: true
-                            spacing: 4
-
-                            Label {
-                                visible: modelData.kind !== "bool"
-                                text: fixedHeight ? "Rule height (fixed for Obstacle)" : modelData.label
-                                color: controls.theme.inkSecondary
-                                font.pixelSize: controls.theme.textSm
-                                font.weight: Font.DemiBold
-                            }
-
-                            DarkField {
-                                Layout.fillWidth: true
-                                visible: modelData.kind === "text" || modelData.kind === "number" || modelData.kind === "rules"
-                                text: fixedHeight ? "1" : String(modelData.value)
-                                readOnly: fixedHeight
-                                selectByMouse: true
-                                onTextEdited: editor.rows[index].value = text
-                            }
-
-                            TextEdit {
-                                Layout.fillWidth: true
-                                visible: modelData.kind === "readonly"
-                                text: modelData.value
-                                textFormat: TextEdit.PlainText
-                                readOnly: true
-                                selectByMouse: true
-                                wrapMode: TextEdit.Wrap
-                                color: controls.theme.ink
-                                font.family: controls.theme.fontBody
-                                font.pixelSize: controls.theme.textSm
-                            }
-
-                            ComboBox {
-                                id: combo
-                                Layout.fillWidth: true
-                                visible: modelData.kind === "choice"
-                                model: modelData.optionLabels || modelData.options || []
-                                currentIndex: {
-                                    const opts = modelData.options || []
-                                    const found = opts.indexOf(String(modelData.value))
-                                    return found >= 0 ? found : 0
-                                }
-                                contentItem: Text {
-                                    leftPadding: 10
-                                    text: combo.displayText
-                                    color: controls.theme.ink
-                                    font.family: controls.theme.fontBody
-                                    font.pixelSize: controls.theme.textSm
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                                background: Rectangle {
-                                    implicitHeight: 34
-                                    radius: controls.theme.radiusSm
-                                    color: controls.theme.bgTrack
-                                    border.color: combo.activeFocus ? controls.theme.selection : controls.theme.border
-                                }
-                                onActivated: idx => {
-                                    const opts = modelData.options || []
-                                    if (idx >= 0 && idx < opts.length) {
-                                        editor.rows[index].value = opts[idx]
-                                        if (modelData.key === "kind")
-                                            editor.obstacle = opts[idx] === "obstacle"
-                                    }
-                                }
-                            }
-
-                            CheckBox {
-                                id: chk
-                                visible: modelData.kind === "bool"
-                                text: modelData.label
-                                checked: Boolean(modelData.value)
-                                contentItem: Text {
-                                    leftPadding: chk.indicator.width + chk.spacing
-                                    text: chk.text
-                                    color: controls.theme.ink
-                                    font.pixelSize: controls.theme.textSm
-                                    verticalAlignment: Text.AlignVCenter
-                                }
-                                onToggled: editor.rows[index].value = checked
-                            }
-                        }
-                    }
-                }
-            }
-
-            Rectangle {
-                visible: flow.formError.length > 0
-                Layout.fillWidth: true
-                implicitHeight: errTxt.implicitHeight + 12
-                radius: controls.theme.radiusSm
-                color: controls.theme.dangerSoft
-                border.color: controls.theme.dangerBorder
-                Text {
-                    id: errTxt
-                    anchors.fill: parent
-                    anchors.margins: 6
-                    text: flow.formError
-                    color: controls.theme.modeRecovery
-                    wrapMode: Text.WordWrap
-                    font.pixelSize: controls.theme.textSm
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                Item { Layout.fillWidth: true }
-                ConsoleButton { text: "Cancel"; variant: "subtle"; onClicked: editor.close() }
-                ConsoleButton {
-                    text: "Save"
-                    primary: true
-                    onClicked: {
-                        const rows = editor.obstacle ? editor.rows.filter(row => row.key !== "height") : editor.rows
-                        if (flow.saveForm(rows)) editor.close()
-                    }
-                }
-            }
-        }
-    }
-
-    Connections {
-        target: flow
-        function onFormRequested() {
-            editor.obstacle = flow.fields.some(row => row.key === "kind" && row.value === "obstacle")
-            editor.rows = flow.fields.map(row => ({
-                key: row.key,
-                label: row.label,
-                kind: row.kind,
-                value: row.value,
-                options: row.options || [],
-                optionLabels: row.optionLabels || []
-            }))
-            editor.open()
         }
     }
 }

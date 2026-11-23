@@ -3,7 +3,7 @@ from importlib.util import find_spec
 from pathlib import Path
 import sys
 
-# Reuse the optional Qt installation used by the design preview.
+# Support existing local Qt installations in the legacy dependency directory.
 if find_spec("PySide6") is None:
     dependencies = Path(__file__).resolve().parents[2] / "outputs/ui_preview/deps"
     if dependencies.is_dir():
