@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
-from threading import Event
+from threading import Event, Lock
 
 from . import config
 
@@ -54,7 +54,9 @@ class AutomaticRecovery:
                 self._phase(uid, "manual", "Candidate was invalidated; manual input required")
         if not self.enabled or not self._session.registration_locked:
             return
-        for uid in failed - self.records.keys():
+        recovery = self._session.recovery
+        manual_target = recovery.manual_target if recovery is not None and recovery.active else None
+        for uid in failed - self.records.keys() - {manual_target}:
             self.records[uid] = {}
             self._phase(uid, "queued", "Waiting for one automatic search")
 
@@ -67,10 +69,11 @@ class AutomaticRecovery:
             return None
         # All currently missing references guard identity conflicts; only queued IDs get a new attempt.
         targets = [{"unit_id": uid, "object_id": obj} for obj, uid in data.units.bindings.items()
-                   if uid in self.records and data.tracking[uid].active and data.tracking[uid].status == "failed"]
+                   if (state := data.tracking.get(uid)) is not None and state.active and state.status == "failed"]
         normal = [obj for obj, uid in data.units.bindings.items()
                   if data.tracking.get(uid) is not None and data.tracking[uid].active and data.tracking[uid].status == "tracking"]
         self.batch = {"cancelled": Event(), "unit_ids": ids, "targets": targets,
+                      "unit_decisions": {}, "decision_lock": Lock(),
                       "reference_folder": str(data.reference_folder), "normal_ids": normal,
                       "similarity": config.AUTO_RECOVERY_SIMILARITY, "margin": config.AUTO_RECOVERY_MARGIN,
                       "prompt": config.AUTO_RECOVERY_PROMPT, "detection_threshold": config.AUTO_RECOVERY_DETECTION_THRESHOLD}
@@ -94,7 +97,10 @@ class AutomaticRecovery:
             return
         batch, self.batch = self.batch, None
         rows = {row["unit_id"]: row for row in request.get("automatic_rows", [])}
+        decisions = batch["unit_decisions"]
         for uid in batch["unit_ids"]:
+            if decisions.get(uid) == "manual":
+                continue
             state = self._session.data.tracking.get(uid)
             if uid not in self.records or state is None or not state.active or state.status != "failed":
                 continue
@@ -107,6 +113,34 @@ class AutomaticRecovery:
                                                                              "candidate_id", "candidate_ids")}}
             self._phase(uid, "review" if candidate is not None else "manual",
                         str(error) if error is not None else row.get("reason", "Automatic search could not recover this unit"))
+        for uid, decision in decisions.items():
+            if decision == "manual":
+                self._cancel_unowned_candidate(rows.get(uid, {}).get("candidate"))
+
+    def _cancel_unowned_candidate(self, candidate):
+        if candidate is not None and not any(row.get("candidate") is candidate for row in self.records.values()):
+            candidate.cancel()
+
+    def take_over_manually(self, uid):
+        batch = self.batch
+        if batch is not None and uid in batch["unit_ids"]:
+            with batch["decision_lock"]:
+                decisions = batch["unit_decisions"]
+                if decisions.get(uid) == "applying":
+                    return False
+                decisions[uid] = "manual"
+        record = self.records.get(uid)
+        if record is not None:
+            if (self._session.data.tracking[uid].recovery_phase == "queued"
+                    and not record.get("explicit_retry")):
+                # A queued first search remains eligible after manual correction ends.
+                del self.records[uid]
+            else:
+                candidate = record.get("candidate")
+                record["candidate"] = record["preview"] = None
+                self._cancel_unowned_candidate(candidate)
+            self._phase(uid, "manual", "Operator requested manual correction")
+        return True
 
     def candidates(self):
         return list({id(record["candidate"]): record["candidate"] for record in self.records.values()
@@ -143,7 +177,7 @@ class AutomaticRecovery:
         record = self.records[uid]
         if record.get("candidate") is not None:
             record["candidate"].cancel()
-        self.records[uid] = {}
+        self.records[uid] = {"explicit_retry": True}
         self._phase(uid, "queued", "User requested one new automatic search")
 
     def invalidate(self, reason, *, reset=False):

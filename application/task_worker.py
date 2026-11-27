@@ -200,7 +200,8 @@ class TaskWorker:
             for row in rows:
                 if batch["cancelled"].is_set():
                     break
-                if row["unit_id"] not in batch["unit_ids"]:
+                uid = row["unit_id"]
+                if uid not in batch["unit_ids"]:
                     continue
                 index, obj = row["candidate_id"], row["object_id"]
                 if index is None:
@@ -209,9 +210,15 @@ class TaskWorker:
                     if row["automatic"]:
                         if np.any(masks[index] & occupied):
                             raise ValueError("Candidate overlaps an occupied normal unit")
-                        request["automatic_consumed"].append(obj)
+                        def mark_consumed():
+                            with batch["decision_lock"]:
+                                if batch["cancelled"].is_set() or batch["unit_decisions"].get(uid) == "manual":
+                                    raise ValueError("Automatic recovery was cancelled for this unit")
+                                batch["unit_decisions"][uid] = "applying"
+                                request["automatic_consumed"].append(obj)
+
                         prediction = self.tracker.update_mask(request["frame"], obj, masks[index],
-                                                               source_frame=request["metadata"]["frame_index"])
+                            source_frame=request["metadata"]["frame_index"], on_consumed=mark_consumed)
                         request["automatic_applied"].append(obj)
                         occupied |= masks[index]
                     else:
@@ -320,8 +327,9 @@ class TaskWorker:
                     backend.session = None
                 backend.reset()
                 initial = request["prediction"]
+                recovery = {"recoverable_ids": initial["unseeded_ids"]} if self.tracker_name == "edgetam" else {}
                 prediction = backend.initialize(request["frame"], initial["object_ids"], initial["masks"],
-                                                source_frame=request["metadata"]["frame_index"])
+                                                source_frame=request["metadata"]["frame_index"], **recovery)
                 request["new_backend"] = backend
             elif kind == "propagate":
                 if not self.tracker_initialized:
@@ -400,9 +408,13 @@ class TaskWorker:
                         mask = mask & ~occupied
                         if not mask.any():
                             raise ValueError("Candidate has no unoccupied pixels left. Adjust the mask or Clear / Retry.")
-                request["recovery_applied"] = True
+                def mark_consumed():
+                    candidate._check()
+                    request["recovery_consumed"] = True
+
                 prediction = self.tracker.update_mask(request["frame"], request["recovery_object_id"], mask,
-                                                      source_frame=request["metadata"]["frame_index"])
+                    source_frame=request["metadata"]["frame_index"], on_consumed=mark_consumed)
+                request["recovery_applied"] = True
                 candidate.release()
             elif kind in ("trays", "facing"):
                 prediction = dict(request["prediction"])

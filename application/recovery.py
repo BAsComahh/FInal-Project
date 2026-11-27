@@ -17,7 +17,7 @@ class Recovery:
         self.candidate_generation = 0
         self.active = self.committing = False
         self._candidate = self._preview = self.pending_prompt = self.pending_binding = None
-        self.reported = set()
+        self.manual_target = None
         self.review_unit_id = None
         self.note = "Use Points, Rectangle, or Four corners to mark the unit, then click or drag its ID to confirm."
         session.recovery = self
@@ -34,17 +34,22 @@ class Recovery:
                     and request["kind"] in ("recovery_seed", "recovery_seed_mask", "recovery_point")))
 
     @command
-    def open(self, unit_id=None):
+    def open(self, unit_id=None, *, manual=False):
         if (self._session.closed or not self._session.registration_locked or not self._session.worker.tracker_initialized
                 or self._session.worker.tracker_name != "edgetam" or self._session.model_failed):
             raise ValueError("Manual recovery requires a registered, running EdgeTAM session.")
         if self.committing:
             raise ValueError("Wait for the confirmed recovery to finish.")
+        automatic = self._session.automatic_recovery
+        if manual:
+            self._take_over_manually(unit_id)
         self.cancel()
         self._session.presented_frame = None
         self.active = True
+        if manual:
+            return self._report_manual_target(unit_id)
         self.note = "Use Points, Rectangle, or Four corners, then click or drag an existing ID to confirm."
-        offers = self._session.automatic_recovery.records
+        offers = automatic.records
         selected = unit_id or next((uid for uid in offers if offers[uid].get("candidate") is not None), None)
         if selected is not None:
             if self.select_unit(selected).status != "accepted":
@@ -72,7 +77,7 @@ class Recovery:
         self.candidate_generation += 1
         self.active = False
         self.review_unit_id = None
-        self.reported.clear()
+        self.manual_target = None
         if self._candidate is not None:
             self._candidate.cancel()
         if self.pending_binding is not None:
@@ -88,14 +93,19 @@ class Recovery:
         data = self._session.data
         return [unit_id for unit_id, state in data.tracking.items()
                 if state.active and ((state.status == "failed" and state.recovery_phase not in ("queued", "searching"))
-                                     or unit_id in self.reported)]
+                                     or unit_id == self.manual_target)]
 
     @command
     def select_unit(self, unit_id):
         if self.busy or unit_id not in self.labels():
             return CommandReceipt("rejected", self.note)
+        switched_manual = self.manual_target not in (None, unit_id)
+        if switched_manual:
+            self.manual_target = None
         offered = self._session.automatic_recovery.take_candidate(unit_id)
         if offered is None:
+            if switched_manual or self.review_unit_id not in (None, unit_id):
+                return self.clear_candidate()
             return CommandReceipt("rejected", self.note)
         self.clear_candidate()
         self._candidate, self._preview, diagnostics = offered
@@ -115,18 +125,27 @@ class Recovery:
         self._session.mark_changed()
         return CommandReceipt("accepted")
 
-    @command
-    def report_error(self, unit_id):
-        data = self._session.data
-        state = data.tracking.get(unit_id)
-        if self._session.closed or unit_id is None or state is None or not state.active:
+    def _take_over_manually(self, unit_id):
+        state = self._session.data.tracking.get(unit_id)
+        if self._session.closed or state is None or not state.active:
             raise ValueError("Pick a currently registered, active unit mask.")
-        if unit_id in self._session.automatic_recovery.records:
-            self._session.automatic_recovery.invalidate("Operator requested manual correction")
-        self.reported.add(unit_id)
+        if not self._session.automatic_recovery.take_over_manually(unit_id):
+            raise ValueError("Wait for automatic recovery to finish applying this unit's mask.")
+
+    def _report_manual_target(self, unit_id):
+        self.manual_target = unit_id
         self.note = f"Draft correction for {unit_id}. Original tracking continues until confirmation."
         self._session.mark_changed()
         return CommandReceipt("accepted")
+
+    @command
+    def report_error(self, unit_id):
+        if self.committing:
+            return CommandReceipt("rejected", self.note)
+        self._take_over_manually(unit_id)
+        if self.review_unit_id == unit_id:
+            self.clear_candidate()
+        return self._report_manual_target(unit_id)
 
     @command
     def point(self, source_point, positive, reference):
@@ -203,6 +222,11 @@ class Recovery:
         self._session.mark_changed()
         return CommandReceipt("pending", request_id=self.candidate_generation)
 
+    def _reject_pending_binding(self, reason):
+        self.pending_binding, self.committing = None, False
+        self.clear_candidate()
+        self.note = f"Recovery failed because {reason}. Draw a new candidate or cancel."
+
     def take_request(self):
         if self.pending_prompt is not None:
             pending, self.pending_prompt = self.pending_prompt, None
@@ -212,19 +236,22 @@ class Recovery:
                             "point_source": pending["point_source"]})
             return pending["kind"], {**snapshot, "recovery_candidate": self._candidate, "prompt": prompt}
         if self.pending_binding is not None:
-            data = self._session.data
+            session = self._session
+            data = session.data
             observed = data.current.prediction_metadata
-            if observed is None:
+            tracked_frame = session.worker.tracker.source_frame
+            candidate_frame = self._candidate.backend.source_frame
+            if observed is None or observed["frame_index"] != tracked_frame or tracked_frame < candidate_frame:
+                source_frame = session.source.frame_index
+                if source_frame > tracked_frame:
+                    # A decoded frame can still be tracked after playback reaches the end.
+                    return "propagate", {**session.source_sample(), "recovery_candidate": self._candidate,
+                                         "automatic_candidates": session.automatic_recovery.candidates()}
+                if not session.playing or source_frame >= session.end_index:
+                    self._reject_pending_binding("playback cannot supply a matching tracking frame")
                 return None
-            if observed["frame_index"] < self._candidate.backend.source_frame:
-                snapshot = self._session.source_sample()
-                if snapshot["metadata"]["frame_index"] <= self._session.worker.tracker.source_frame:
-                    return None
-                # Align normal masks too, including when confirming at the end of the video.
-                return "propagate", {**snapshot, "recovery_candidate": self._candidate,
-                                     "automatic_candidates": self._session.automatic_recovery.candidates()}
             snapshot = {"frame": data.current.prediction_frame, "metadata": deepcopy(observed),
-                        "raw_frame": self._session.prediction_raw_frame, "generation": self._session.generation}
+                        "raw_frame": session.prediction_raw_frame, "generation": session.generation}
             object_id, self.pending_binding = self.pending_binding, None
             normal = [obj for obj, uid in self._session.data.units.bindings.items()
                       if obj != object_id and self._session.data.tracking.get(uid) is not None
@@ -249,15 +276,22 @@ class Recovery:
                 self.cancel()
                 self._session.note = "Unit recovered with its original ID. Facing is unknown."
             elif not candidate.cancelled.is_set():
-                if (not request.get("recovery_applied") and candidate.backend is not None
-                        and candidate.prediction is not None and candidate.prediction["masks"][0].any()):
+                if request.get("recovery_consumed"):
+                    self._preview = None
+                    self.note = f"Recovery not applied: {error}. Clear / Retry."
+                elif (candidate.backend is not None and candidate.backend.session is not None
+                      and candidate.backend.source_frame == request["metadata"]["frame_index"]
+                      and candidate.prediction is not None and candidate.prediction["masks"][0].any()):
                     self._preview = {"prediction": candidate.prediction, "metadata": deepcopy(request["metadata"])}
                     self.note = f"Recovery not applied: {error}"
                 else:
-                    self._preview = None
-                    self.note = f"Recovery not applied: {error}. Clear / Retry."
+                    self._reject_pending_binding(f"the candidate is no longer usable ({error})")
+                    return
             else:
                 self.cancel()
+        elif self.pending_binding is not None and error is not None:
+            self._reject_pending_binding(f"candidate could not reach the matching frame ({error})")
+            return
         elif self.active and not candidate.cancelled.is_set():
             if error is not None:
                 self._preview = None

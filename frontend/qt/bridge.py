@@ -109,23 +109,26 @@ class MatchBridge(QObject):
                 self.notice = ("Check TL / TR / BR / BL before continuing." if self.corners else
                                "Automatic table boundary detection failed. Click four table corners manually.")
                 self._local_revision += 1
-        overlay_done, overlay_rgba = self.renderer.poll_overlay(self.match.snapshot().source_ref.generation)
-        if overlay_done:
-            self.images.publish(overlay_rgba, kind="overlay")
-            self._has_overlay = overlay_rgba is not None
-            self._overlay_revision += 1
-            self._local_revision += 1
+        state = self.match.snapshot()
+        if self.flow.kind(state) != "replay":
+            overlay_done, overlay_rgba = self.renderer.poll_overlay(state.source_ref.generation)
+            if overlay_done:
+                self.images.publish(overlay_rgba, kind="overlay")
+                self._has_overlay = overlay_rgba is not None
+                self._overlay_revision += 1
+                self._local_revision += 1
         self._publish()
 
     def _publish(self):
         state = self.match.snapshot()
         self.live.sync(state)
-        key = (state.revision, self._local_revision)
+        calibration = self.match.calibration.status if state.stage == "recalibrate" else None
+        key = (state.revision, self._local_revision, calibration)
         if key == self._published_key:
             return
         self._snapshot = state
         self._published_key = key
-        self.flow.publish(state)
+        self.flow.publish(state, calibration)
         uncertainty = self.live.uncertainty(state)
         if uncertainty != self._uncertainty:
             self._uncertainty = uncertainty
@@ -136,51 +139,28 @@ class MatchBridge(QObject):
         queries = self.match.geometry if live and self.flow.kind(state) == "live" and self.live.tool != "select" else None
         flow_kind = self.flow.kind(state)
 
-        video_key = (
-            state.source_ref,
-            flow_kind,
-            self.match.replay.selected if flow_kind == "replay" else None,
-            state.revision if flow_kind == "replay" else None,
-            (self.show_trays, self.show_labels) if flow_kind == "replay" else None,
-        )
-        if video_key != self._video_key:
+        in_replay = flow_kind == "replay"
+        if in_replay:
             video_frame = self.flow.render_video(state, state.current.frame)
+            video_key = (flow_kind, self.flow.replay_image_key)
+        else:
+            video_key = (flow_kind, state.source_ref)
+        if video_key != self._video_key:
+            if not in_replay:
+                video_frame = self.flow.render_video(state, state.current.frame)
             self.images.publish(video_frame, kind="video")
             self._display_size = video_frame.shape[1::-1]
-            self.match.present(state.source_ref)
+            if not in_replay:
+                self.match.present(state.source_ref)
             self._video_key = video_key
             self._image_revision += 1
         # Same displayed frame; keep the latest masks/bindings for hit tests (registration never changes frame).
         self._shown = state
 
-        overlay_updated, overlay_rgba = self.renderer.sync_overlay(
-            state,
-            selected=selected,
-            masks=self.show_masks,
-            trays=self.show_trays,
-            labels=self.show_labels,
-            terrain=self.show_terrain,
-            selected_terrain=self.flow.selected_terrain_id,
-        )
-        if overlay_updated:
-            self.images.publish(overlay_rgba, kind="overlay")
-            self._has_overlay = overlay_rgba is not None
-            self._overlay_revision += 1
-
-        int_updated, int_rgba = self.renderer.render_interactive(
-            state,
-            selected=selected,
-            target=target,
-            queries=queries,
-            trays=self.show_trays,
-            corners=self.corners if state.stage == "table" else None,
-            points=self.corner_points if state.stage == "table" else (),
-            flow=self.flow,
-        )
-        if int_updated:
-            self.images.publish(int_rgba, kind="interactive")
-            self._has_interactive = int_rgba is not None
-            self._interactive_revision += 1
+        if in_replay:
+            self.renderer.suspend_overlay()
+        else:
+            self._publish_live_overlays(state, selected=selected, target=target, queries=queries)
 
         active_badges = (
             [] if not self.show_labels
@@ -192,12 +172,12 @@ class MatchBridge(QObject):
             self._badges = active_badges
             self.badgesChanged.emit()
 
-        catalog_key = (state.stage, id(state.units.types), tuple(
+        catalog_key = tuple(
             (type_id, row.get("list_id", "A"),
              row.get("unit_name") or row.get("name") or row.get("classification") or type_id,
              row.get("classification") or row.get("formation") or "")
             for type_id, row in state.units.types.items()
-        ))
+        )
         if catalog_key != self._catalog_key:
             types = []
             for type_id, row in state.units.types.items():
@@ -227,6 +207,7 @@ class MatchBridge(QObject):
         geometry = (prediction or {}).get("geometry_metadata")
         editable = state.stage == "register" and not state.registration_locked
         terrain_active = editable and flow_kind == "terrain"
+        calibration_error = calibration["error"] if calibration else None
         self._view = dict(
             stage=state.stage,
             locked=state.registration_locked,
@@ -270,8 +251,8 @@ class MatchBridge(QObject):
             modelLabel=model_label,
             loading=not state.startup_ready and not state.model_failed,
             progress=(progress[1] / progress[2] if progress and progress[1] is not None and progress[2] else -1),
-            note=self.notice or state.note,
-            noticeError=bool(self.notice),
+            note=self.notice or calibration_error or state.note,
+            noticeError=bool(self.notice or calibration_error),
             historyWarning=state.history_warning or "",
             sourceTime=f"{state.source_ref.timestamp_seconds:.2f}",
             observationTime=f"{observation.timestamp_seconds:.2f}" if observation else "—",
@@ -299,6 +280,36 @@ class MatchBridge(QObject):
         )
         self._view["archivesFolder"] = QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "outputs/sam3_registration")).toString()
         self.changed.emit()
+
+    def _publish_live_overlays(self, state, *, selected, target, queries):
+        overlay_updated, overlay_rgba = self.renderer.sync_overlay(
+            state,
+            selected=selected,
+            masks=self.show_masks,
+            trays=self.show_trays,
+            labels=self.show_labels,
+            terrain=self.show_terrain,
+            selected_terrain=self.flow.selected_terrain_id,
+        )
+        if overlay_updated:
+            self.images.publish(overlay_rgba, kind="overlay")
+            self._has_overlay = overlay_rgba is not None
+            self._overlay_revision += 1
+
+        int_updated, int_rgba = self.renderer.render_interactive(
+            state,
+            selected=selected,
+            target=target,
+            queries=queries,
+            trays=self.show_trays,
+            corners=self.corners if state.stage == "table" else None,
+            points=self.corner_points if state.stage == "table" else (),
+            flow=self.flow,
+        )
+        if int_updated:
+            self.images.publish(int_rgba, kind="interactive")
+            self._has_interactive = int_rgba is not None
+            self._interactive_revision += 1
 
     def _refresh(self, receipt=None):
         self.notice = receipt.reason if receipt is not None and receipt.status == "rejected" else ""

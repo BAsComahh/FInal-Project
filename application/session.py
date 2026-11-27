@@ -254,9 +254,7 @@ class MatchSession:
     def start_stream(self, now=None):
         if not self.data.rules.track_facing:
             self.data.rules.fronts.clear()
-        prediction = self.data.current.prediction or {}
-        self._geometry_visible = {obj for obj, mask in zip(prediction.get("object_ids", ()), prediction.get("masks", ()))
-                                  if mask.any() and obj not in prediction.get("unavailable_ids", ())}
+        self._geometry_visible = self._visible_geometry_ids()
         self.resume_source(now)
         self.pending_play = False
 
@@ -286,7 +284,7 @@ class MatchSession:
         elif self.needs_prepare and self.data.board.homography is not None and not self.model_failed:
             self.needs_prepare = False
             self.worker.submit("prepare", frame=self.data.current.frame, metadata=self.frame_metadata(), generation=self.generation)
-        elif self.recovery is not None and (request := self.recovery.take_request()) is not None:
+        elif not self.model_failed and self.recovery is not None and (request := self.recovery.take_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values)
             if kind == "propagate":
@@ -308,11 +306,14 @@ class MatchSession:
                                prediction=self.data.current.prediction, generation=self.generation, raw_frame=self.prediction_raw_frame,
                                previous_trays={**self.data.current.prediction.get("trays", {}), **self.trays.attempts})
         elif not self.model_failed and self._needs_facing_task() and (ready := self.trays.take_ready()) is not None:
-            request, prediction = ready
-            self.worker.submit("facing", frame=request["frame"], metadata=request["metadata"],
-                raw_frame=request.get("raw_frame"), prediction=prediction, generation=request["generation"],
-                tray_context=request["tray_context"], tray_epoch=request["tray_epoch"],
-                tray_attempts=request.get("tray_attempts", {}), tracking=request["tracking"])
+            request, prediction, error = ready
+            if error is not None:
+                self._accept_geometry(request, prediction, error, direct=True)
+            else:
+                self.worker.submit("facing", frame=request["frame"], metadata=request["metadata"],
+                    raw_frame=request.get("raw_frame"), prediction=prediction, generation=request["generation"],
+                    tray_context=request["tray_context"], tray_epoch=request["tray_epoch"],
+                    tray_attempts=request.get("tray_attempts", {}), tracking=request["tracking"])
         elif calibration._context is None and (request := self.automatic_recovery.take_request()) is not None:
             kind, values = request
             self.worker.submit(kind, **values)
@@ -328,7 +329,7 @@ class MatchSession:
                                automatic_candidates=self.automatic_recovery.candidates())
             self.last_submitted_frame = values["metadata"]["frame_index"]
             self.next_inference_time = now + self.inference_interval
-        elif self.recovery is not None and not self.playing:
+        elif not self.model_failed and self.recovery is not None and not self.playing:
             candidate = self.recovery.for_propagation()
             if candidate is not None and self.source.frame_index > candidate.backend.source_frame:
                 self.worker.submit("recovery_advance", **self.source_sample(), recovery_candidate=candidate)
@@ -341,7 +342,7 @@ class MatchSession:
             return
         candidate = request["recovery_candidate"]
         cancelled = candidate is not self.recovery._candidate or candidate.cancelled.is_set()
-        consumed = request.get("recovery_applied") or request.get("recovery_consumed")
+        consumed = request.get("recovery_consumed")
         if cancelled:
             if request["kind"] != "recovery_commit" or not consumed:
                 return
@@ -357,6 +358,7 @@ class MatchSession:
                     self.worker.commit_facing(request, (object_id,))
                     self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
+                    self._geometry_visible.update(self._visible_geometry_ids() & {object_id})
                 except Exception as failure:
                     error = failure
             if error is not None:
@@ -384,6 +386,7 @@ class MatchSession:
                     self.worker.commit_facing(request, (obj,))
                     self.trays.attempts.update(request.get("tray_attempts") or {})
                     self.prediction_raw_frame = request.get("raw_frame")
+                    self._geometry_visible.update(self._visible_geometry_ids() & {obj})
                     continue
                 except Exception as accept_error:
                     failure = accept_error
@@ -412,25 +415,24 @@ class MatchSession:
         ready = self.trays.take_ready()
         if ready is None:
             return
-        request, prediction = ready
-        if request.get("generation") != self.generation:
-            self.trays.accept(request, valid=False)
-            return
-        self._accept_geometry(request, prediction, None, direct=True)
+        self._accept_geometry(*ready, direct=True)
 
     def _accept_geometry(self, request, prediction, error, *, direct=False):
-        current = self.data.current
-        metadata = request["metadata"]
-        previous = (current.prediction or {}).get("geometry_metadata")
-        valid = (metadata.get("calibration_version") == self.data.board.calibration_version and
-                 current.prediction is not None and metadata["frame_index"] <= current.prediction_metadata["frame_index"] and
-                 (previous is None or metadata["frame_index"] >= previous["frame_index"]))
+        if request["generation"] != self.generation:
+            self.trays.accept(request, valid=False)
+            return
         if error is not None:
             self.trays.accept(request, valid=False)
             if direct:
                 self.worker.record_direct_geometry(request, prediction, error)
             self.note = f"Tray/facing update failed; mask tracking continues: {error}"
             return
+        current = self.data.current
+        metadata = request["metadata"]
+        previous = (current.prediction or {}).get("geometry_metadata")
+        valid = (metadata.get("calibration_version") == self.data.board.calibration_version and
+                 current.prediction is not None and metadata["frame_index"] <= current.prediction_metadata["frame_index"] and
+                 (previous is None or metadata["frame_index"] >= previous["frame_index"]))
         if not self.trays.accept(request, valid=valid):
             return
         if direct:
@@ -453,10 +455,15 @@ class MatchSession:
                   f"retry wait {stats.get('retry_wait', 0)})" if stats else "")
         return f"Mask ({backend}) {mask_time:.2f}s | tray {tray_time:.2f}s{detail}"
 
+    def _visible_geometry_ids(self):
+        prediction = self.data.current.prediction or {}
+        unavailable = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
+        return {obj for obj, mask in zip(prediction.get("object_ids", ()), prediction.get("masks", ()))
+                if obj not in unavailable and mask.any()}
+
     def _queue_geometry(self, request):
         prediction = self.data.current.prediction
-        unavailable = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
-        visible = {obj for obj, mask in zip(prediction["object_ids"], prediction["masks"]) if mask.any()} - unavailable
+        visible = self._visible_geometry_ids()
         if visible != self._geometry_visible:
             lost = self._geometry_visible - visible
             self.trays.invalidate(self._geometry_visible ^ visible)
@@ -507,6 +514,8 @@ class MatchSession:
                     self.trays.invalidate()
                     self.data.finish_motion("model_error", self.source.metadata())
                     self.model_failed = True
+                    if self.recovery is not None:
+                        self.recovery.cancel(force=True)
                     self.note = f"Model/tracking error: {error}. R resets the session."
                 elif prediction is not None:
                     prediction["accepted_at"] = perf_counter()
@@ -531,10 +540,10 @@ class MatchSession:
                         if recovery_target is not None and recovery_target.status == "tracking":
                             self.recovery.cancel()
                         self._queue_geometry(request)
-                    if self.registration_locked and request["kind"] == "recalibrate":
-                        self.data.record_history(
-                            kind="recalibration" if request["kind"] == "recalibrate" else "observation",
-                            source=self.source.metadata())
+                    if accepted and request["kind"] == "recalibrate":
+                        self._geometry_visible = self._visible_geometry_ids()
+                        if self.registration_locked:
+                            self.data.record_history(kind="recalibration", source=self.source.metadata())
                     if request["kind"] == "click":
                         self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
                         self.next_inference_time = now + self.inference_interval
@@ -572,7 +581,8 @@ class MatchSession:
                     self.note = str(error)
             if target >= self.end_index:
                 self.playing = False
-                self.note = "Video interval complete. Final registration references are already saved."
+                if not self.model_failed:
+                    self.note = "Video interval complete. Final registration references are already saved."
         self._poll_direct_trays()
         self.trays.start((self.data.current.prediction or {}).get("trays", {}))
         self.schedule(now)

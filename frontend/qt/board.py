@@ -81,13 +81,14 @@ def _empty_argb():
 
 
 def _side_for_object(state, object_id):
-    unit_id = state.units.bindings.get(object_id)
-    if unit_id is None:
-        return ""
+    return unit_list_side(state, state.units.bindings.get(object_id))
+
+
+def unit_list_side(state, unit_id, *, default="A"):
     unit = state.units.units.get(unit_id)
     if unit is None:
         return ""
-    return state.units.types.get(unit["type_id"], {}).get("list_id", "A")
+    return state.units.types.get(unit["type_id"], {}).get("list_id", default)
 
 
 def unit_badge_label(state, unit_id):
@@ -549,8 +550,9 @@ class BoardRenderer:
             state.board.calibration_version,
             tuple((item.get("terrain_id"), item.get("label"), item.get("kind"), item.get("height"))
                   for item in state.rules.terrain),
-            id(state.units.types),
-            tuple(sorted(state.units.bindings.items())),
+            tuple((object_id, unit_id, unit_list_side(state, unit_id),
+                   unit_badge_label(state, unit_id) if labels else "")
+                  for object_id, unit_id in sorted(state.units.bindings.items())),
             tuple(getattr(state, "registration_unconfirmed", ())) if state.stage == "register" else (),
             tuple(prompt["click_id"] for prompt in state.registration_prompts) if state.stage == "register" else (),
         )
@@ -578,11 +580,13 @@ class BoardRenderer:
             state, selected=selected, masks=masks, trays=trays,
             labels=labels, terrain=terrain, selected_terrain=selected_terrain,
         )
+        if not state.playing:
+            # In-flight work predates the synchronous display state.
+            self._pending_overlay = self._in_flight_key = None
         if key == self._overlay_key:
             return False, None
         size = state.current.frame.shape[1::-1]
         if not state.playing:
-            self._pending_overlay = None
             self._overlay_key = key
             rgba, badges = _bake_static_overlay(
                 state, size, selected=selected, masks=masks, trays=trays,
@@ -595,17 +599,21 @@ class BoardRenderer:
             self._start_pending()
         return False, None
 
+    def suspend_overlay(self):
+        """Drop queued Live work while Replay owns the visible board."""
+        self._pending_overlay = None
+
     def poll_overlay(self, current_generation=None):
         if self._future is None or not self._future.done():
             return False, None
         future, self._future = self._future, None
-        self._in_flight_key = None
+        in_flight_key, self._in_flight_key = self._in_flight_key, None
         try:
             key, rgba, badges = future.result()
         except Exception:
             self._start_pending()
             return False, None
-        if current_generation is not None and key[0] != current_generation:
+        if in_flight_key is None or (current_generation is not None and key[0] != current_generation):
             self._start_pending()
             return False, None
         if key == self._overlay_key:

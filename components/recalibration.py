@@ -24,9 +24,18 @@ def prepare_recalibration(data, source_frame, corners, boundary, board_size_mm):
         table_boundary=deepcopy(boundary),
     )
     image_mapping = result["matrix"] @ old.homography["inverse_matrix"]
+    inactive = set(prediction.get("inactive_ids", ()))
+    active_bindings = {}
+    for object_id, unit_id in data.units.bindings.items():
+        unit = data.units.units[unit_id]
+        profile = {**data.units.types[unit["type_id"]].get("attributes", {}), **unit["attributes"]}
+        if object_id not in inactive and profile.get("routed") is not True and profile.get("removed") is not True:
+            active_bindings[object_id] = unit_id
+
+    unavailable = set(prediction.get("unavailable_ids", ()))
     ids, masks = [], []
     for object_id, mask in zip(prediction["object_ids"], prediction["masks"]):
-        if object_id not in data.units.bindings:
+        if object_id not in active_bindings or object_id in unavailable or not mask.any():
             continue
         mapped = cv2.warpPerspective(mask.astype(np.uint8), image_mapping, result["output_size"],
                                      flags=cv2.INTER_NEAREST).astype(bool)
@@ -58,6 +67,7 @@ def prepare_recalibration(data, source_frame, corners, boundary, board_size_mm):
         front.update(angle_deg=float(np.degrees(np.arctan2(direction[1], direction[0]))),
                      parity=None, source="recalibrated_estimate")
 
+    unseeded = {obj: unit for obj, unit in active_bindings.items() if obj not in ids}
     return {"board": board, "rules": rules, "frame": result["image"],
-            "prediction": {"object_ids": ids, "masks": np.stack(masks)},
-            "unseeded_units": [unit for obj, unit in data.units.bindings.items() if obj not in ids]}
+            "prediction": {"object_ids": ids, "masks": np.stack(masks), "unseeded_ids": tuple(unseeded)},
+            "unseeded_units": list(unseeded.values())}

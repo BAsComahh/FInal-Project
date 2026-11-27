@@ -6,10 +6,11 @@ Hugging Face cache are both supported. Initial SAM3 masks are mask prompts,
 without generating another set of click prompts or editing tracking history.
 """
 
+from functools import partial
 from numbers import Integral
 from pathlib import Path
 import sys
-import types
+from weakref import proxy
 
 import numpy as np
 
@@ -224,8 +225,9 @@ def configure_video_session(session, device):
         return None
     if hasattr(session, "cache") and session.cache is not None:
         session.cache.inference_state_device = device
-        session.cache.cache_vision_features = types.MethodType(_cache_vision_features_pageable, session.cache)
-    session.store_output = types.MethodType(_store_output_pageable, session)
+        # A callback stored on its owner must not keep that owner alive.
+        session.cache.cache_vision_features = partial(_cache_vision_features_pageable, proxy(session.cache))
+    session.store_output = partial(_store_output_pageable, proxy(session))
     return session
 
 
@@ -477,6 +479,7 @@ class EdgeTamTracker:
             self.session.reset_inference_session()
         self.session = None
         self.object_ids = []
+        self._recoverable_ids = frozenset()
         self.index = -1
         self.source_frame = None
         self._image_shape = None
@@ -549,8 +552,8 @@ class EdgeTamTracker:
                 layer0_cache.clear()
                 self.model._edgetam_layer0_cache = None
 
-    def initialize(self, frame, object_ids, masks, *, source_frame=None):
-        """Memorize the registered masks on the first processed frame."""
+    def initialize(self, frame, object_ids, masks, *, source_frame=None, recoverable_ids=()):
+        """Memorize registered masks and retain seedless B08 IDs for recovery."""
         self._validate_frame(frame)
         object_ids = list(object_ids)
         if (not object_ids or any(isinstance(value, (bool, np.bool_))
@@ -588,6 +591,7 @@ class EdgeTamTracker:
             )
             prediction = self._infer(frame, session, object_ids, 0, source_frame)
         self.session, self.object_ids = session, object_ids
+        self._recoverable_ids = frozenset(recoverable_ids)
         self.index, self.source_frame, self._image_shape = 0, source_frame, frame.shape[:2]
         self._last_frame = frame.copy()
         return prediction
@@ -623,22 +627,46 @@ class EdgeTamTracker:
         )
         return self._infer(frame, self.session, self.object_ids, self.index, source_frame)
 
-    def update_mask(self, frame, object_id, mask, *, source_frame=None):
-        """Update an existing object without resetting other objects' memory."""
+    def update_mask(self, frame, object_id, mask, *, source_frame=None, on_consumed=None):
+        """Apply a recovered mask. Notify the caller after validation, before mutating the main session."""
         source_frame, index = self._edit_frame(frame, source_frame)
         if (isinstance(object_id, (bool, np.bool_)) or not isinstance(object_id, Integral)
-                or object_id not in self.object_ids or not isinstance(mask, np.ndarray)
-                or mask.dtype != np.bool_ or mask.shape != frame.shape[:2] or not mask.any()):
-            raise ValueError("Recovery requires a nonempty mask for an existing object")
+                or (object_id not in self.object_ids and object_id not in self._recoverable_ids)
+                or not isinstance(mask, np.ndarray) or mask.dtype != np.bool_
+                or mask.shape != frame.shape[:2] or not mask.any()):
+            raise ValueError("Recovery requires a registered object ID and a nonempty mask")
+        session = self.session
+        new_object = object_id not in self.object_ids
+        object_ids = [*self.object_ids, object_id] if new_object else self.object_ids
+        if on_consumed is not None:
+            on_consumed()
         try:
-            obj_idx = self.session.obj_id_to_idx(object_id)
-            self.session.frames_tracked_per_obj.get(obj_idx, {}).pop(index, None)
-            self.session.output_dict_per_obj.get(obj_idx, {}).get("non_cond_frame_outputs", {}).pop(index, None)
+            if not new_object:
+                obj_idx = session.obj_id_to_idx(object_id)
+                session.frames_tracked_per_obj[obj_idx].pop(index, None)
+                session.output_dict_per_obj[obj_idx]["non_cond_frame_outputs"].pop(index, None)
             self.processor.add_inputs_to_inference_session(
-                inference_session=self.session, frame_idx=index, obj_ids=[object_id],
+                inference_session=session, frame_idx=index, obj_ids=[object_id],
                 input_masks=[mask], original_size=frame.shape[:2],
             )
-            return self._infer(frame, self.session, self.object_ids, index, source_frame)
+            prediction = self._infer(frame, session, object_ids, index, source_frame)
+            if new_object:
+                if not prediction["masks"][-1].any():
+                    raise ValueError("Recovered object produced no current mask")
+                self.object_ids = object_ids
+            return prediction
+        except Exception:
+            if new_object and object_id in session.obj_ids:
+                # Transformers 5.18 has no remove-object API. Undo just the newly appended slot.
+                obj_idx = session._obj_id_to_idx.pop(object_id)
+                session._obj_idx_to_id.pop(obj_idx)
+                session.obj_ids.remove(object_id)
+                if object_id in session.obj_with_new_inputs:
+                    session.obj_with_new_inputs.remove(object_id)
+                for records in (session.point_inputs_per_obj, session.mask_inputs_per_obj,
+                                session.output_dict_per_obj, session.frames_tracked_per_obj):
+                    records.pop(obj_idx)
+            raise
         finally:
             # A failed forward may already have consumed this frame/cache index.
             # Reserve it; never reset unrelated objects or reuse it for a new image.

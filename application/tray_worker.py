@@ -101,19 +101,19 @@ class TrayWorker:
         return prediction
 
     def take_ready(self):
+        """Return a completed request with its prediction or batch exception."""
         if self.future is None or not self.future.done():
             return None
         future, request = self.future, self.request
         self.future = self.request = None
         if request["tray_epoch"] != self.epoch:
             return None
+        self.awaiting = request
         try:
             prediction = future.result()
         except Exception as error:
-            prediction = {**request["prediction"], "trays": {},
-                          "tray_errors": {obj: str(error) for obj in request["prediction"]["object_ids"]}}
-        self.awaiting = request
-        return request, prediction
+            return request, None, error
+        return request, prediction, None
 
     def accept(self, request, *, valid=True):
         if self.awaiting is None or request.get("tray_epoch") != self.epoch:

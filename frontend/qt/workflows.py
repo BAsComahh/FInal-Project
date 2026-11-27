@@ -23,6 +23,7 @@ from .board import (
     nearest_rect_points,
     place_badges,
     unit_badge_label,
+    unit_list_side,
 )
 
 
@@ -448,7 +449,6 @@ class Workflows(QObject):
         self._profile_open = False
         self._form_error = ""
         self._debug_note = ""
-        self._calibration_pending = False
         self._data = dict(
             kind="live", rows=[], note="", busy=False, review=False,
             reviewUnitId="", targetUnitId="", hasCandidate=False, canConfirmTarget=False,
@@ -561,11 +561,10 @@ class Workflows(QObject):
         card_x = cx - 0.16 if cx > 0.30 else cx + 0.16
         return (float(np.clip(card_x, 0.12, 0.88)), float(np.clip(cy, 0.14, 0.86)))
 
-    def publish(self, state):
+    def publish(self, state, calibration):
         recovery, replay = state.recovery, self.match.replay
-        if self._calibration_pending and self.match.calibration.status is None:
-            self.mode, self._calibration_pending = "live", False
-            self.points = []
+        if self.mode == "recalibrate" and calibration is None:
+            self.mode, self.points = "live", []
         if state.stage != "register" or state.registration_locked:
             if self.mode == "terrain":
                 self.mode, self.points, self._form_error = "live", [], ""
@@ -621,11 +620,9 @@ class Workflows(QObject):
             self.recoveryRowsChanged.emit()
 
         replay_steps_key = (
-            kind == "replay",
-            replay.epoch,
-            len(replay.steps),
-            replay.steps[-1]["event_id"] if replay.steps else None,
-            id(state.units.types),
+            (replay.epoch, replay.steps,
+             tuple((uid, unit_list_side(state, uid, default="")) for uid in state.units.units))
+            if kind == "replay" else None
         )
         if replay_steps_key != self._replay_steps_key:
             self._replay_steps_key = replay_steps_key
@@ -633,10 +630,7 @@ class Workflows(QObject):
             if kind == "replay" and replay.steps:
                 for idx, entry in enumerate(replay.steps):
                     u_id = entry.get("unit_id") or ""
-                    u_side = ""
-                    if u_id and u_id in state.units.units:
-                        u_type = state.units.units[u_id]["type_id"]
-                        u_side = state.units.types.get(u_type, {}).get("list_id", "")
+                    u_side = unit_list_side(state, u_id, default="")
                     timeline.append(dict(
                         index=idx,
                         kind=entry["kind"],
@@ -716,7 +710,7 @@ class Workflows(QObject):
         has_candidate = bool(candidate is not None and candidate["prediction"]["masks"][0].any())
         busy = recovery["busy"] or recovery["committing"]
         review = recovery["review_unit_id"] is not None
-        self._data = dict(
+        view = dict(
             kind=kind,
             rows=rows,
             note=note,
@@ -733,7 +727,7 @@ class Workflows(QObject):
             pointCount=len(self.points),
             step=replay.selected,
             steps=len(replay.steps),
-            calibrationPending=self._calibration_pending,
+            calibrationPending=bool(calibration and (calibration["pending"] or calibration["draft"])),
             profileOpen=self._profile_open,
             profileUnitId=self._unit_id,
             selectedTerrainId=self._selected_terrain_id,
@@ -745,7 +739,9 @@ class Workflows(QObject):
             terrainCardY=float(self._terrain_card_anchor[1]),
             replayInfo=replay_info,
         )
-        self.changed.emit()
+        if kind != "replay" or view != self._data:
+            self._data = view
+            self.changed.emit()
 
     def refresh(self, receipt=None):
         return self.bridge._refresh(receipt)
@@ -791,16 +787,14 @@ class Workflows(QObject):
         self.match.recovery.cancel()
         self.match.replay.clear()
         self.bridge.live.done()
-        self.mode, self.points, self._calibration_pending = "live", [], False
+        self.mode, self.points = "live", []
         if tool in ("correct", "recover"):
             uid = self.bridge.live.unit_id if tool == "correct" else None
             self.recovery_tool = "Points"
             self.recovery_vertices.clear()
             self._recovery_hover = False
             self._recovery_target = uid or ""
-            receipt = self.match.recovery.open(uid)
-            if receipt.status != "rejected" and uid:
-                receipt = self.match.recovery.report_error(uid)
+            receipt = self.match.recovery.open(uid, manual=tool == "correct")
             self.refresh(receipt)
         elif tool == "recalibrate":
             receipt = self.match.calibration.begin_recalibration()
@@ -1034,7 +1028,7 @@ class Workflows(QObject):
             self.match.recovery.cancel()
             self.match.replay.clear()
             self.match.calibration.cancel_recalibration()
-            self.mode, self.points, self._calibration_pending = "live", [], False
+            self.mode, self.points = "live", []
             self._selected_terrain_id = ""
             self._terrain_info_open = False
             self.recovery_vertices.clear()
@@ -1116,6 +1110,7 @@ class Workflows(QObject):
             if receipt.status != "rejected":
                 self._recovery_target = uid
                 self.recovery_vertices.clear()
+                self._recovery_hover = False
                 self.refresh(receipt)
                 return
         self._recovery_target = uid
@@ -1140,14 +1135,13 @@ class Workflows(QObject):
         boundary = dict(success=True, corners=corners, method="manual", estimated=False,
                         dimensions_confirmed=True, coordinate_space="source_image_pixels")
         receipt = self.match.calibration.apply_recalibration(corners, boundary, board_size_in=size)
-        self._calibration_pending = receipt.status != "rejected"
         return self.refresh(receipt)
 
     def click(self, x, y, positive, state):
         kind = self.kind(state)
         if kind == "live":
             return False
-        if kind == "recalibrate" and not self._calibration_pending:
+        if kind == "recalibrate" and not self._data["calibrationPending"]:
             if positive and len(self.points) < 4:
                 self.points.append([x, y])
             elif not positive and self.points:
@@ -1312,6 +1306,10 @@ class Workflows(QObject):
                     )
                     rgba[y0:y1, x0:x1] = np.asarray(pil_roi)
 
+    @property
+    def replay_image_key(self):
+        return self._replay_key
+
     def render_video(self, state, frame):
         kind = self.kind(state)
         if kind == "replay":
@@ -1327,6 +1325,9 @@ class Workflows(QObject):
                 replay.steps[replay.selected]["end_sequence"] if replay.steps else None,
                 observed.get("timestamp_seconds"), observed.get("observation_timestamp_seconds"),
                 observed.get("calibration_version"), width, height, show_trays, show_labels,
+                tuple((uid, unit_list_side(state, uid),
+                       unit_badge_label(state, uid) if show_labels else "")
+                      for uid in scene["units"]) if scene is not None else (),
             )
             if key != self._replay_key:
                 self._replay_image, self.replay_badges = _replay_board(
