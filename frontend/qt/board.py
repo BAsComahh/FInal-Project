@@ -647,9 +647,12 @@ class BoardRenderer:
                            corners=(), points=(), flow=None):
         """Lightweight vector / corner / query overlay built only when interactive inputs change."""
         flow_key = flow.interactive_key(state) if flow is not None else None
+        has_fronts = bool(trays and state.current.prediction is not None and state.rules.fronts)
+        recovery_only = (state.stage == "playback" and flow_key is not None and flow_key[0] == "recovery"
+                         and selected is None and target is None and queries is None and not has_fronts)
         key = (
             state.source_ref.generation,
-            state.current.view_revision,
+            state.current.frame.shape[:2] if recovery_only else state.current.view_revision,
             selected,
             target,
             trays,
@@ -670,7 +673,6 @@ class BoardRenderer:
         scale = max(1.0, height / 720.0)
         self._selection_bounds(state, selected, target)
 
-        has_fronts = bool(trays and state.current.prediction is not None and state.rules.fronts)
         has_prompts = state.stage == "register" and bool(state.registration_prompts)
         has_corners = state.stage == "table" and (bool(corners) or bool(points))
         has_query = queries is not None and queries.result is not None and queries.result_request is not None and queries.result_current(state)

@@ -160,7 +160,12 @@ class VideoPredictor:
         if self.session is None or not self.session.obj_ids:
             raise ValueError("Click an object before propagating")
         self._select_frame(source_frame, advance=True)
-        return self._infer(frame)
+        try:
+            return self._infer(frame)
+        except Exception:
+            # A failed forward or postprocess can leave this frame in model memory.
+            self.reset()
+            raise
 
     def initialize(self, frame, object_ids, masks, *, source_frame=None):
         """Start a new coordinate-space session from masks using the official API."""

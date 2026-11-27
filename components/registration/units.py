@@ -26,6 +26,12 @@ def _records(rows, key, name):
     return records
 
 
+def _list_metadata(payload, source):
+    return {"source": str(source) if source is not None else None,
+            "metadata": {key: deepcopy(value) for key, value in payload.items()
+                         if key not in ("unit_types", "units", "lists")}}
+
+
 class UnitRoster:
     def __init__(self, payload, *, source=None):
         if not isinstance(payload, dict):
@@ -182,17 +188,22 @@ class UnitRoster:
                 if record.get("list_id", "A") != list_id}
         records = list(kept.values())
         for index, record in enumerate(incoming.types.values(), start=1):
+            type_id = f"{list_id}{index}"
+            if type_id in kept:
+                kept_side = kept[type_id].get("list_id", "A")
+                raise ValueError(
+                    f"List {list_id} would generate type ID {type_id}, already used by list {kept_side}. "
+                    f"Use a catalog for list {kept_side} with a different ID for that type before importing list {list_id}."
+                )
             record = deepcopy(record)
-            record.update(source_type_id=record["type_id"], type_id=f"{list_id}{index}",
+            record.update(source_type_id=record["type_id"], type_id=type_id,
                           list_id=list_id, type_number=index)
             record["attributes"] = {**record.get("attributes", {}), "side": list_id}
             records.append(record)
         metadata = deepcopy(self.payload.get("lists", {}))
         if kept and "A" not in metadata and any(row.get("list_id", "A") == "A" for row in kept.values()):
-            metadata["A"] = {"source": self.source}
-        metadata[list_id] = {"source": str(source) if source is not None else incoming.source,
-                             "metadata": {key: deepcopy(value) for key, value in payload.items()
-                                          if key not in ("unit_types", "units", "lists")}}
+            metadata["A"] = _list_metadata(self.payload, self.source)
+        metadata[list_id] = _list_metadata(incoming.payload, incoming.source)
         records.sort(key=lambda record: (record.get("list_id", "A"), record.get("type_number", 0)))
         roster = UnitRoster({"unit_types": records, "lists": metadata})
         roster.retain_bindings(self, type_ids=kept)

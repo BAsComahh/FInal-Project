@@ -33,10 +33,9 @@ def _catalog_rows(roster, catalog, values):
 
     originals = records(catalog.get("source_entries"))
     original = originals[0] if originals else {}
-    list_id = catalog.get("list_id")
+    list_id = catalog.get("list_id", "A")
     payload = roster.payload
-    if list_id:
-        payload = payload.get("lists", {}).get(list_id, {}).get("metadata", payload)
+    payload = payload.get("lists", {}).get(list_id, {}).get("metadata", payload)
     sources = payload.get("sources") or ()
     index = original.get("source_index", 0)
     source = sources[index] if isinstance(sources, (list, tuple)) and isinstance(index, int) and 0 <= index < len(sources) else {}
@@ -1240,8 +1239,7 @@ class Workflows(QObject):
     def interactive_key(self, state):
         kind = self.kind(state)
         if kind == "recovery":
-            candidate = state.recovery["preview"]
-            return (kind, state.recovery["candidate_generation"], id(candidate), self._recovery_hover)
+            return (kind, state.recovery["preview_revision"], self._recovery_hover)
         if kind in ("terrain", "recalibrate"):
             return (kind, tuple(map(tuple, self.points)), state.board.calibration_version)
         return None

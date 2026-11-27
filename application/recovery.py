@@ -15,6 +15,7 @@ class Recovery:
         self._session = session
         self.sample = None
         self.candidate_generation = 0
+        self.preview_revision = 0
         self.active = self.committing = False
         self._candidate = self._preview = self.pending_prompt = self.pending_binding = None
         self.manual_target = None
@@ -25,6 +26,11 @@ class Recovery:
     @property
     def preview(self):
         return freeze(self._preview)
+
+    def _set_preview(self, preview):
+        if preview is not self._preview:
+            self._preview = preview
+            self.preview_revision += 1
 
     @property
     def busy(self):
@@ -65,7 +71,8 @@ class Recovery:
             return CommandReceipt("rejected", self.note)
         if self._candidate is not None:
             self._candidate.cancel()
-        self._candidate = self._preview = self.pending_prompt = None
+        self._candidate = self.pending_prompt = None
+        self._set_preview(None)
         self.candidate_generation += 1
         self.review_unit_id = None
         self.note = "Candidate cleared. Add a positive point to retry."
@@ -86,7 +93,8 @@ class Recovery:
         if force:
             self.committing = False
         if not self.committing:
-            self._candidate = self._preview = self.pending_prompt = None
+            self._candidate = self.pending_prompt = None
+            self._set_preview(None)
         return CommandReceipt("accepted")
 
     def labels(self):
@@ -108,7 +116,8 @@ class Recovery:
                 return self.clear_candidate()
             return CommandReceipt("rejected", self.note)
         self.clear_candidate()
-        self._candidate, self._preview, diagnostics = offered
+        self._candidate, preview, diagnostics = offered
+        self._set_preview(preview)
         self.review_unit_id = unit_id
         scores = diagnostics.get("scores") or []
         score = f"{scores[0]:.3f}" if scores else "unknown"
@@ -143,7 +152,7 @@ class Recovery:
         if self.committing:
             return CommandReceipt("rejected", self.note)
         self._take_over_manually(unit_id)
-        if self.review_unit_id == unit_id:
+        if self.review_unit_id is not None or self.manual_target not in (None, unit_id):
             self.clear_candidate()
         return self._report_manual_target(unit_id)
 
@@ -200,7 +209,7 @@ class Recovery:
             self._candidate.cancel()
         self.candidate_generation += 1
         self.review_unit_id = None
-        self._preview = None
+        self._set_preview(None)
         self._candidate = RecoveryCandidate()
         self.pending_prompt = {"kind": "recovery_seed_mask", "snapshot": snapshot, "mask": mask}
         self.note = "Building candidate from manual shape; playback continues."
@@ -277,12 +286,12 @@ class Recovery:
                 self._session.note = "Unit recovered with its original ID. Facing is unknown."
             elif not candidate.cancelled.is_set():
                 if request.get("recovery_consumed"):
-                    self._preview = None
+                    self._set_preview(None)
                     self.note = f"Recovery not applied: {error}. Clear / Retry."
                 elif (candidate.backend is not None and candidate.backend.session is not None
                       and candidate.backend.source_frame == request["metadata"]["frame_index"]
                       and candidate.prediction is not None and candidate.prediction["masks"][0].any()):
-                    self._preview = {"prediction": candidate.prediction, "metadata": deepcopy(request["metadata"])}
+                    self._set_preview({"prediction": candidate.prediction, "metadata": deepcopy(request["metadata"])})
                     self.note = f"Recovery not applied: {error}"
                 else:
                     self._reject_pending_binding(f"the candidate is no longer usable ({error})")
@@ -294,10 +303,10 @@ class Recovery:
             return
         elif self.active and not candidate.cancelled.is_set():
             if error is not None:
-                self._preview = None
+                self._set_preview(None)
                 self.note = f"Candidate error: {error}. Clear / Retry."
             elif prediction is not None:
-                self._preview = {"prediction": prediction, "metadata": deepcopy(request["metadata"])}
+                self._set_preview({"prediction": prediction, "metadata": deepcopy(request["metadata"])})
                 self.note = ((f"Review {self.review_unit_id}: Correct confirms; No starts one new search."
                               if self.review_unit_id is not None else "Click or drag an existing ID from the right panel to confirm.")
                              if prediction["masks"][0].any() else "Candidate missing. Redraw, add points, or Clear / Retry.")

@@ -21,6 +21,7 @@ class VideoSource:
         self.duration = self.frame_count / self.fps
         self.frame_index = -1
         self.frame = None
+        self._cursor_synced = False
         self.provenance = {}
         sidecar = self.path.with_suffix(".source.json")
         if sidecar.is_file():
@@ -38,18 +39,28 @@ class VideoSource:
 
     def read_frame(self, index):
         index = min(self.frame_count - 1, max(0, int(index)))
+        if index == self.frame_index:
+            return self.frame
+
         next_index = self.frame_index + 1
-        if next_index <= index < next_index + self.fps:
+        relative = self._cursor_synced and next_index <= index < next_index + self.fps
+        # A failed decoder operation may advance its cursor without publishing a frame.
+        self._cursor_synced = False
+        if relative:
             for _ in range(index - next_index):
                 if not self.capture.grab():
                     raise ValueError(f"Cannot skip to video frame {index}")
-        else:
-            self.capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+        elif (not self.capture.set(cv2.CAP_PROP_POS_FRAMES, index)
+              or self.capture.get(cv2.CAP_PROP_POS_FRAMES) != index):
+            raise ValueError(f"Cannot seek to video frame {index}")
         success, frame = self.capture.read()
-        if not success:
+        if not success or frame is None:
             raise ValueError(f"Cannot decode video frame {index}")
+        if self.capture.get(cv2.CAP_PROP_POS_FRAMES) != index + 1:
+            raise ValueError(f"Video decoder did not advance past frame {index}")
         self.frame_index = index
         self.frame = frame
+        self._cursor_synced = True
         return frame
 
     def metadata(self):

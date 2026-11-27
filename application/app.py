@@ -35,6 +35,7 @@ class MatchApplication:
         self.geometry = GeometryQueries(self._session)
         self.scene_editing = SceneEditing(self._session, self.geometry)
         self._snapshot = self._snapshot_key = None
+        self._snapshot_catalog_owner = self._snapshot_catalog = None
         self._revision = 0
         self._debug_was_playing = None
         if registration_archive is not None:
@@ -101,20 +102,29 @@ class MatchApplication:
         stage = ("recalibrate" if self.calibration._context is not None else "playback" if session.playback_started
                  else "register" if data.board.homography is not None else "table")
         recovery = self.recovery
+        reference_folder = data.reference_folder
+        model_loaded = worker.predictor.model is not None
+        tray_status = session.tray_status()
         key = (data.current.view_revision, session.generation, session.source.frame_index, stage, self.replay.active,
                session.playing, session.pending_play, session.closed, session.startup_ready, session.model_failed,
-               worker.models_loaded, worker.tracker_initialized, session.load_progress, session.note, session.history_warning,
+               reference_folder, model_loaded, tray_status, worker.tracker_initialized,
+               session.load_progress, session.note, session.history_warning,
                self.registration.next_click_id, len(self.registration.clicks),
                tuple(sorted(self.registration.unconfirmed)), recovery.active, recovery.busy,
-               recovery.candidate_generation, id(recovery._preview), recovery.note, tuple(recovery.labels()))
+               recovery.candidate_generation, recovery.preview_revision, recovery.note, tuple(recovery.labels()))
         if key == self._snapshot_key:
             return self._snapshot
         self._revision += 1
         board = BoardSnapshot(**{f.name: freeze(getattr(data.board, f.name)) for f in fields(BoardSnapshot)})
         current = CurrentSnapshot(**{f.name: freeze(getattr(data.current, f.name)) for f in fields(CurrentSnapshot)})
         roster = data.units
-        units = RosterSnapshot(**{name: freeze(getattr(roster, name))
-                                  for name in ("types", "units", "bindings", "counters", "payload", "source")},
+        if roster is not self._snapshot_catalog_owner:
+            # Catalog edits replace the roster. Instance bindings have their own lifetime.
+            self._snapshot_catalog = freeze(roster.types), freeze(roster.payload)
+            self._snapshot_catalog_owner = roster
+        types, payload = self._snapshot_catalog
+        units = RosterSnapshot(types=types, payload=payload, source=roster.source,
+                               units=freeze(roster.units), bindings=freeze(roster.bindings), counters=freeze(roster.counters),
                                next_ids=freeze({key: roster.next_unit_id(key) for key in roster.types}))
         tracking = freeze({uid: TrackingSnapshot(**{f.name: freeze(getattr(state, f.name))
                                                   for f in fields(TrackingSnapshot)}) for uid, state in data.tracking.items()})
@@ -122,13 +132,14 @@ class MatchApplication:
             self._revision, stage, "replay" if self.replay.active else "live", self.frame_ref(), freeze(session.source.frame),
             self.frame_ref(data.current.prediction_metadata) if data.current.prediction_metadata is not None else None,
             board, current, units, RulesSnapshot(freeze(data.rules.fronts), freeze(data.rules.terrain), data.rules.track_facing), tracking,
-            data.reference_folder, session.source.fps, session.end_index, session.playing, session.pending_play,
-            session.closed, session.registration_locked, session.startup_ready, session.model_failed,
-            worker.predictor.model is not None, worker.tracker_name, worker.tracker_initialized,
+            reference_folder, session.source.fps, session.end_index, session.playing, session.pending_play,
+            session.closed, reference_folder is not None, session.startup_ready, session.model_failed,
+            model_loaded, worker.tracker_name, worker.tracker_initialized,
             worker.facing.error if worker.facing is not None else None, freeze(session.load_progress),
-            session.inference_fps, session.history_warning, session.tray_status(), session.note, freeze(self.registration.clicks),
+            session.inference_fps, session.history_warning, tray_status, session.note, freeze(self.registration.clicks),
             freeze({"active": recovery.active, "busy": recovery.busy, "committing": recovery.committing,
-                    "candidate_generation": recovery.candidate_generation, "preview": recovery._preview,
+                    "candidate_generation": recovery.candidate_generation, "preview_revision": recovery.preview_revision,
+                    "preview": recovery._preview,
                     "review_unit_id": recovery.review_unit_id, "labels": recovery.labels(), "note": recovery.note}),
             registration_unconfirmed=freeze(sorted(self.registration.unconfirmed & data.units.bindings.keys())))
         self._snapshot_key = key

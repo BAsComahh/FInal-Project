@@ -104,6 +104,12 @@ def _merged_pool(raw, config, lengths):
     return pool[np.argsort(-length, kind="stable")[:config.max_lines]]
 
 
+def _same_corner_rays(first, second):
+    a, b = first
+    u, v = second
+    return (a @ u > 0.97 and b @ v > 0.97) or (a @ v > 0.97 and b @ u > 0.97)
+
+
 def _corners(lines, config, shape, lengths):
     found = []
     tolerance = lengths["endpoint_gap"]
@@ -132,7 +138,7 @@ def _corners(lines, config, shape, lengths):
     unique = []
     for item in found:
         if not any(np.linalg.norm(item["point"] - old["point"]) < lengths["corner_dedup"]
-                   and abs(item["rays"][0] @ old["rays"][0]) > 0.97 for old in unique):
+                   and _same_corner_rays(item["rays"], old["rays"]) for old in unique):
             unique.append(item)
         if len(unique) >= config.max_corners:
             break
@@ -167,20 +173,23 @@ class _Scorer:
                                                np.radians(self.config.angle_tolerance_deg))
         return self._chamfer
 
-    def mask_scores(self, center, angle, points):
+    def mask_scores(self, center, angle, points, visible_work_area):
         delta = points - center
         u = np.array([np.cos(angle), np.sin(angle)])
         v = np.array([-u[1], u[0]])
         coverage = float(((np.abs(delta @ u) <= self.view["size"][0] / 2)
                           & (np.abs(delta @ v) <= self.view["size"][1] / 2)).mean())
-        intersection = min(coverage * self.mask_area, self.area)
-        iou = intersection / max(1, self.mask_area + self.area - intersection)
-        return coverage, intersection / self.area, iou
+        intersection = min(coverage * self.mask_area, visible_work_area)
+        iou = intersection / max(1, self.mask_area + visible_work_area - intersection)
+        return coverage, intersection / visible_work_area, iou
 
     def coarse_score(self, center, angle, method):
-        if self.polygons(center, angle) is None:
+        polygons = self.polygons(center, angle)
+        if polygons is None:
             return -np.inf
-        _, fill, iou = self.mask_scores(center, angle, self.points if method == "mask" else self.points[::4])
+        _, _, _, visible_work_area = polygons
+        points = self.points if method == "mask" else self.points[::4]
+        _, fill, iou = self.mask_scores(center, angle, points, visible_work_area)
         if method == "mask" or not len(self.raw):
             return _fit_score(method, fill, iou, 0.0, 0.0)
         distance = self.chamfer.distances(np.asarray([center]), angle)[0]
@@ -194,27 +203,34 @@ class _Scorer:
             return None
         image_polygon = transform_points(polygon, self.view["work_to_image"])
         visible_fraction = 1.0
+        visible_work_area = self.area
         if ((image_polygon < -1e-6).any() or
                 (image_polygon > self.frame_polygon[2] + 1e-6).any()):
             projected = image_polygon.astype(np.float32)
             if not cv2.isContourConvex(projected):
                 return None
             area = cv2.contourArea(projected)
-            visible_area, _ = cv2.intersectConvexConvex(projected, self.frame_polygon)
+            visible_area, clipped = cv2.intersectConvexConvex(projected, self.frame_polygon)
             if area <= 0 or visible_area <= 0:
                 return None
             visible_fraction = min(visible_area / area, 1.0)
             if visible_fraction + 1e-6 < self.config.min_visible_fraction:
                 return None
-        return polygon, image_polygon, visible_fraction
+            # The image-space gate and mask scoring use different areas under perspective.
+            clipped_work = transform_points(clipped.reshape(-1, 2), self.view["image_to_work"])
+            visible_work_area = min(cv2.contourArea(clipped_work.astype(np.float32)), self.area)
+            if visible_work_area <= 0:
+                return None
+        return polygon, image_polygon, visible_fraction, visible_work_area
 
     def score(self, proposal, method, *, exact=False):
         center, angle, provenance = proposal
         polygons = self.polygons(center, angle)
         if polygons is None:
             return None
-        polygon, image_polygon, visible_fraction = polygons
-        coverage, fill, iou = self.mask_scores(center, angle, self.all_points if exact else self.points)
+        polygon, image_polygon, visible_fraction, visible_work_area = polygons
+        points = self.all_points if exact else self.points
+        coverage, fill, iou = self.mask_scores(center, angle, points, visible_work_area)
         samples_per_side = np.zeros((4, 24))
         if exact or method != "mask":
             for index, (a, b) in enumerate(zip(polygon, np.roll(polygon, -1, axis=0))):
@@ -242,7 +258,7 @@ class _Scorer:
                 "corners_work": polygon.tolist(), "corners_image": image_polygon.tolist(),
                 "corners_plane": transform_points(polygon, self.view["work_to_plane"]).tolist(),
                 "center_plane": transform_points(center, self.view["work_to_plane"]).tolist(),
-                "provenance": provenance}
+                "provenance": provenance}, visible_work_area
 
 
 def _edge_evidence(samples):
@@ -347,31 +363,32 @@ def _mask_seeds(scorer, centers, config):
 def _rank(proposals, method, scorer, config):
     heap, count = [], 0
 
-    def offer(item, serial):
-        entry = (_reliable_corner(item, method, config), item["score"], serial, item)
+    def offer(scored, serial):
+        item, visible_work_area = scored
+        entry = (_reliable_corner(item, method, config), item["score"], serial, item, visible_work_area)
         if len(heap) < max(20, config.top_k * 4):
             heapq.heappush(heap, entry)
         elif entry[:3] > heap[0][:3]:
             heapq.heapreplace(heap, entry)
 
     for index, proposal in enumerate(proposals):
-        item = scorer.score(proposal, method)
-        if item is None:
+        scored = scorer.score(proposal, method)
+        if scored is None:
             continue
         count += 1
-        offer(item, index)
+        offer(scored, index)
     ranked = []
-    for _, _, _, item in heap:
+    for _, _, _, item, visible_work_area in heap:
         proposal = (np.asarray(item["center_work"]), np.radians(item["angle_deg"]), item["provenance"])
         if method == "mask":
-            exact_item = scorer.score(proposal, method, exact=True)
-            if exact_item is not None:
-                ranked.append(exact_item)
+            exact = scorer.score(proposal, method, exact=True)
+            if exact is not None:
+                ranked.append(exact[0])
             continue
         # Only the mask sampling changes at this stage. The original LSD score
         # was already computed for this exact position and angle.
         center, angle, _ = proposal
-        coverage, fill, iou = scorer.mask_scores(center, angle, scorer.all_points)
+        coverage, fill, iou = scorer.mask_scores(center, angle, scorer.all_points, visible_work_area)
         item.update(mask_coverage=coverage, mask_fill=fill, mask_iou=iou,
                     score=_fit_score(method, fill, iou, item["edge_support"], item["corner_support"]))
         ranked.append(item)

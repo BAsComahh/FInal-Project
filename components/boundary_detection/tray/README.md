@@ -80,11 +80,11 @@ JSON 必须包含 `image_to_board` 和 `board_size`。相机、裁剪和图片�
 
 ## 评分与输出
 
-- `mask_fill` 为重叠面积除以完整矩形面积。突出底座的 mask 像素不会稀释该分数。
+- `mask_fill` 为工作平面上的重叠面积除以画面内的矩形面积。部分出画时，先裁切图像中的投影，再把可见多边形映回工作平面。突出底座的 mask 像素不会稀释该分数。
 - `mask_coverage` 为落在矩形内的 mask 点比例，保留供诊断和历史实验对照。两项比例的初筛最多采样 4096 点，保留候选用完整工作 mask 重算。
 - `edge_support` 为四边与方向相近的原始 LSD 有限线段的平均贴合程度，距离用高斯衰减。
 - `corner_support` 取四个角中最强的邻接证据。每个角检查两条相邻边的全长支持度，以及两侧靠近共同顶点的各四个采样的平均支持度，并取上述四个分数的最小值。
-- `mask_iou`：工作 mask 与固定尺寸矩形的近似交并比。
+- `mask_iou` 是工作 mask 与固定尺寸矩形在画面内部分的近似交并比。
 - `visible_fraction`：完整矩形投影到拟合输入图像后，落在画面内的面积比例，默认下限为 `TrayConfig.min_visible_fraction = 0.80`。出画边缘采样计为无支持。通过的候选保留完整四角，填充率的分子只使用实际观测到的像素。
 - local／corner／edge 综合分数为 `0.65×edge_support + 0.20×corner_support + 0.15×mask_fill`。有可靠边角的候选在精校排序中优先。纯 mask 分支分数为 `0.8×mask_fill + 0.2×mask_iou`。
 

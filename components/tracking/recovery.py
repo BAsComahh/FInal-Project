@@ -23,10 +23,14 @@ class RecoveryCandidate:
         backend.session = None
         backend.reset()
         self.backend = backend
-        self.prediction = backend.initialize(frame, [1], mask[None], source_frame=source_frame)
-        if not self.prediction["masks"][0].any():
-            self.cancel()
-            raise ValueError("Edge returned an empty recovery seed")
+        try:
+            self.prediction = backend.initialize(frame, [1], mask[None], source_frame=source_frame)
+            if not self.prediction["masks"][0].any():
+                self.cancel()
+                raise ValueError("Edge returned an empty recovery seed")
+        except Exception:
+            self.release()
+            raise
         self.seed_frame = source_frame
         # A later negative point on this frame still needs a foreground anchor.
         y, x = np.unravel_index(cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, 3).argmax(), mask.shape)

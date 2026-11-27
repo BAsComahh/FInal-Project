@@ -18,12 +18,11 @@ def decide_matches(unit_ids, references, candidates, masks, occupied, *, similar
     rows = ranked["rankings"]
     for row in rows:
         row["candidate_ids"] = [eligible[i] for i in row["candidate_ids"]]
+    plausible = [row for row in rows if row["candidate_ids"] and row["scores"][0] >= similarity]
     contested = set()
-    for i, row in enumerate(rows):
-        if not row["candidate_ids"]:
-            continue
-        for other in rows[i + 1:]:
-            if other["candidate_ids"] and np.any(masks[row["candidate_ids"][0]] & masks[other["candidate_ids"][0]]):
+    for i, row in enumerate(plausible):
+        for other in plausible[i + 1:]:
+            if np.any(masks[row["candidate_ids"][0]] & masks[other["candidate_ids"][0]]):
                 contested.update((row["unit_id"], other["unit_id"]))
     for row in rows:
         index = row["candidate_ids"][0] if row["candidate_ids"] else None
@@ -50,6 +49,7 @@ class AutomaticRecoveryEngine:
         except Exception as error:
             self.load_error = str(error)
             raise
+        self.load_error = None
 
     def search(self, frame, folder, targets, occupied, *, prompt, detection_threshold, similarity, margin, cancelled):
         if self.load_error is not None:

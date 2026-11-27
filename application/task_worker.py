@@ -1,6 +1,6 @@
 """Serialize model operations outside the playback/UI thread."""
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 from copy import copy, deepcopy
 import ctypes
 from ctypes import wintypes
@@ -84,6 +84,12 @@ def _point_ids(clicks):
     for click in clicks:
         groups.setdefault(click["object_id"], []).append(click["click_id"])
     return groups
+
+
+def _detached_candidate_error(error):
+    # The request owns this error, so its traceback must not retain the worker frame.
+    error.__cause__ = error.__context__ = None
+    return error.with_traceback(None)
 
 
 class TaskWorker:
@@ -197,7 +203,8 @@ class TaskWorker:
             request["automatic_rows"] = rows
             prediction, candidates = None, {}
             from components.tracking.recovery import RecoveryCandidate
-            for row in rows:
+            # Resolve automatic claims before seeding any reviews for this frame.
+            for row in sorted(rows, key=lambda row: not row["automatic"]):
                 if batch["cancelled"].is_set():
                     break
                 uid = row["unit_id"]
@@ -207,9 +214,9 @@ class TaskWorker:
                 if index is None:
                     continue
                 try:
+                    if np.any(masks[index] & occupied):
+                        raise ValueError("Candidate overlaps an occupied normal unit")
                     if row["automatic"]:
-                        if np.any(masks[index] & occupied):
-                            raise ValueError("Candidate overlaps an occupied normal unit")
                         def mark_consumed():
                             with batch["decision_lock"]:
                                 if batch["cancelled"].is_set() or batch["unit_decisions"].get(uid) == "manual":
@@ -220,7 +227,8 @@ class TaskWorker:
                         prediction = self.tracker.update_mask(request["frame"], obj, masks[index],
                             source_frame=request["metadata"]["frame_index"], on_consumed=mark_consumed)
                         request["automatic_applied"].append(obj)
-                        occupied |= masks[index]
+                        if prediction["masks"][prediction["object_ids"].index(obj)].any():
+                            occupied |= masks[index]
                     else:
                         if index not in candidates:
                             candidate = RecoveryCandidate()
@@ -345,7 +353,7 @@ class TaskWorker:
                         try:
                             request["candidate_result"] = candidate.advance(request["frame"], request["metadata"]["frame_index"])
                         except Exception as error:
-                            request["candidate_error"] = error
+                            request["candidate_error"] = _detached_candidate_error(error)
                 request["automatic_updates"] = []
                 for candidate in request.get("automatic_candidates", ()):
                     if candidate.cancelled.is_set():
@@ -355,7 +363,7 @@ class TaskWorker:
                         result = candidate.advance(request["frame"], request["metadata"]["frame_index"])
                         request["automatic_updates"].append((candidate, result, None))
                     except Exception as error:
-                        request["automatic_updates"].append((candidate, None, error))
+                        request["automatic_updates"].append((candidate, None, _detached_candidate_error(error)))
             elif kind == "automatic_recovery":
                 prediction = self._automatic_recovery(request)
             elif kind in ("recovery_seed", "recovery_seed_mask", "recovery_point", "recovery_advance"):
@@ -573,10 +581,13 @@ class TaskWorker:
             return None
         future, request = self.future, self.request
         self.future = self.request = None
-        try:
-            return request, future.result(), None
-        except Exception as error:
+        if future.cancelled():
+            return request, None, CancelledError()
+        # Re-raising here would attach this frame (and its Future) to the error.
+        error = future.exception()
+        if isinstance(error, Exception):
             return request, None, error
+        return request, future.result(), None
 
     def close(self):
         self.executor.shutdown(wait=False, cancel_futures=True)
