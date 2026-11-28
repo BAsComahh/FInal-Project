@@ -25,10 +25,32 @@ class LiveSelection:
         self._center_key = None
         self._center = None
         self.viewport_size = None
+        self.badge_boxes = []
 
     def set_viewport_size(self, width, height):
         if width > 0 and height > 0 and np.isfinite(width) and np.isfinite(height):
             self.viewport_size = (float(width), float(height))
+
+    def set_badges(self, badges):
+        """Cache active normalized unit/terrain label pills so card placement avoids covering them."""
+        boxes = []
+        for badge in badges or ():
+            try:
+                x = float(badge["x"])
+                y = float(badge["y"])
+                w = float(badge["w"])
+                h = float(badge["h"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if w > 0 and h > 0:
+                boxes.append((
+                    max(0.0, x - 0.004),
+                    max(0.0, y - 0.004),
+                    min(1.0, x + w + 0.004),
+                    min(1.0, y + h + 0.004),
+                    int(badge.get("objectId", -1)),
+                ))
+        self.badge_boxes = boxes
 
     def clear(self):
         self.unit_id = self.target_id = None
@@ -70,16 +92,16 @@ class LiveSelection:
         scale = max(0.25, min(1.0, (vw - 24.0) / 416.0, (vh - 24.0) / 266.0))
         eff_w = max(1.0, vw / scale)
         eff_h = max(1.0, vh / scale)
-        card_px_h = 181.0
+        card_px_h = 162.0
         uid = state.units.bindings.get(selected_obj) if getattr(state, "units", None) is not None else None
         if uid is not None and uid in state.units.units:
             unit = state.units.units[uid]
             catalog = state.units.types.get(unit["type_id"], {})
             profile = {**catalog.get("attributes", {}), **unit.get("attributes", {})}
             if profile.get("engaged") or profile.get("wavering"):
-                card_px_h = 204.0
-        cw = min(0.42, max(0.14, 228.0 / eff_w))
-        ch = min(0.50, max(0.18, card_px_h / eff_h))
+                card_px_h = 186.0
+        cw = min(0.46, max(0.16, 278.0 / eff_w))
+        ch = min(0.46, max(0.16, card_px_h / eff_h))
         min_x, max_x = cw * 0.5 + 0.01, max(cw * 0.5 + 0.01, 1.0 - cw * 0.5 - 0.01)
         min_y, max_y = ch * 0.5 + 0.015, max(ch * 0.5 + 0.015, 1.0 - ch * 0.5 - 0.015)
 
@@ -103,6 +125,8 @@ class LiveSelection:
                       if self_raw is not None else np.empty((0, 4), dtype=float))
         others = [box for obj, box in boxes.items() if obj != selected_obj]
         other_boxes = np.asarray(others, dtype=float) if others else np.empty((0, 4), dtype=float)
+        other_badges = [box[:4] for box in self.badge_boxes if box[4] != selected_obj]
+        badge_boxes = np.asarray(other_badges, dtype=float) if other_badges else np.empty((0, 4), dtype=float)
 
         # Ultra-sparse candidate set: adjacent menu-hugging anchors + 4 local rings + 8x6 full-screen grid
         gap = 0.012
@@ -155,6 +179,12 @@ class LiveSelection:
             self_occ = np.zeros(len(centers))
         arc_ratio, arc_cnt, _ = overlap_metrics(arc_box)
         other_ratio, other_cnt, _ = overlap_metrics(other_boxes)
+        _, badge_cnt, badge_inter = overlap_metrics(badge_boxes)
+        if len(badge_boxes):
+            badge_areas = np.maximum(1e-4, (badge_boxes[:, 2] - badge_boxes[:, 0]) * (badge_boxes[:, 3] - badge_boxes[:, 1]))
+            badge_occ = (badge_inter / badge_areas[None, :]).sum(axis=1)
+        else:
+            badge_occ = np.zeros(len(centers))
 
         aspect = width / max(1.0, height)
         dx_edge = np.maximum(0.0, np.maximum(rect_x0[:, 0] - ux, ux - rect_x1[:, 0]))
@@ -169,6 +199,7 @@ class LiveSelection:
                 + 2.4 * self_occ + 0.35 * self_cnt
                 + 6.0 * arc_ratio + 1.8 * arc_cnt
                 + 4.5 * other_ratio + 0.06 * other_cnt
+                + 1.05 * badge_occ + 0.30 * badge_cnt
                 + dist_cost + right_bias)
         best = int(np.argmin(cost))
         return float(centers[best, 0]), float(centers[best, 1])
@@ -371,14 +402,14 @@ class LiveSelection:
         special_rules = profile.get("special_rules") or ()
         rules_summary = ", ".join(str(rule) for rule in special_rules if str(rule).strip())
         stats = [
-            dict(label="Spd", value=speed_text, objectName="unitSpeed"),
-            dict(label="Mel", value=text(profile.get("melee")), objectName=""),
+            dict(label="Sp", value=speed_text, objectName="unitSpeed"),
+            dict(label="Me", value=text(profile.get("melee")), objectName=""),
             dict(label="Sh", value=text(profile.get("shooting")), objectName=""),
-            dict(label="Def", value=text(profile.get("defence")), objectName=""),
-            dict(label="Att", value=text(profile.get("attacks")), objectName=""),
-            dict(label="Nrv", value=text(profile.get("nerve")), objectName=""),
+            dict(label="De", value=text(profile.get("defence")), objectName=""),
             dict(label="US", value=text(profile.get("unit_strength")), objectName=""),
-            dict(label="Hgt", value=text(profile.get("height")), objectName=""),
+            dict(label="Att", value=text(profile.get("attacks")), objectName=""),
+            dict(label="Ne", value=text(profile.get("nerve")), objectName=""),
+            dict(label="Ht", value=text(profile.get("height")), objectName=""),
         ]
         center = self.center(state, obj) if obj is not None else None
         unavailable = self.unavailable(state, self.unit_id) if self.unit_id else "Select a unit on the board."

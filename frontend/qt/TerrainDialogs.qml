@@ -141,30 +141,16 @@ Item {
                                 onTextEdited: editor.rows[index].value = text
                             }
 
-                            ComboBox {
+                            ConsoleComboBox {
                                 id: combo
                                 Layout.fillWidth: true
+                                implicitHeight: 34
                                 visible: modelData.kind === "choice"
                                 model: modelData.optionLabels || modelData.options || []
                                 currentIndex: {
                                     const opts = modelData.options || []
                                     const found = opts.indexOf(String(modelData.value))
                                     return found >= 0 ? found : 0
-                                }
-                                contentItem: Text {
-                                    leftPadding: 10
-                                    text: combo.displayText
-                                    color: dialogs.theme.ink
-                                    font.family: dialogs.theme.fontBody
-                                    font.pixelSize: dialogs.theme.textSm
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                                background: Rectangle {
-                                    implicitHeight: 34
-                                    radius: dialogs.theme.radiusSm
-                                    color: dialogs.theme.bgTrack
-                                    border.color: combo.activeFocus ? dialogs.theme.selection : dialogs.theme.border
                                 }
                                 onActivated: idx => {
                                     const opts = modelData.options || []

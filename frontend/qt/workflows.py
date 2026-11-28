@@ -62,16 +62,27 @@ def _catalog_rows(roster, catalog, values):
 
     rows = []
     title = catalog.get("unit_name") or catalog.get("name")
-    profile = "\n".join(filter(None, (title, catalog.get("classification"))))
+    points = values.get("points")
+    heading = f"{title}  ·  {points} pts" if title and points is not None else title
+    profile = "\n".join(filter(None, (heading, catalog.get("classification"))))
     if profile:
         rows.append(row("Unit profile", profile))
-    stats = (("Melee", "melee"), ("Shooting", "shooting"), ("Defence", "defence"),
-             ("Unit strength", "unit_strength"), ("Attacks", "attacks"), ("Nerve", "nerve"),
-             ("Points", "points"))
-    stat_text = "   ·   ".join(f"{label} {values[key] if values[key] is not None else '—'}"
-                              for label, key in stats if key in values)
-    if stat_text:
-        rows.append(row("Combat stats", stat_text))
+    fmt = lambda value: "—" if value is None else str(value)
+    speed = values.get("speed_in")
+    speed_text = "—" if speed is None else f"{speed:g}″"
+    stat_keys = ("speed_in", "melee", "shooting", "defence", "unit_strength", "attacks", "nerve", "height")
+    if any(key in values for key in stat_keys):
+        stat_strip = [
+            dict(label="Sp", value=speed_text),
+            dict(label="Me", value=fmt(values.get("melee"))),
+            dict(label="Sh", value=fmt(values.get("shooting"))),
+            dict(label="De", value=fmt(values.get("defence"))),
+            dict(label="US", value=fmt(values.get("unit_strength"))),
+            dict(label="Att", value=fmt(values.get("attacks"))),
+            dict(label="Ne", value=fmt(values.get("nerve"))),
+            dict(label="Ht", value=fmt(values.get("height"))),
+        ]
+        rows.append(("", "Combat stats", stat_strip, "stats", None))
     summary, rows = rows, []
     if traits := values.get("traits"):
         rows.append(row("Traits", ", ".join(map(str, traits)) if isinstance(traits, (list, tuple)) else str(traits)))
@@ -517,6 +528,7 @@ class Workflows(QObject):
                 kind=field_kind,
                 value=(
                     bool(value) if field_kind == "bool"
+                    else list(value) if field_kind == "stats"
                     else (", ".join(value) if isinstance(value, (tuple, list)) else str(value or "")) if field_kind == "rules"
                     else ("" if value is None else str(value))
                 ),
@@ -537,7 +549,7 @@ class Workflows(QObject):
         self._fields = self._build_fields(summary + [
             ("speed_in", "Speed (inches)", values.get("speed_in"), "number", None),
             ("height", "Rule height", values.get("height"), "number", None),
-            ("side", "Side / army", values.get("side"), "text", None),
+            ("side", "Side / army", values.get("side"), "side", None),
             ("unit_kind", "Unit kind", values.get("unit_kind"), "choice",
              [("", "Unknown / Unset"), ("ordinary", "Ordinary"),
               ("war_engine", "War Engine"), ("individual", "Individual")]),
@@ -815,7 +827,7 @@ class Workflows(QObject):
         values = {}
         try:
             for row in rows:
-                if row["kind"] == "readonly":
+                if row["kind"] in ("readonly", "stats"):
                     continue
                 value = row["value"]
                 if row["kind"] == "number":

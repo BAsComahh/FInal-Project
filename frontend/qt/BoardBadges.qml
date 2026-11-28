@@ -32,17 +32,17 @@ Item {
             y: Math.max(2, Math.min(badgeLayer.height - height - 2,
                (modelData.y + modelData.h * 0.5) * badgeLayer.height - height * 0.5))
             radius: height / 2
-            color: isDropHover ? "#f2133024"
-                 : isSelected ? "#f2132533"
-                 : isNeedsWork ? "#ea2a2010"
-                 : (isTerrain ? "#cc101922" : "#e6101922")
+            color: isDropHover ? badgeLayer.theme.badgeDropFill
+                 : isSelected ? badgeLayer.theme.badgeSelectedFill
+                 : isNeedsWork ? badgeLayer.theme.badgeNeedsWorkFill
+                 : (isTerrain ? badgeLayer.theme.badgeTerrainFill : badgeLayer.theme.badgeFill)
             border.width: isDropHover ? 2 : (isSelected || isTarget || isNeedsWork) ? 1.5 : 1
-            border.color: isDropHover ? badgeLayer.theme.success
-                        : isSelected ? badgeLayer.theme.selection
-                        : isTarget ? badgeLayer.theme.success
-                        : isNeedsWork ? badgeLayer.theme.warning
+            border.color: isDropHover ? "#36d399"
+                        : isSelected ? badgeLayer.theme.overlaySelection
+                        : isTarget ? "#36d399"
+                        : isNeedsWork ? "#ff9150"
                         : isTerrain ? modelData.border
-                        : "#6692aec4"
+                        : badgeLayer.theme.badgeBorder
 
             RowLayout {
                 id: row
@@ -54,12 +54,12 @@ Item {
                     width: Math.max(6, Math.round(pill.height * 0.34))
                     height: width
                     radius: width / 2
-                    color: (pill.modelData.dot || "").length > 0 ? pill.modelData.dot : badgeLayer.theme.warning
+                    color: (pill.modelData.dot || "").length > 0 ? pill.modelData.dot : "#ff9150"
                 }
 
                 Text {
                     text: pill.modelData.text
-                    color: (pill.isSelected || pill.isDropHover) ? "#ffffff" : badgeLayer.theme.ink
+                    color: pill.isSelected ? badgeLayer.theme.overlaySelection : badgeLayer.theme.badgeInk
                     font.family: badgeLayer.theme.fontBody
                     font.pixelSize: Math.max(10, Math.min(12, Math.round(pill.height * 0.55)))
                     font.weight: Font.DemiBold

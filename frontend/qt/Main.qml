@@ -22,6 +22,15 @@ ApplicationWindow {
     readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || terrainDialogs.formOpen
     readonly property bool textInputActive: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
     readonly property bool tableDimensions: window.table && s.tableMode === "dimensions"
+    readonly property bool liveProfileOpen: window.live && window.flowKind === "live" && Boolean(flow.state.profileOpen)
+    readonly property bool liveUncertaintyOpen: window.live && window.flowKind === "live" && !flow.state.profileOpen && ui.uncertainty.count > 0
+    readonly property bool liveSideOpen: liveProfileOpen || liveUncertaintyOpen
+    readonly property real liveSideWidth: liveProfileOpen
+        ? (window.width < 1000 ? 276 : 304)
+        : (window.width < 1000 ? 260 : 292)
+    readonly property bool liveConsoleNeeded: window.live && window.flowKind === "live" && (
+        ui.console.tool !== "select" || (ui.console.selected && !ui.console.canQuery)
+    )
     property var tableWidthDraft: null
     property var tableDepthDraft: null
     onTableDimensionsChanged: {
@@ -161,6 +170,16 @@ ApplicationWindow {
 
                 Item { Layout.fillWidth: true }
 
+                ConsoleButton {
+                    objectName: "themeToggle"
+                    iconKind: theme.dark ? "sun" : "moon"
+                    text: theme.dark ? "Light" : "Dark"
+                    variant: "ghost"
+                    implicitHeight: 30
+                    tooltipText: theme.dark ? "Switch to the light theme" : "Switch to the dark theme"
+                    onClicked: appearance.toggle()
+                }
+
                 // Live / Replay segmented mode switcher
                 Rectangle {
                     visible: window.live
@@ -236,10 +255,20 @@ ApplicationWindow {
                     enabled: window.table ? s.tableMode === "manual" && s.cornerCount > 0 : s.editable && s.undo
                     onClicked: ui.undo()
                 }
-                ConsoleButton {
-                    text: "Reset"
-                    variant: "subtle"
+                Rectangle {
                     visible: !window.table
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 22
+                    Layout.leftMargin: 4
+                    Layout.rightMargin: 4
+                    color: theme.border
+                }
+                ConsoleButton {
+                    objectName: "resetMatch"
+                    text: "Reset"
+                    variant: "dangerSubtle"
+                    visible: !window.table
+                    tooltipText: window.live ? "End this match and start a new registration" : "Clear drafts and start a new registration"
                     onClicked: resetDialog.open()
                 }
                 ConsoleButton {
@@ -325,7 +354,7 @@ ApplicationWindow {
                                         font.family: theme.fontBody
                                         font.pixelSize: theme.textSm
                                         font.weight: s.mode === "Points" ? Font.DemiBold : Font.Normal
-                                        color: s.mode === "Points" ? "#ffffff" : theme.inkSecondary
+                                        color: s.mode === "Points" ? theme.inkOnAccent : theme.inkSecondary
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                         opacity: pointsSeg.enabled ? 1 : 0.42
@@ -346,7 +375,7 @@ ApplicationWindow {
                                         font.family: theme.fontBody
                                         font.pixelSize: theme.textSm
                                         font.weight: s.mode === "Assign" ? Font.DemiBold : Font.Normal
-                                        color: s.mode === "Assign" ? "#ffffff" : theme.inkSecondary
+                                        color: s.mode === "Assign" ? theme.inkOnAccent : theme.inkSecondary
                                         horizontalAlignment: Text.AlignHCenter
                                         verticalAlignment: Text.AlignVCenter
                                         opacity: assignSeg.enabled ? 1 : 0.42
@@ -554,8 +583,9 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     spacing: 8
 
-                    // Deep matte video/board stage
+                    // Deep matte video/board stage (Live sidebars dock over right letterbox before shifting the board)
                     Rectangle {
+                        id: stageBox
                         Layout.fillWidth: true
                         Layout.fillHeight: true
                         color: theme.bgStage
@@ -564,11 +594,27 @@ ApplicationWindow {
                         border.color: (window.terrainMode || (window.live && window.flowKind !== "live")) ? window.badgeBorder : theme.border
                         clip: true
 
+                        readonly property real imgAspect: (s.imageWidth > 0 && s.imageHeight > 0) ? (s.imageWidth / s.imageHeight) : (16.0 / 9.0)
+                        readonly property real innerW: Math.max(1, width - 2)
+                        readonly property real innerH: Math.max(1, height - 2)
+                        readonly property real natW: Math.min(innerW, innerH * imgAspect)
+                        readonly property real natX: (width - natW) / 2
+                        readonly property real sideReserve: window.liveSideOpen ? (window.liveSideWidth + 16) : 0
+                        readonly property real availW: Math.max(120, innerW - sideReserve)
+                        readonly property real fitW: Math.min(availW, innerH * imgAspect)
+                        readonly property real fitH: fitW / imgAspect
+                        readonly property real boardX: window.liveSideOpen
+                            ? Math.max(1, Math.min(natX, 1 + availW - fitW))
+                            : (width - fitW) / 2
+                        readonly property real boardY: (height - fitH) / 2
+
                         Image {
                             id: board
                             objectName: "boardImage"
-                            anchors.fill: parent
-                            anchors.margins: 1
+                            x: stageBox.boardX
+                            y: stageBox.boardY
+                            width: stageBox.fitW
+                            height: stageBox.fitH
                             source: "image://match/" + s.imageRevision
                             fillMode: Image.PreserveAspectFit
                             smooth: true
@@ -604,7 +650,7 @@ ApplicationWindow {
                             objectName: "boardSurface"
                             width: board.paintedWidth
                             height: board.paintedHeight
-                            anchors.centerIn: parent
+                            anchors.centerIn: board
                             readonly property real scaleX: width / s.imageWidth
                             readonly property real scaleY: height / s.imageHeight
                             function imageRevision() { return Number(board.source.toString().split("/").pop()) }
@@ -763,7 +809,11 @@ ApplicationWindow {
                         }
 
                         UnitHud {
-                            anchors.fill: parent
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.rightMargin: stageBox.sideReserve
                             visible: window.live && window.flowKind === "live" && ui.console.selected
                             viewData: ui.console
                             z: 2
@@ -771,11 +821,54 @@ ApplicationWindow {
                         }
 
                         DistanceLabel {
-                            anchors.fill: parent
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.rightMargin: stageBox.sideReserve
                             visible: window.live && window.flowKind === "live" && s.console.query.showDistance
                             query: s.console.query
                             z: 3
                             imageRect: Qt.rect(surface.x, surface.y, surface.width, surface.height)
+                        }
+
+                        // Subtle shadow under docked Live right panel
+                        Rectangle {
+                            visible: window.liveSideOpen
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.topMargin: 11
+                            anchors.bottomMargin: 5
+                            anchors.rightMargin: 8
+                            width: window.liveSideWidth + 3
+                            radius: theme.radiusLg + 1
+                            color: theme.bgShadow
+                            z: 4
+                        }
+
+                        UnitInfoPanel {
+                            id: unitInfoPanel
+                            visible: window.liveProfileOpen
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.margins: 8
+                            width: window.liveSideWidth
+                            z: 5
+                        }
+
+                        UncertaintyPanel {
+                            visible: window.liveUncertaintyOpen
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.right: parent.right
+                            anchors.margins: 8
+                            width: window.liveSideWidth
+                            z: 5
+                            viewData: ui.uncertainty
+                            selectedUnit: s.console.unitId
+                            onInspectRequested: unitId => ui.inspectUnit(unitId)
                         }
                     }
 
@@ -953,26 +1046,10 @@ ApplicationWindow {
                     Layout.preferredWidth: 270
                     Layout.fillHeight: true
                 }
-
-                UnitInfoPanel {
-                    id: unitInfoPanel
-                    visible: window.live && window.flowKind === "live" && Boolean(flow.state.profileOpen)
-                    Layout.preferredWidth: window.width < 1000 ? 280 : 320
-                    Layout.fillHeight: true
-                }
-
-                UncertaintyPanel {
-                    visible: window.live && window.flowKind === "live" && !flow.state.profileOpen && ui.uncertainty.count > 0
-                    Layout.preferredWidth: window.width < 1000 ? 260 : 300
-                    Layout.fillHeight: true
-                    viewData: ui.uncertainty
-                    selectedUnit: s.console.unitId
-                    onInspectRequested: unitId => ui.inspectUnit(unitId)
-                }
             }
 
             LiveConsole {
-                visible: window.live && window.flowKind === "live"
+                visible: window.liveConsoleNeeded
                 Layout.fillWidth: true
                 viewData: ui.console
                 drawerHeight: Math.min(186, Math.max(150, window.height * 0.22))
@@ -1002,7 +1079,9 @@ ApplicationWindow {
                 spacing: 4
 
                 RowLayout {
+                    id: statusRow
                     Layout.fillWidth: true
+                    Layout.minimumHeight: 24
                     spacing: 8
 
                     Rectangle {
@@ -1043,6 +1122,32 @@ ApplicationWindow {
                     Item {
                         visible: (s.note || "").length === 0
                         Layout.fillWidth: true
+                    }
+                    RowLayout {
+                        visible: window.live && window.flowKind === "live" && ui.console.selected && !window.liveConsoleNeeded
+                        spacing: 6
+                        Rectangle {
+                            width: 6; height: 6; radius: 3
+                            color: theme.selection
+                        }
+                        Text {
+                            text: ui.console.unitId
+                            color: theme.ink
+                            font.family: theme.fontMono
+                            font.pixelSize: theme.textXs
+                            font.weight: Font.DemiBold
+                        }
+                        ConsoleButton {
+                            objectName: "clearSelectionFooter"
+                            text: "Clear"
+                            variant: "subtle"
+                            implicitHeight: 22
+                            leftPadding: 8
+                            rightPadding: 8
+                            cornerRadius: theme.radiusSm
+                            tooltipText: "Clear selection (Esc)"
+                            onClicked: ui.clearSelection()
+                        }
                     }
                     Text {
                         text: "Src " + s.sourceTime + "s · Mask " + s.observationTime + "s · Geom " + s.geometryTime + "s"
@@ -1085,7 +1190,6 @@ ApplicationWindow {
         anchors.centerIn: parent
         modal: true
         title: "Start a new registration?"
-        standardButtons: Dialog.Yes | Dialog.No
         Overlay.modal: Rectangle { color: theme.scrim }
         background: Rectangle {
             color: theme.bgSurface
@@ -1110,6 +1214,27 @@ ApplicationWindow {
             text: "Current drafts will be cleared. Saved references are kept."
             color: theme.inkSecondary
             font.pixelSize: theme.textSm
+        }
+        footer: Rectangle {
+            implicitHeight: 54
+            color: "transparent"
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 18
+                anchors.rightMargin: 18
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                ConsoleButton {
+                    text: "Cancel"
+                    variant: "subtle"
+                    onClicked: resetDialog.reject()
+                }
+                ConsoleButton {
+                    text: "Reset"
+                    variant: "danger"
+                    onClicked: resetDialog.accept()
+                }
+            }
         }
         onAccepted: ui.reset()
     }

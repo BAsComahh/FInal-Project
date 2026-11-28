@@ -305,7 +305,7 @@ Rectangle {
                         font.pixelSize: panel.theme.textXs
                         font.weight: Font.DemiBold
                     }
-                    ComboBox {
+                    ConsoleComboBox {
                         id: kindCombo
                         objectName: "terrainEditKind"
                         Layout.fillWidth: true
@@ -315,21 +315,6 @@ Rectangle {
                                 if (panel.kindOptions[i].value === panel.editKind) return i
                             }
                             return 0
-                        }
-                        contentItem: Text {
-                            leftPadding: 10
-                            text: kindCombo.displayText
-                            color: panel.theme.ink
-                            font.family: panel.theme.fontBody
-                            font.pixelSize: panel.theme.textSm
-                            verticalAlignment: Text.AlignVCenter
-                            elide: Text.ElideRight
-                        }
-                        background: Rectangle {
-                            implicitHeight: 32
-                            radius: panel.theme.radiusSm
-                            color: panel.theme.bgTrack
-                            border.color: kindCombo.activeFocus ? panel.theme.selection : panel.theme.border
                         }
                         onActivated: idx => {
                             if (idx >= 0 && idx < panel.kindOptions.length) {

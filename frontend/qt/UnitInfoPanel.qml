@@ -53,9 +53,14 @@ Rectangle {
             }
             ConsoleButton {
                 objectName: "closeUnitInfo"
-                text: "Close"
-                variant: "subtle"
+                iconKind: "close"
+                text: ""
+                variant: "ghost"
+                implicitWidth: 28
                 implicitHeight: 26
+                leftPadding: 0
+                rightPadding: 0
+                tooltipText: "Close (Esc)"
                 onClicked: flow.closeProfile()
             }
         }
@@ -92,10 +97,18 @@ Rectangle {
                             elide: Text.ElideRight
                         }
 
+                        // Army-list stat strip matching the floating UnitHud card
+                        StatStrip {
+                            visible: fieldCol.modelData.kind === "stats"
+                            Layout.fillWidth: true
+                            stats: fieldCol.modelData.kind === "stats" ? (fieldCol.modelData.value || []) : []
+                        }
+
                         TextField {
                             Layout.fillWidth: true
-                            visible: fieldCol.modelData.kind === "text" || fieldCol.modelData.kind === "number" || fieldCol.modelData.kind === "rules"
-                            text: String(fieldCol.modelData.value)
+                            visible: fieldCol.modelData.kind === "text" || fieldCol.modelData.kind === "number"
+                            text: (fieldCol.modelData.kind === "text" || fieldCol.modelData.kind === "number")
+                                  ? String(fieldCol.modelData.value) : ""
                             selectByMouse: true
                             color: panel.theme.ink
                             placeholderTextColor: panel.theme.inkMuted
@@ -114,6 +127,106 @@ Rectangle {
                             onTextEdited: panel.rows[fieldCol.index].value = text
                         }
 
+                        // Segmented A / B selector for side / army
+                        Rectangle {
+                            id: sidePicker
+                            visible: fieldCol.modelData.kind === "side"
+                            property string selectedSide: fieldCol.modelData.kind === "side"
+                                                          ? String(fieldCol.modelData.value || "").trim().toUpperCase() : ""
+                            Layout.fillWidth: true
+                            implicitHeight: 34
+                            radius: panel.theme.radiusSm
+                            color: panel.theme.bgTrack
+                            border.color: panel.theme.border
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                spacing: 4
+
+                                Repeater {
+                                    model: [
+                                        { id: "A", label: "Side A" },
+                                        { id: "B", label: "Side B" }
+                                    ]
+                                    Button {
+                                        id: sideBtn
+                                        required property var modelData
+                                        objectName: "unitSide_" + modelData.id
+                                        readonly property bool isA: modelData.id === "A"
+                                        readonly property bool isSelected: sidePicker.selectedSide === modelData.id
+                                        readonly property color tone: isA ? panel.theme.sideA : panel.theme.sideB
+                                        readonly property color toneSoft: isA ? panel.theme.sideASoft : panel.theme.sideBSoft
+                                        readonly property color toneBorder: isA ? panel.theme.sideABorder : panel.theme.sideBBorder
+                                        Layout.fillWidth: true
+                                        Layout.fillHeight: true
+                                        onClicked: {
+                                            sidePicker.selectedSide = sideBtn.modelData.id
+                                            panel.rows[fieldCol.index].value = sideBtn.modelData.id
+                                        }
+                                        background: Rectangle {
+                                            radius: panel.theme.radiusXs
+                                            color: sideBtn.isSelected ? sideBtn.toneSoft
+                                                 : (sideBtn.hovered ? panel.theme.bgSubtle : "transparent")
+                                            border.width: sideBtn.isSelected ? 1 : 0
+                                            border.color: sideBtn.toneBorder
+                                        }
+                                        contentItem: RowLayout {
+                                            spacing: 6
+                                            Item { Layout.fillWidth: true }
+                                            Rectangle {
+                                                width: 7; height: 7; radius: 4
+                                                color: sideBtn.tone
+                                                opacity: sideBtn.isSelected ? 1.0 : 0.45
+                                            }
+                                            Text {
+                                                text: sideBtn.modelData.label
+                                                color: sideBtn.isSelected ? panel.theme.ink : panel.theme.inkSecondary
+                                                font.family: panel.theme.fontBody
+                                                font.pixelSize: panel.theme.textSm
+                                                font.weight: sideBtn.isSelected ? Font.DemiBold : Font.Normal
+                                            }
+                                            Item { Layout.fillWidth: true }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Multi-line auto-wrapping editor for Special rules (no single-line truncation)
+                        TextArea {
+                            id: rulesArea
+                            objectName: fieldCol.modelData.kind === "rules" ? "unitSpecialRules" : ""
+                            Layout.fillWidth: true
+                            visible: fieldCol.modelData.kind === "rules"
+                            implicitHeight: Math.max(58, contentHeight + topPadding + bottomPadding)
+                            text: fieldCol.modelData.kind === "rules" ? String(fieldCol.modelData.value || "") : ""
+                            wrapMode: TextEdit.Wrap
+                            selectByMouse: true
+                            color: panel.theme.ink
+                            placeholderText: "e.g. Crushing Strength(1), Fly, Nimble"
+                            placeholderTextColor: panel.theme.inkMuted
+                            selectionColor: panel.theme.accentSoft
+                            selectedTextColor: panel.theme.ink
+                            font.family: panel.theme.fontBody
+                            font.pixelSize: panel.theme.textSm
+                            leftPadding: 10
+                            rightPadding: 10
+                            topPadding: 7
+                            bottomPadding: 7
+                            background: Rectangle {
+                                radius: panel.theme.radiusSm
+                                color: panel.theme.bgTrack
+                                border.width: rulesArea.activeFocus ? 1.5 : 1
+                                border.color: rulesArea.activeFocus ? panel.theme.selection : panel.theme.border
+                            }
+                            onTextChanged: {
+                                if (fieldCol.modelData.kind === "rules" && fieldCol.index >= 0 && fieldCol.index < panel.rows.length) {
+                                    panel.rows[fieldCol.index].value = text
+                                }
+                            }
+                        }
+
                         Rectangle {
                             Layout.fillWidth: true
                             visible: fieldCol.modelData.kind === "readonly"
@@ -126,7 +239,7 @@ Rectangle {
                                 id: refText
                                 anchors.fill: parent
                                 anchors.margins: 6
-                                text: String(fieldCol.modelData.value || "")
+                                text: fieldCol.modelData.kind === "readonly" ? String(fieldCol.modelData.value || "") : ""
                                 textFormat: TextEdit.PlainText
                                 readOnly: true
                                 selectByMouse: true
@@ -137,7 +250,7 @@ Rectangle {
                             }
                         }
 
-                        ComboBox {
+                        ConsoleComboBox {
                             id: infoCombo
                             Layout.fillWidth: true
                             visible: fieldCol.modelData.kind === "choice"
@@ -147,21 +260,6 @@ Rectangle {
                                 const found = opts.indexOf(String(fieldCol.modelData.value))
                                 return found >= 0 ? found : 0
                             }
-                            contentItem: Text {
-                                leftPadding: 10
-                                text: infoCombo.displayText
-                                color: panel.theme.ink
-                                font.family: panel.theme.fontBody
-                                font.pixelSize: panel.theme.textSm
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
-                            }
-                            background: Rectangle {
-                                implicitHeight: 32
-                                radius: panel.theme.radiusSm
-                                color: panel.theme.bgTrack
-                                border.color: infoCombo.activeFocus ? panel.theme.selection : panel.theme.border
-                            }
                             onActivated: idx => {
                                 const opts = fieldCol.modelData.options || []
                                 if (idx >= 0 && idx < opts.length) {
@@ -170,18 +268,11 @@ Rectangle {
                             }
                         }
 
-                        CheckBox {
+                        ConsoleCheckBox {
                             id: infoChk
                             visible: fieldCol.modelData.kind === "bool"
                             text: fieldCol.modelData.label
                             checked: Boolean(fieldCol.modelData.value)
-                            contentItem: Text {
-                                leftPadding: infoChk.indicator.width + infoChk.spacing
-                                text: infoChk.text
-                                color: panel.theme.ink
-                                font.pixelSize: panel.theme.textSm
-                                verticalAlignment: Text.AlignVCenter
-                            }
                             onToggled: panel.rows[fieldCol.index].value = checked
                         }
                     }
@@ -211,7 +302,7 @@ Rectangle {
             Layout.fillWidth: true
             spacing: 8
             ConsoleButton {
-                text: "Close"
+                text: "Cancel"
                 variant: "subtle"
                 Layout.fillWidth: true
                 onClicked: flow.closeProfile()

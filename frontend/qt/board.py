@@ -14,7 +14,7 @@ from components.homography import transform_points
 from frontend.shared.layers import QueryLayers
 
 # Tightly harmonized team palettes in BGR so adjacent units remain distinguishable
-# without drifting into Replay amber (#e8a23a) or Recovery yellow-gold.
+# without drifting into the amber selection highlight or Recovery yellow-gold.
 _SIDE_A_BGR = (
     (224, 166, 76),
     (212, 146, 60),
@@ -50,8 +50,8 @@ _TERRAIN_KIND_BGR = {
     "decorative": (162, 174, 184),
 }
 
-# Unified high-contrast selection highlight (Ice Cyan #4ce8ff in BGR)
-_SELECTION_BGR = (255, 232, 76)
+# Unified high-contrast selection highlight (Amber #ffc94d in BGR), distinct from side A blue / side B red
+_SELECTION_BGR = (77, 201, 255)
 _TARGET_BGR = (153, 211, 54)
 _RECOVERY_BGR = (64, 208, 250)
 
@@ -127,7 +127,7 @@ def measure_pill_box(text, scale, has_dot=True):
     return int(box_w), int(box_h)
 
 
-def draw_pill_tag(rgba, text, x, y, scale, *, border_bgr=(255, 232, 76), fill_bgra=(34, 25, 16, 235), text_bgra=(247, 243, 237, 255)):
+def draw_pill_tag(rgba, text, x, y, scale, *, border_bgr=(77, 201, 255), fill_bgra=(34, 25, 16, 235), text_bgra=(247, 243, 237, 255)):
     """Draw a crisp anti-aliased rounded pill tag directly onto a BGRA canvas ROI."""
     text = str(text)
     font_px = max(14, round(15.5 * scale))

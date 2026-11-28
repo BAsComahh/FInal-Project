@@ -82,37 +82,47 @@ ColumnLayout {
             anchors.bottomMargin: 7
             spacing: 7
 
-            // Live unified toolbar
+            // Live unified toolbar (display layers on the left, match actions on the right)
             RowLayout {
                 visible: controls.kind === "live"
                 Layout.fillWidth: true
                 spacing: 8
 
-                Flow {
-                    Layout.fillWidth: true
+                ConsoleButton {
+                    text: "Select"
+                    implicitHeight: 32
+                    primary: controls.uiState.console.tool === "select"
+                    onClicked: ui.doneTool()
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 20
+                    color: controls.theme.border
+                }
+
+                OverlayToggles {
+                    uiState: controls.uiState
+                    prefix: "live"
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Rectangle {
+                    visible: controls.width < 920
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 20
+                    color: controls.theme.border
+                }
+
+                RowLayout {
                     spacing: 6
 
                     ConsoleButton {
-                        text: "Select"
-                        implicitHeight: 32
-                        primary: controls.uiState.console.tool === "select"
-                        onClicked: ui.doneTool()
-                    }
-
-                    Rectangle { width: 1; height: 22; color: controls.theme.borderSoft }
-
-                    OverlayToggles {
-                        uiState: controls.uiState
-                        prefix: "live"
-                    }
-
-                    Rectangle { width: 1; height: 22; color: controls.theme.borderSoft }
-
-                    ConsoleButton {
-                        text: "Unit information"
+                        text: controls.width < 940 ? "Unit info" : "Unit information"
                         implicitHeight: 32
                         variant: Boolean(flow.state && flow.state.profileOpen) ? "default" : "subtle"
-                        primary: Boolean(flow.state && flow.state.profileOpen)
+                        active: Boolean(flow.state && flow.state.profileOpen)
                         enabled: controls.uiState.console.selected
                         tooltipText: controls.uiState.console.selected
                                      ? ("View profile and edit rule attributes for " + controls.uiState.console.unitId)
@@ -132,11 +142,55 @@ ColumnLayout {
                         onClicked: flow.open("recalibrate")
                     }
                     ConsoleButton {
-                        text: "Debug"
+                        id: moreButton
+                        objectName: "liveMoreMenu"
+                        iconKind: "more"
+                        text: ""
+                        implicitWidth: 34
                         implicitHeight: 32
+                        leftPadding: 0
+                        rightPadding: 0
                         variant: "subtle"
-                        enabled: !controls.uiState.pendingPlay
-                        onClicked: flow.open("debug")
+                        active: moreMenu.visible
+                        tooltipText: "More tools"
+                        onClicked: moreMenu.popup(moreButton, moreButton.width - moreMenu.width, moreButton.height + 4)
+
+                        Menu {
+                            id: moreMenu
+                            width: 172
+                            padding: 4
+                            background: Rectangle {
+                                radius: controls.theme.radiusSm
+                                color: controls.theme.bgElevated
+                                border.color: controls.theme.borderStrong
+                                border.width: 1
+                            }
+                            delegate: MenuItem {
+                                id: mItem
+                                implicitHeight: 32
+                                contentItem: Text {
+                                    leftPadding: 8
+                                    rightPadding: 8
+                                    text: mItem.text
+                                    color: mItem.enabled
+                                           ? (mItem.highlighted ? controls.theme.selection : controls.theme.ink)
+                                           : controls.theme.inkMuted
+                                    font.family: controls.theme.fontBody
+                                    font.pixelSize: controls.theme.textSm
+                                    verticalAlignment: Text.AlignVCenter
+                                }
+                                background: Rectangle {
+                                    radius: controls.theme.radiusXs
+                                    color: mItem.highlighted ? controls.theme.accentSoft : "transparent"
+                                }
+                            }
+                            Action {
+                                objectName: "liveDebugAction"
+                                text: "Debug snapshot"
+                                enabled: !controls.uiState.pendingPlay
+                                onTriggered: flow.open("debug")
+                            }
+                        }
                     }
                 }
             }

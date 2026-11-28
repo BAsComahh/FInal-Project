@@ -39,6 +39,11 @@ Item {
         leader.requestPaint()
     }
 
+    Connections {
+        target: hud.theme
+        function onDarkChanged() { leader.requestPaint() }
+    }
+
     Canvas {
         id: leader
         anchors.fill: parent
@@ -65,13 +70,13 @@ Item {
             ctx.lineWidth = 4.0
             ctx.stroke()
 
-            ctx.strokeStyle = "#4ce8ff"
+            ctx.strokeStyle = String(hud.theme.overlaySelection)
             ctx.lineWidth = 1.8
             ctx.stroke()
 
             ctx.beginPath()
             ctx.arc(px, py, 4.5, 0, Math.PI * 2)
-            ctx.fillStyle = "#4ce8ff"
+            ctx.fillStyle = String(hud.theme.overlaySelection)
             ctx.fill()
             ctx.lineWidth = 2.0
             ctx.strokeStyle = "#090e13"

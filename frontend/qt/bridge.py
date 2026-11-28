@@ -181,6 +181,7 @@ class MatchBridge(QObject):
         )
         if active_badges != self._badges:
             self._badges = active_badges
+            self.live.set_badges(active_badges)
             self.badgesChanged.emit()
 
         if state.units.types is not self._catalog_types:

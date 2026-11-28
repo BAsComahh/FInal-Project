@@ -27,7 +27,7 @@ class QueryLayers:
                 line = [result["point_a_mm"], result["point_b_mm"]]
             if line is not None:
                 points = project(line)
-                color = (153, 224, 96) if result.get("status") in ("ok", "clear") else (76, 180, 240)
+                color = (153, 224, 96) if result.get("status") in ("ok", "clear") else (80, 145, 255)
                 cv2.line(self._overlay, tuple(points[0]), tuple(points[1]), (18, 26, 34), 5, cv2.LINE_AA)
                 cv2.line(self._overlay, tuple(points[0]), tuple(points[1]), color, 2, cv2.LINE_AA)
                 for point in points:
