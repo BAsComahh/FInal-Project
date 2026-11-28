@@ -4,6 +4,7 @@ from functools import wraps
 from types import MappingProxyType
 from collections.abc import Mapping
 
+import cv2
 import numpy as np
 
 
@@ -39,12 +40,12 @@ class CommandReceipt:
 
 
 def command(method):
-    """Normalize external command failures; internal contract errors still surface."""
+    """Normalize expected input, file and OpenCV errors at the command boundary."""
     @wraps(method)
     def invoke(*args, **kwargs):
         try:
             result = method(*args, **kwargs)
-        except (ValueError, OSError) as error:
+        except (ValueError, OSError, cv2.error) as error:
             return CommandReceipt("rejected", str(error))
         return result if isinstance(result, CommandReceipt) else CommandReceipt("accepted", value=result)
     return invoke

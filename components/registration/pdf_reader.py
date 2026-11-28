@@ -19,6 +19,15 @@ _PROFILE = re.compile(
     r"(?P<height>\d+)\s+\[(?P<points>\d+)\]$"
 )
 _OPTION = re.compile(r"^(?P<label>.+?)\s+\[(?P<points>\d+)\]$")
+_PROFILE_PRICE = re.compile(r"\s*\[\d+\]$")
+_BASE_SIZE = re.compile(r"\s*\bBase Size\s*:", re.I)
+_PROFILE_ROLE = re.compile(r"^(?:Champion|Core|Aux|Auxiliary|Support|Specialist|Warlord|Commander|Hero)(?=\s|\(|$)")
+_PROFILE_FIELDS = re.compile(r"(?:\s+(?:\d+(?:\.\d+)?\+?|(?:\d+|-)/(?:\d+|-)|-)){2,}(?=\s|$)")
+_PROFILE_TYPE = re.compile(
+    r"^\s*(?:\([^)]*\)\s*)?(?:(?:Heavy|Large|Monstrous|Hvy|Lrg|Mon)\s+)?"
+    r"(?:Inf(?:antry)?|Cav(?:alry)?|Chariot|Cht|Monster|Mon|Titan|War (?:Engine|Eng))"
+    r"(?:\s+\([^)]*\))?(?:\s+(?:Troop|Regiment|Horde|Legion|Single|Hero))?(?:\s+\d+(?:\.\d+)?)?$", re.I,
+)
 _WEAPON = re.compile(r'^(.+?)\s*\((\d+(?:\.\d+)?)\s*["\u201d\u2033]\)$')
 _TOTALS = {"units": r"Total Units:\s*(\d+)", "points": r"Total Points:\s*(\d+)",
            "unit_strength": r"Total Unit Strength:\s*(\d+)"}
@@ -55,7 +64,7 @@ def _details(lines):
     section = None
     for line in lines:
         line = " ".join(line.split())
-        if line.startswith("Special Rules:"):
+        if line.startswith("Special Rules:") or (section is rules and "Traits:" in line):
             content = line.removeprefix("Special Rules:").strip()
             rule_text, separator, trait_text = content.partition("Traits:")
             rules.append(rule_text)
@@ -79,7 +88,17 @@ def _details(lines):
             section.append(line)
         else:
             unparsed.append(line)
-    return {"special_rules": _split_rules(" ".join(rules)), "traits": _split_rules(" ".join(traits)),
+    special_rules = []
+    for rule in _split_rules(" ".join(rules)):
+        # A base note can have a preceding rule on the same line in the PDF.
+        for note in _BASE_SIZE.finditer(rule):
+            prefix = rule[:note.start()]
+            if prefix.count("(") == prefix.count(")"):
+                rule = prefix
+                break
+        if rule:
+            special_rules.append(rule)
+    return {"special_rules": special_rules, "traits": _split_rules(" ".join(traits)),
             "options": options, "weapons": weapons, "unparsed_details": unparsed}
 
 
@@ -199,8 +218,11 @@ def _parse_pages(pages, *, side=None):
                 continue
             if line.startswith("Powered by TCPDF"):
                 continue
-            if heading is not None and re.match(r"(?:Champion|Core|Support|Specialist)\b.*\[\d+\]$", line):
-                raise ValueError(f"Unsupported unit profile at page {page_number}, line {line_number}: {line}")
+            if heading is not None and (priced := _PROFILE_PRICE.search(line)):
+                label = line[:priced.start()]
+                role = _PROFILE_ROLE.match(label)
+                if role and (current is None or _PROFILE_FIELDS.search(label) or _PROFILE_TYPE.fullmatch(label[role.end():])):
+                    raise ValueError(f"Unsupported unit profile at page {page_number}, line {line_number}: {line}")
             if current is not None:
                 current["source"]["details"].append(raw.strip())
     if current is not None:

@@ -55,7 +55,9 @@ class RecoveryCandidate:
 
     def seed(self, predictor, tracker, frame, point, source_frame):
         self._check()
+        predictor.load()
         sam = copy(predictor)
+        sam.session = None
         sam.reset()
         try:
             initial = sam.click(frame, point, object_id=1, positive=True, source_frame=source_frame)

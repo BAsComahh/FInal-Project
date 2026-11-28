@@ -50,7 +50,10 @@ class Sam3PointSegmenter:
             self.model_id, local_files_only=True, output_loading_info=True)
         if info.get("missing_keys") or info.get("mismatched_keys"):
             raise ValueError("Checkpoint does not contain all required SAM3 point-prompt weights")
-        model = model.to(device=self.device or _pick_device(), dtype=torch.float32).eval()
+        from components.tracking.edgetam import bind_cuda_device
+        device = self.device or _pick_device()
+        bind_cuda_device(device)
+        model = model.to(device=device, dtype=torch.float32).eval()
         self.processor, self.model = processor, model
         self.device = str(model.device)
 
@@ -73,7 +76,9 @@ class Sam3PointSegmenter:
             raise ValueError("labels must contain one 0/1 value per point and at least one positive point")
         self._load_model()
         import torch
+        from components.tracking.edgetam import bind_cuda_device
 
+        bind_cuda_device(self.device)
         inputs = self.processor(images=self._pil_image, input_points=[[points.tolist()]],
                                 input_labels=[[labels.tolist()]], return_tensors="pt").to(self.model.device)
         if self._embeddings is not None:

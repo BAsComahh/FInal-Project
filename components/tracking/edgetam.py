@@ -45,7 +45,7 @@ def bind_cuda_device(device):
     if device is not None and torch.cuda.is_available():
         target = torch.device(device)
         if target.type == "cuda":
-            torch.cuda.set_device(target)
+            torch.cuda.set_device(target.index if target.index is not None else torch.cuda.current_device())
 
 
 def _install_cuda_attention_accel(model):

@@ -183,6 +183,9 @@ class LiveSelection:
         if self.target_id is not None and self.target_id not in state.units.units:
             self.target_id = None
             self.match.geometry.clear()
+        elif (self.tool == "distance" and self.target_id is not None and self.note
+              and not self.unavailable(state, self.unit_id) and not self.unavailable(state, self.target_id)):
+            self.request(state)
 
     @staticmethod
     def object_id(state, unit_id):
@@ -191,11 +194,16 @@ class LiveSelection:
     @staticmethod
     def hit(state, x, y):
         prediction = state.current.prediction or {}
+        height, width = state.current.frame.shape[:2]
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        ix, iy = int(x), int(y)
         for obj, mask in reversed(list(zip(prediction.get("object_ids", ()), prediction.get("masks", ())))):
             if obj not in state.units.bindings:
                 continue
             tray = prediction.get("trays", {}).get(obj)
-            if mask[int(y), int(x)] or (tray is not None and cv2.pointPolygonTest(
+            on_mask = iy < mask.shape[0] and ix < mask.shape[1] and mask[iy, ix]
+            if on_mask or (tray is not None and cv2.pointPolygonTest(
                     np.asarray(tray["corners_image"], np.float32), (float(x), float(y)), False) >= 0):
                 return state.units.bindings[obj]
         return None

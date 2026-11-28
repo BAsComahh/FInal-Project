@@ -128,7 +128,10 @@ class GameData:
         self.rules.observe(prediction, metadata["frame_index"], source_to_plane=self.board.source_to_plane,
                            calibration_version=metadata.get("calibration_version"), bindings=self.units.bindings)
         current = self.current
-        timings = {**(current.prediction.get("timings_seconds") or {}), **(prediction.get("timings_seconds") or {})}
+        timings = dict(current.prediction.get("timings_seconds") or {})
+        batch_timings = prediction.get("timings_seconds") or {}
+        if "tray_fit" in batch_timings:
+            timings["tray_fit"] = batch_timings["tray_fit"]
         current.prediction = {**current.prediction, **{key: prediction[key] for key in
             ("trays", "tray_errors", "facing_results", "geometry_metadata", "tray_fit_stats") if key in prediction},
             **({"timings_seconds": timings} if timings else {})}

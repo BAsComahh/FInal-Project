@@ -1,5 +1,7 @@
 """Conservatively join adjacent, nearly collinear LSD segments."""
 
+from math import floor
+
 import numpy as np
 
 
@@ -52,6 +54,48 @@ def merge_eligible_mask(lines, min_segment_length=20, axis_tolerance=15,
     return eligible
 
 
+class _SpanGrid:
+    def __init__(self, spans, distance, gap):
+        self.size = max(32.0, distance, gap)
+        self.slack = 64 * np.finfo(float).eps * max(1.0, np.max(np.abs(spans)), self.size)
+        self.distance, self.gap = distance, gap
+        self.buckets = {}
+        self.long_spans = []
+        for index, span in enumerate(spans.reshape(-1, 2, 2)):
+            cells = self._cells(self._bounds(span.min(axis=0), span.max(axis=0)))
+            if cells is None:
+                self.long_spans.append(index)
+            else:
+                for cell in cells:
+                    self.buckets.setdefault(cell, []).append(index)
+
+    def _bounds(self, lower, upper):
+        return tuple(floor(value / self.size) for value in (*lower, *upper))
+
+    @staticmethod
+    def _cells(bounds):
+        x0, y0, x1, y1 = bounds
+        if (x1 - x0 + 1) * (y1 - y0 + 1) > 256:
+            return None
+        return ((x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1))
+
+    def neighborhood(self, fit):
+        # A passing span intersects the fitted span's gap/residual rectangle.
+        # Indexing entire span boxes also finds segments with both ends outside.
+        extent = np.abs(fit["direction"]) * self.gap + np.abs(fit["normal"]) * self.distance + self.slack
+        points = fit["line"].reshape(2, 2)
+        return self._bounds(points.min(axis=0) - extent, points.max(axis=0) + extent)
+
+    def lookup(self, bounds):
+        cells = self._cells(bounds)
+        if cells is None:
+            return None
+        indices = set(self.long_spans)
+        for cell in cells:
+            indices.update(self.buckets.get(cell, ()))
+        return np.array(sorted(indices), dtype=np.intp)
+
+
 def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
                              distance_tolerance=6, max_gap=50, min_coverage=0.5,
                              axis_tolerance=15, *, check_source_length=True,
@@ -92,6 +136,7 @@ def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
     clusters = [{"sources": [int(i)], "fit": _fit_segments(lines[[i]]), "formed_in_round": 0}
                 for i in np.flatnonzero(eligible)]
     rounds = []
+    spatially_skipped = 0
 
     def describe(cluster):
         members, fitted = cluster["sources"], cluster["fit"]
@@ -110,16 +155,29 @@ def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
         span_lengths = np.linalg.norm(span_delta, axis=1)
         span_directions = span_delta / span_lengths[:, None]
         available = np.ones(len(clusters), dtype=bool)
+        remaining = len(clusters)
+        # Both bounds are necessary. Extreme coordinates and oversized queries use the original scan.
+        grid = (_SpanGrid(spans, distance_tolerance, max_gap)
+                if check_distance and check_gap and remaining >= 64
+                and np.max(np.abs(spans), initial=0) < 1e12
+                and max(distance_tolerance, max_gap) < 1e12 else None)
         following = []
         for seed in np.argsort(-span_lengths, kind="stable"):
             if not available[seed]:
                 continue
             available[seed] = False
+            remaining -= 1
             members = clusters[seed]["sources"].copy()
             fit = clusters[seed]["fit"]
             joined_clusters = 1
-            while True:
-                indices = np.flatnonzero(available)
+            neighborhood, nearby = None, None
+            while remaining:
+                if grid is not None:
+                    bounds = grid.neighborhood(fit)
+                    if bounds != neighborhood:
+                        neighborhood, nearby = bounds, grid.lookup(bounds)
+                indices = np.flatnonzero(available) if nearby is None else nearby[available[nearby]]
+                spatially_skipped += remaining - len(indices)
                 if len(indices) == 0:
                     break
                 points = spans[indices].reshape(-1, 2, 2) - fit["center"]
@@ -161,6 +219,7 @@ def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
                         continue
                     members, fit = proposed, fitted
                     available[index] = False
+                    remaining -= 1
                     joined_clusters += 1
                     added = True
                     break
@@ -181,7 +240,8 @@ def merge_collinear_segments(lines, min_segment_length=20, angle_tolerance=6,
         converged = not rounds or rounds[-1]["merge_operations"] == 0
         diagnostics.clear()
         diagnostics.update(input_count=len(lines), eligible_count=int(eligible.sum()),
-                           rejection_attempts=rejected, merged_group_count=len(groups),
+                           rejection_attempts=rejected, spatially_skipped=spatially_skipped,
+                           merged_group_count=len(groups),
                            repeat_until_stable=bool(repeat_until_stable), converged=converged,
                            rounds=rounds, pass_count=len(rounds),
                            productive_pass_count=sum(r["merge_operations"] > 0 for r in rounds),

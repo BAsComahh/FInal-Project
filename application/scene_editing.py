@@ -28,6 +28,9 @@ class SceneEditing:
         unit = self._data.units.units.get(unit_id)
         if unit is None:
             raise ValueError("Unit is no longer registered.")
+        fields = {"height", "speed_in", "side", "unit_kind", "special_rules", "engaged", "wavering"}
+        if values.keys() - fields:
+            raise ValueError("Unknown editable unit profile field.")
         candidate = deepcopy(values)
         validate_unit_profile(candidate, candidate, unit_id)
         unit["attributes"].update({key: candidate[key] for key in values})
@@ -83,7 +86,7 @@ class SceneEditing:
         if not isinstance(values.get("label"), str) or not values["label"].strip():
             raise ValueError("Enter a terrain label.")
         terrain = validate_scene({"ruleset": "kow4-mini", "board_size_mm": self._data.board.board_size_mm,
-            "units": [], "terrain": [{**deepcopy(values), "terrain_id": terrain_id,
+            "units": [], "terrain": [{**deepcopy(values), "label": values["label"].strip(), "terrain_id": terrain_id,
                 "polygon_mm": transform_points(source, self._data.board.source_to_plane).tolist()}]})["terrain"][0]
         terrain.pop("polygon_mm")
         self._data.rules.terrain.append({**terrain, "terrain_id": terrain_id,

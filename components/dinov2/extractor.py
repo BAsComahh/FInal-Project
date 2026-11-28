@@ -34,8 +34,9 @@ class DinoV2Extractor:
         if self.device is None:
             self.device = (f"cuda:{max(range(torch.cuda.device_count()), key=lambda i: torch.cuda.get_device_properties(i).total_memory)}"
                            if torch.cuda.is_available() else "cpu")
-        if torch.cuda.is_available() and torch.device(self.device).type == "cuda":
-            torch.cuda.set_device(torch.device(self.device))
+        from components.tracking.edgetam import bind_cuda_device
+
+        bind_cuda_device(self.device)
         self.processor = AutoImageProcessor.from_pretrained(
             self.model_id, local_files_only=not self.allow_download)
         model = AutoModel.from_pretrained(self.model_id, local_files_only=not self.allow_download)
@@ -83,8 +84,9 @@ class DinoV2Extractor:
         self.load()
         import torch
 
-        if torch.cuda.is_available() and torch.device(self.device).type == "cuda":
-            torch.cuda.set_device(torch.device(self.device))
+        from components.tracking.edgetam import bind_cuda_device
+
+        bind_cuda_device(self.device)
 
         batches = []
         for start in range(0, len(images), batch_size):

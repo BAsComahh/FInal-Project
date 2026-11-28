@@ -34,7 +34,7 @@ def update_tracking(records, roster, prediction, metadata, disappearance_seconds
         raise ValueError("Tracking observations require a non-negative finite source timestamp.")
     frame_index = metadata["frame_index"]
     version = metadata.get("calibration_version", 0)
-    visible = {obj for obj, mask in zip(prediction["object_ids"], prediction["masks"]) if mask.any()}
+    visible = {obj for obj, mask in zip(prediction["object_ids"], prediction["masks"], strict=True) if mask.any()}
     unavailable, inactive = [], []
     for object_id, unit_id in roster.bindings.items():
         unit = roster.units[unit_id]

@@ -55,6 +55,7 @@ class HistoryStore:
         self._batch_size = 0
         self._next_retry = 0.0
         self._closed = False
+        self._writer = None
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="match-history")
 
     @property
@@ -136,13 +137,17 @@ class HistoryStore:
             if self._pending:
                 self._submit(len(self._pending))
                 self._complete(monotonic())
-            self._executor.shutdown(wait=True)
-            self._closed = True
+            try:
+                self._executor.submit(self._close_writer).result()
+            finally:
+                self._executor.shutdown(wait=True)
+                self._closed = True
         return not self._pending
 
-    def _write(self, entries, calibrations, frames):
+    def _open_writer(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.path, timeout=0.2)) as connection:
+        connection = sqlite3.connect(self.path, timeout=0.2)
+        try:
             version = connection.execute("PRAGMA user_version").fetchone()[0]
             if version not in (0, 1, SCHEMA_VERSION):
                 raise ValueError(f"Unsupported history schema version: {version}")
@@ -167,8 +172,24 @@ class HistoryStore:
                     updated_sequence INTEGER NOT NULL REFERENCES observations(sequence), payload TEXT NOT NULL);
                 CREATE INDEX IF NOT EXISTS motion_unit_time ON motion_events(unit_id, start_seconds, end_seconds);
             """)
+            connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        except Exception:
+            connection.close()
+            raise
+        return connection
+
+    def _close_writer(self):
+        # SQLite connections are opened and closed on the writer thread.
+        writer, self._writer = self._writer, None
+        if writer is not None:
+            writer.close()
+
+    def _write(self, entries, calibrations, frames):
+        if self._writer is None:
+            self._writer = self._open_writer()
+        connection = self._writer
+        try:
             with connection:
-                connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 connection.executemany("INSERT INTO metadata VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
                                        [(key, _json(value)) for key, value in self.metadata.items()])
                 connection.executemany("INSERT INTO calibrations VALUES (?, ?) ON CONFLICT(version) DO NOTHING",
@@ -187,6 +208,9 @@ class HistoryStore:
                         [(event["event_id"], event["unit_id"], event["kind"], event["start"]["timestamp_seconds"],
                           event["end"]["timestamp_seconds"], event["updated_sequence"], _json(event))
                          for event in entry.get("motion_events", [])])
+        except sqlite3.Error:
+            self._close_writer()
+            raise
         for key, frame in frames.items():
             save_replay_frame(self.path, key, frame)
 

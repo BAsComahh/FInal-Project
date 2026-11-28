@@ -40,6 +40,8 @@ def draw_contours(image, edges):
 
 
 def make_comparison(image, edges, contour_overlay, line_overlay=None):
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     width = min(650, image.shape[1])
     height = round(image.shape[0] * width / image.shape[1])
     panels = []

@@ -11,7 +11,9 @@ class Replay:
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="replay")
         self.active = False
         self.epoch = 0
+        self.scene_revision = 0
         self._index = self._scene = None
+        self._shown_step = None
         self.steps = ()
         self.selected = 0
         self.error = ""
@@ -42,6 +44,7 @@ class Replay:
                 future.cancel()
         self._index_future = self._scene_future = None
         self._index = self._scene = None
+        self._shown_step = None
         self.steps = ()
         self.selected = 0
         self.error = ""
@@ -81,7 +84,6 @@ class Replay:
         selected = max(0, min(len(self.steps) - 1, index))
         if selected != self.selected:
             self.selected = selected
-            self._scene = None
             self.error = ""
             if self._scene_future is not None and self._scene_future.cancel():
                 self._scene_future = None
@@ -114,7 +116,6 @@ class Replay:
                 self._index, self.steps = index, freeze(steps)
                 self.selected = (max(0, len(steps) - 1) if opening else
                                  next((i for i, step in enumerate(steps) if step["event_id"] == event_id), 0))
-                self._scene = None
                 self.error = ""
                 if self._scene_future is not None and self._scene_future.cancel():
                     self._scene_future = None
@@ -125,10 +126,13 @@ class Replay:
             if index is self._index and selected == self.selected and epoch == self.epoch:
                 try:
                     self._scene = future.result()
+                    self._shown_step = index, selected
+                    self.scene_revision += 1
                 except Exception as error:
                     self.error = str(error)
                 changed = True
-        if self._index is not None and self._scene is None and not self.error and self._scene_future is None:
+        if (self._index is not None and self._shown_step != (self._index, self.selected)
+                and not self.error and self._scene_future is None):
             self._scene_request = self._index, self.selected, self.epoch
             self._scene_future = self._executor.submit(read_replay_scene, self._index, self.selected)
             changed = True

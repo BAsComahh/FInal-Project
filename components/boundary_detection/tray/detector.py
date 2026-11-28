@@ -74,6 +74,7 @@ def _work_lengths(size, config):
     lengths = {name: percent_to_length(getattr(config, f"{name}_pct"), short_side, name=f"{name}_pct")
                for name in ("min_line_length", "endpoint_gap", "edge_tolerance", "merge_distance", "merge_gap",
                             "corner_dedup", "corner_nudge", "candidate_dedup")}
+    lengths["half_beam_step"] = 0.05 * short_side
     lengths["search_width"] = percent_to_length(config.search_pct, float(size[0]), name="search_pct")
     lengths["search_depth"] = percent_to_length(config.search_pct, float(size[1]), name="search_pct")
     return lengths
@@ -145,6 +146,9 @@ def _corners(lines, config, shape, lengths):
     return unique
 
 
+_EDGE_SAMPLES = np.linspace(0.03, 0.97, 24)[:, None]
+
+
 class _Scorer:
     def __init__(self, view, raw, image_shape, config, lengths):
         self.view, self.config = view, config
@@ -158,9 +162,11 @@ class _Scorer:
         self.points = self.all_points[indices]
         self.center = self.all_points.mean(axis=0)
         self.raw = raw
-        delta = raw[:, 2:] - raw[:, :2]
-        self.lengths = np.linalg.norm(delta, axis=1)
-        self.directions = delta / np.maximum(self.lengths[:, None], 1e-9)
+        self.line_delta = raw[:, 2:] - raw[:, :2]
+        self.line_length_sq = (self.line_delta ** 2).sum(axis=1)
+        self.lengths = np.linalg.norm(self.line_delta, axis=1)
+        self.directions = self.line_delta / np.maximum(self.lengths[:, None], 1e-9)
+        self.angle_cosine = np.cos(np.radians(config.angle_tolerance_deg))
         self.tolerance = lengths["edge_tolerance"]
         self.mask_area = len(self.all_points)
         self.area = float(np.prod(view["size"]))
@@ -177,8 +183,13 @@ class _Scorer:
         delta = points - center
         u = np.array([np.cos(angle), np.sin(angle)])
         v = np.array([-u[1], u[0]])
-        coverage = float(((np.abs(delta @ u) <= self.view["size"][0] / 2)
-                          & (np.abs(delta @ v) <= self.view["size"][1] / 2)).mean())
+        edge_x = np.abs(delta @ u) - self.view["size"][0] / 2
+        edge_y = np.abs(delta @ v) - self.view["size"][1] / 2
+        # A pixel centred exactly on an edge contributes one half on that axis.
+        tolerance = 1e-9
+        share_x = (edge_x < -tolerance) + 0.5 * (np.abs(edge_x) <= tolerance)
+        share_y = (edge_y < -tolerance) + 0.5 * (np.abs(edge_y) <= tolerance)
+        coverage = float((share_x * share_y).mean())
         intersection = min(coverage * self.mask_area, visible_work_area)
         iou = intersection / max(1, self.mask_area + visible_work_area - intersection)
         return coverage, intersection / visible_work_area, iou
@@ -201,7 +212,11 @@ class _Scorer:
         height, width = self.view["mask"].shape
         if ((polygon < -1e-6).any() or (polygon[:, 0] > width - 1 + 1e-6).any() or (polygon[:, 1] > height - 1 + 1e-6).any()):
             return None
-        image_polygon = transform_points(polygon, self.view["work_to_image"])
+        mapping = self.view["work_to_image"]
+        divisors = polygon @ mapping[2, :2] + mapping[2, 2]
+        if not ((divisors > 0).all() or (divisors < 0).all()):
+            return None
+        image_polygon = transform_points(polygon, mapping)
         visible_fraction = 1.0
         visible_work_area = self.area
         if ((image_polygon < -1e-6).any() or
@@ -223,6 +238,27 @@ class _Scorer:
                 return None
         return polygon, image_polygon, visible_fraction, visible_work_area
 
+    def edge_evidence(self, polygon):
+        samples_per_side = np.zeros((4, 24))
+        for index, (a, b) in enumerate(zip(polygon, np.roll(polygon, -1, axis=0))):
+            direction = (b - a) / np.linalg.norm(b - a)
+            aligned = np.abs(self.directions @ direction) >= self.angle_cosine
+            lines = self.raw[aligned]
+            if not len(lines):
+                continue
+            samples = a + _EDGE_SAMPLES * (b - a)
+            x, y = np.rint(samples).astype(int).T
+            visible = self.view["visible"][y, x]
+            line_delta = self.line_delta[aligned]
+            offset = samples[:, None] - lines[None, :, :2]
+            t = np.clip((offset * line_delta).sum(axis=2) / self.line_length_sq[aligned], 0, 1)
+            nearest = lines[None, :, :2] + t[:, :, None] * line_delta
+            distances = np.linalg.norm(samples[:, None] - nearest, axis=2).min(axis=1)
+            samples_per_side[index] = np.exp(-0.5 * (distances / self.tolerance) ** 2) * visible
+        sides, edge_support, corner_support = _edge_evidence(samples_per_side)
+        return dict(edge_support=edge_support, edge_support_per_side=sides.tolist(),
+                    corner_support=corner_support)
+
     def score(self, proposal, method, *, exact=False):
         center, angle, provenance = proposal
         polygons = self.polygons(center, angle)
@@ -231,29 +267,12 @@ class _Scorer:
         polygon, image_polygon, visible_fraction, visible_work_area = polygons
         points = self.all_points if exact else self.points
         coverage, fill, iou = self.mask_scores(center, angle, points, visible_work_area)
-        samples_per_side = np.zeros((4, 24))
-        if exact or method != "mask":
-            for index, (a, b) in enumerate(zip(polygon, np.roll(polygon, -1, axis=0))):
-                direction = (b - a) / np.linalg.norm(b - a)
-                aligned = np.abs(self.directions @ direction) >= np.cos(np.radians(self.config.angle_tolerance_deg))
-                lines = self.raw[aligned]
-                if not len(lines):
-                    continue
-                samples = a + np.linspace(0.03, 0.97, 24)[:, None] * (b - a)
-                x, y = np.rint(samples).astype(int).T
-                visible = self.view["visible"][y, x]
-                line_delta = lines[:, 2:] - lines[:, :2]
-                offset = samples[:, None] - lines[None, :, :2]
-                t = np.clip((offset * line_delta).sum(axis=2) / (line_delta ** 2).sum(axis=1), 0, 1)
-                nearest = lines[None, :, :2] + t[:, :, None] * line_delta
-                distances = np.linalg.norm(samples[:, None] - nearest, axis=2).min(axis=1)
-                samples_per_side[index] = np.exp(-0.5 * (distances / self.tolerance) ** 2) * visible
-        sides, edge_support, corner_support = _edge_evidence(samples_per_side)
-        score = _fit_score(method, fill, iou, edge_support, corner_support)
+        evidence = (self.edge_evidence(polygon) if method != "mask" else
+                    dict(edge_support=0.0, edge_support_per_side=[0.0] * 4, corner_support=0.0))
+        score = _fit_score(method, fill, iou, evidence["edge_support"], evidence["corner_support"])
         return {"method": method, "score": score, "mask_coverage": coverage, "mask_fill": fill,
                 "mask_iou": float(iou), "visible_fraction": visible_fraction,
-                "edge_support": edge_support, "edge_support_per_side": sides.tolist(),
-                "corner_support": corner_support,
+                **evidence,
                 "center_work": np.asarray(center).tolist(), "angle_deg": float(np.degrees(angle) % 180),
                 "corners_work": polygon.tolist(), "corners_image": image_polygon.tolist(),
                 "corners_plane": transform_points(polygon, self.view["work_to_plane"]).tolist(),
@@ -290,11 +309,13 @@ def _corner_proposals(corners, size):
 
 
 def _local_proposals(center, angle, lengths, provenance):
-    for dx in (-2, 0, 2):
-        for dy in (-2, 0, 2):
+    nudge = 2 * lengths["corner_nudge"]
+    half_step = lengths["half_beam_step"]
+    offsets = sorted({-half_step, -nudge, 0, nudge, half_step})
+    for dx in offsets:
+        for dy in offsets:
             for degrees in (-2, 0, 2):
-                yield (center + np.array([dx, dy]) * lengths["corner_nudge"],
-                       angle + np.radians(degrees), provenance)
+                yield center + np.array([dx, dy]), angle + np.radians(degrees), provenance
 
 
 def _edge_seeds(lines, size, mask_center):
@@ -395,9 +416,10 @@ def _rank(proposals, method, scorer, config):
     ranked.sort(key=lambda item: (_acceptance(item, method, config) is not None,
                                   _reliable_corner(item, method, config), item["score"]), reverse=True)
     unique = []
+    period = 90 if scorer.view["size"][0] == scorer.view["size"][1] else 180
     for item in ranked:
         if not any(np.linalg.norm(np.asarray(item["center_work"]) - old["center_work"]) < scorer.thresholds["candidate_dedup"]
-                   and abs(((item["angle_deg"] - old["angle_deg"] + 90) % 180) - 90) < 2 for old in unique):
+                   and abs(((item["angle_deg"] - old["angle_deg"] + period / 2) % period) - period / 2) < 2 for old in unique):
             unique.append(item)
         if len(unique) >= config.top_k:
             break
@@ -518,6 +540,10 @@ def fit_tray(image, mask, size, *, image_to_plane=None, config=None, initial_cor
             count, top, rounds = _rank_local(initial_corners, scorer, config)
         else:
             count, top, rounds = _rank_complete(method, scorer, config, lines, corners)
+        if method == "mask":
+            # Edge evidence is reported for the retained candidates only.
+            for item in top:
+                item.update(scorer.edge_evidence(np.asarray(item["corners_work"])))
         accepted_item = _accepted_candidate(top, method, config)
         accepted = accepted_item is not None
         stages.append({"method": method, "candidate_count": count, "beam_rounds": rounds,

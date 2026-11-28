@@ -2,6 +2,7 @@
 
 import json
 import math
+from numbers import Real
 from pathlib import Path
 
 import cv2
@@ -14,10 +15,12 @@ class VideoSource:
             raise FileNotFoundError(f"Video not found: {self.path}")
         self.capture = cv2.VideoCapture(str(self.path))
         self.fps = self.capture.get(cv2.CAP_PROP_FPS)
-        self.frame_count = int(self.capture.get(cv2.CAP_PROP_FRAME_COUNT))
-        if not self.capture.isOpened() or not math.isfinite(self.fps) or self.fps <= 0 or self.frame_count < 1:
+        frame_count = self.capture.get(cv2.CAP_PROP_FRAME_COUNT)
+        if (not self.capture.isOpened() or not math.isfinite(self.fps) or self.fps <= 0
+                or not math.isfinite(frame_count) or frame_count < 1):
             self.close()
             raise ValueError(f"Cannot read video timeline: {self.path}")
+        self.frame_count = int(frame_count)
         self.duration = self.frame_count / self.fps
         self.frame_index = -1
         self.frame = None
@@ -33,7 +36,7 @@ class VideoSource:
                 pass
 
     def read_at(self, seconds):
-        if not math.isfinite(seconds) or not 0 <= seconds < self.duration:
+        if isinstance(seconds, bool) or not isinstance(seconds, Real) or not math.isfinite(seconds) or not 0 <= seconds < self.duration:
             raise ValueError(f"Video time must be in [0, {self.duration:g}) seconds")
         return self.read_frame(min(self.frame_count - 1, int(seconds * self.fps)))
 
@@ -65,9 +68,9 @@ class VideoSource:
 
     def metadata(self):
         result = {"type": "video", "video": str(self.path), "frame_index": self.frame_index,
-                  "timestamp_seconds": self.frame_index / self.fps, "fps": self.fps}
+                  "timestamp_seconds": self.frame_index / self.fps if self.frame_index >= 0 else None, "fps": self.fps}
         offset = self.provenance.get("source_start_seconds")
-        if isinstance(offset, (int, float)) and math.isfinite(offset):
+        if result["timestamp_seconds"] is not None and isinstance(offset, (int, float)) and math.isfinite(offset):
             result["source_timestamp_seconds"] = offset + result["timestamp_seconds"]
         if "source_url" in self.provenance:
             result["source_url"] = self.provenance["source_url"]

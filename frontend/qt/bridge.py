@@ -20,6 +20,7 @@ class MatchBridge(QObject):
     uncertaintyChanged = Signal()
     catalogChanged = Signal()
     badgesChanged = Signal()
+    consoleChanged = Signal()
 
     def __init__(self, match, parent=None):
         super().__init__(parent)
@@ -44,6 +45,12 @@ class MatchBridge(QObject):
         self.corner_method = "lsd"
         self.notice = ""
         self._view = {}
+        self._console = {}
+        root = Path(__file__).resolve().parents[2]
+        self._inputs_folder = QUrl.fromLocalFile(str(root / "inputs")).toString()
+        self._archives_folder = QUrl.fromLocalFile(str(root / "outputs/sam3_registration")).toString()
+        self._catalog_types = None
+        self._catalog = []
         self._catalog_a = []
         self._catalog_b = []
         self._catalog_key = None
@@ -71,6 +78,10 @@ class MatchBridge(QObject):
     @Property("QVariantMap", notify=changed)
     def state(self):
         return self._view
+
+    @Property("QVariantMap", notify=consoleChanged)
+    def console(self):
+        return self._console
 
     @Property("QVariantList", notify=catalogChanged)
     def catalogA(self):
@@ -172,25 +183,27 @@ class MatchBridge(QObject):
             self._badges = active_badges
             self.badgesChanged.emit()
 
-        catalog_key = tuple(
-            (type_id, row.get("list_id", "A"),
-             row.get("unit_name") or row.get("name") or row.get("classification") or type_id,
-             row.get("classification") or row.get("formation") or "")
-            for type_id, row in state.units.types.items()
-        )
-        if catalog_key != self._catalog_key:
-            types = []
-            for type_id, row in state.units.types.items():
-                title = row.get("unit_name") or row.get("name") or row.get("classification") or type_id
-                subtitle = row.get("classification") or row.get("formation") or ""
-                if subtitle == title:
-                    subtitle = ""
-                side = row.get("list_id", "A")
-                types.append(dict(id=type_id, side=side, title=title, subtitle=subtitle))
-            self._catalog_a = [row for row in types if row["side"] == "A"]
-            self._catalog_b = [row for row in types if row["side"] == "B"]
-            self._catalog_key = catalog_key
-            self.catalogChanged.emit()
+        if state.units.types is not self._catalog_types:
+            self._catalog_types = state.units.types
+            catalog_key = tuple(
+                (type_id, row.get("list_id", "A"),
+                 row.get("unit_name") or row.get("name") or row.get("classification") or type_id,
+                 row.get("classification") or row.get("formation") or "")
+                for type_id, row in self._catalog_types.items()
+            )
+            if catalog_key != self._catalog_key:
+                rows = [dict(id=type_id, side=side, title=title, subtitle=subtitle if subtitle != title else "")
+                        for type_id, side, title, subtitle in catalog_key]
+                self._catalog_a = [row for row in rows if row["side"] == "A"]
+                self._catalog_b = [row for row in rows if row["side"] == "B"]
+                self._catalog = self._catalog_a + self._catalog_b
+                self._catalog_key = catalog_key
+                self.catalogChanged.emit()
+
+        console = self.live.data(state)
+        console_changed = console != self._console
+        if console_changed:
+            self._console = console
 
         prediction = state.current.prediction
         object_ids = set(prediction["object_ids"]) if prediction is not None else set()
@@ -235,7 +248,7 @@ class MatchBridge(QObject):
             undo=bool(self.flow.points) if terrain_active else (bool(self._manual_vertices) or self.match.registration.can_undo),
             typesA=self._catalog_a,
             typesB=self._catalog_b,
-            types=self._catalog_a + self._catalog_b,
+            types=self._catalog,
             imageRevision=self._image_revision,
             overlayRevision=self._overlay_revision,
             hasOverlay=self._has_overlay,
@@ -260,7 +273,7 @@ class MatchBridge(QObject):
             geometryTime=f"{geometry['timestamp_seconds']:.2f}" if geometry else "—",
             playing=state.playing,
             pendingPlay=state.pending_play,
-            console=self.live.data(state),
+            console=self._console,
             reference=str(state.reference_folder or ""),
             masks=self.show_masks,
             trays=self.show_trays,
@@ -276,9 +289,11 @@ class MatchBridge(QObject):
             ),
             trayStatus=state.tray_status,
             terrainCount=len(state.rules.terrain),
-            inputsFolder=QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "inputs")).toString(),
+            inputsFolder=self._inputs_folder,
+            archivesFolder=self._archives_folder,
         )
-        self._view["archivesFolder"] = QUrl.fromLocalFile(str(Path(__file__).resolve().parents[2] / "outputs/sam3_registration")).toString()
+        if console_changed:
+            self.consoleChanged.emit()
         self.changed.emit()
 
     def _publish_live_overlays(self, state, *, selected, target, queries):
@@ -445,7 +460,7 @@ class MatchBridge(QObject):
             return None
         ix, iy = int(x), int(y)
         for obj, mask in reversed(list(zip(prediction["object_ids"], prediction["masks"]))):
-            if mask[iy, ix]:
+            if iy < mask.shape[0] and ix < mask.shape[1] and mask[iy, ix]:
                 return int(obj)
         trays = prediction.get("trays", {})
         for obj in reversed(list(prediction["object_ids"])):
@@ -614,11 +629,13 @@ class MatchBridge(QObject):
 
     @Slot()
     def detectCorners(self):
-        if self._closed or self.match.snapshot().stage != "table" or self._detection is not None:
+        state = self.match.snapshot()
+        if self._closed or state.stage != "table":
             return
         self.table_mode, self.corner_method = "detecting", "lsd"
         self.corners, self.corner_points = None, []
-        self._detection = self._executor.submit(detect_table, self.match.snapshot().source_image.copy())
+        if self._detection is None:
+            self._detection = self._executor.submit(detect_table, state.source_image.copy())
         self._refresh()
 
     @Slot()
@@ -700,6 +717,9 @@ class MatchBridge(QObject):
 
     @Slot(QUrl)
     def loadArchive(self, path):
+        if not path.isLocalFile():
+            self._refresh(CommandReceipt("rejected", "Choose a local registration file or folder."))
+            return
         receipt = self.match.registration.load_archive(path.toLocalFile())
         if receipt.status != "rejected":
             self.flow.action("cancel")

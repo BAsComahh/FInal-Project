@@ -20,7 +20,16 @@ ApplicationWindow {
     readonly property bool recoveryRectMode: window.live && flowKind === "recovery" && flow.state.tool === "Rectangle" && !flow.state.busy
     readonly property bool recoveryQuadMode: window.live && flowKind === "recovery" && flow.state.tool === "Quad" && !flow.state.busy
     readonly property bool modalOpen: resetDialog.visible || armyFile.visible || registrationFile.visible || terrainDialogs.formOpen
-    readonly property bool textInputActive: Boolean(unitInfoPanel.editingFocus) || Boolean(terrainPanel.editingFocus)
+    readonly property bool textInputActive: activeFocusItem instanceof TextInput || activeFocusItem instanceof TextEdit
+    readonly property bool tableDimensions: window.table && s.tableMode === "dimensions"
+    property var tableWidthDraft: null
+    property var tableDepthDraft: null
+    onTableDimensionsChanged: {
+        if (!tableDimensions) {
+            tableWidthDraft = null
+            tableDepthDraft = null
+        }
+    }
 
     readonly property string badgeText: {
         if (window.table) return "TABLE SETUP"
@@ -622,6 +631,7 @@ ApplicationWindow {
                                              : window.live ? Qt.PointingHandCursor
                                              : (window.table || window.terrainMode || s.mode !== "Assign") ? Qt.CrossCursor : Qt.PointingHandCursor
                                 onPressed: mouse => {
+                                    surface.forceActiveFocus()
                                     const regRect = s.editable && !window.terrainMode && s.mode === "Rectangle"
                                     rectForRecovery = window.recoveryRectMode
                                     rectGesture = (regRect || rectForRecovery) && mouse.button === Qt.LeftButton
@@ -741,7 +751,7 @@ ApplicationWindow {
                             id: terrainHud
                             objectName: "terrainHud"
                             anchors.fill: parent
-                            visible: !window.table && !window.live && !window.terrainMode && Boolean(flow.state.selectedTerrainId)
+                            visible: s.terrain && !window.table && !window.live && !window.terrainMode && Boolean(flow.state.selectedTerrainId)
                             terrainData: flow.state.selectedTerrain || ({})
                             centerX: flow.state.terrainCenterX !== undefined ? flow.state.terrainCenterX : 0.5
                             centerY: flow.state.terrainCenterY !== undefined ? flow.state.terrainCenterY : 0.5
@@ -754,8 +764,8 @@ ApplicationWindow {
 
                         UnitHud {
                             anchors.fill: parent
-                            visible: window.live && window.flowKind === "live" && s.console.selected
-                            viewData: s.console
+                            visible: window.live && window.flowKind === "live" && ui.console.selected
+                            viewData: ui.console
                             z: 2
                             imageRect: Qt.rect(surface.x, surface.y, surface.width, surface.height)
                         }
@@ -857,7 +867,8 @@ ApplicationWindow {
                                         objectName: "tableWidth"
                                         width: 150
                                         height: 34
-                                        text: s.boardWidth
+                                        text: window.tableWidthDraft === null ? s.boardWidth : window.tableWidthDraft
+                                        onTextEdited: window.tableWidthDraft = text
                                         selectByMouse: true
                                         color: theme.ink
                                         selectionColor: theme.accentSoft
@@ -883,7 +894,8 @@ ApplicationWindow {
                                         objectName: "tableDepth"
                                         width: 150
                                         height: 34
-                                        text: s.boardDepth
+                                        text: window.tableDepthDraft === null ? s.boardDepth : window.tableDepthDraft
+                                        onTextEdited: window.tableDepthDraft = text
                                         selectByMouse: true
                                         color: theme.ink
                                         selectionColor: theme.accentSoft
@@ -962,7 +974,7 @@ ApplicationWindow {
             LiveConsole {
                 visible: window.live && window.flowKind === "live"
                 Layout.fillWidth: true
-                viewData: s.console
+                viewData: ui.console
                 drawerHeight: Math.min(186, Math.max(150, window.height * 0.22))
             }
         }
@@ -1107,9 +1119,10 @@ ApplicationWindow {
     Shortcut { sequences: [StandardKey.Undo]; enabled: !window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.undo() }
     Shortcut { sequence: "N"; enabled: s.editable && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.newObject() }
     Shortcut { sequence: "F"; enabled: s.canFront && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.setMode("Front") }
-    Shortcut { sequence: "S"; enabled: s.editable && !window.modalOpen && !window.textInputActive; onActivated: ui.finish() }
-    Shortcut { sequence: "Space"; enabled: !window.table && !window.live && !window.modalOpen && !window.textInputActive; onActivated: ui.start() }
-    Shortcut { sequence: "Tab"; enabled: s.editable && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
+    Shortcut { sequence: "S"; enabled: s.editable && s.ready && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.finish() }
+    Shortcut { sequence: "Space"; enabled: s.ready && !window.table && !window.live && !window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: ui.start() }
+    Shortcut { sequence: "Tab"; enabled: s.editable && !window.terrainMode && !window.modalOpen
+                 && (!window.activeFocusItem || window.activeFocusItem === window.contentItem || window.activeFocusItem === surface); onActivated: ui.setMode(s.mode === "Assign" ? "Points" : "Assign") }
     Shortcut { sequence: "O"; enabled: !window.table && !window.modalOpen && !window.textInputActive; onActivated: ui.toggleAllOverlays() }
     Shortcut { sequence: "Escape"; enabled: window.terrainMode && !window.modalOpen && !window.textInputActive; onActivated: flow.action("cancel") }
     Shortcut {

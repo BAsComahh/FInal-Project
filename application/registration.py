@@ -253,9 +253,9 @@ class Registration:
             raise ValueError("This object has a manual mask. Redraw it or undo the manual mask before using points.")
         snapshot = self.sample(reference)
         x, y = transform_points(source_point, self._data.board.homography["matrix"])
-        height, width = self._data.current.frame.shape[:2]
+        height, width = snapshot["frame"].shape[:2]
         if not (0 <= x < width and 0 <= y < height):
-            return CommandReceipt("rejected", self._session.note)
+            raise ValueError("Click must be inside the displayed registration frame.")
         self._session.pause_source()
         ids = {click["object_id"] for click in self.clicks if click["positive"]}
         if not positive and object_id not in ids:
@@ -263,7 +263,7 @@ class Registration:
             return CommandReceipt("rejected", self._session.note)
         click = {"object_id": object_id, "point": [float(x), float(y)],
                  "point_source": transform_points([x, y], self._data.board.homography["inverse_matrix"]).tolist(),
-                 "positive": positive, "video_frame": self._session.source.frame_index, "session_frame": None,
+                 "positive": positive, "video_frame": snapshot["metadata"]["frame_index"], "session_frame": None,
                  "click_id": self.next_click_id}
         self.next_click_id += 1
         self.clicks.append(click)

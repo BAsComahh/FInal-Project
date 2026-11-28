@@ -146,7 +146,8 @@ def read_archive(path, video):
             raise ValueError("Duplicate saved prompt IDs")
         metadata.update(source.metadata(), restored_from=str(root))
         prediction = dict(object_ids=ids, masks=np.stack([masks[obj] for obj in ids]), frame_idx=0, trays=trays, tray_errors={})
-        validate_scene(rules.scene(roster, prediction, plane, size, metadata, source_to_plane=board.source_to_plane))
+        metadata["rule_scene"] = validate_scene(
+            rules.scene(roster, prediction, plane, size, metadata, source_to_plane=board.source_to_plane))
         return dict(root=root, source=source, raw=raw, frame=frame, overlay=overlay, board=board, rules=rules,
                     roster=roster, metadata=metadata, prediction=prediction, origins=origins)
     except (KeyError, TypeError, AttributeError, UnicodeError) as error:

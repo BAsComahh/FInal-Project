@@ -1,6 +1,7 @@
 """Unicode-safe uint8 image I/O in OpenCV channel order."""
 
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import cv2
 import numpy as np
@@ -40,9 +41,20 @@ def load_image(image, *, mode="color"):
 def save_image(path, image):
     """Encode using the filename extension, creating the parent directory."""
     path = Path(path)
-    success, encoded = cv2.imencode(path.suffix or ".png", image)
+    try:
+        success, encoded = cv2.imencode(path.suffix or ".png", image)
+    except cv2.error as error:
+        raise ValueError(f"Cannot encode output image: {path}") from error
     if not success:
         raise ValueError(f"Cannot encode output image: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    encoded.tofile(path)
+    temporary = None
+    try:
+        with NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(encoded)
+        temporary.replace(path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return path

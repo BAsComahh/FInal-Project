@@ -11,8 +11,11 @@ def make_work_view(image, mask, size, image_to_plane, max_size, margin):
     bbox = np.array([[xs.min(), ys.min()], [xs.max(), ys.min()],
                      [xs.max(), ys.max()], [xs.min(), ys.max()]], dtype=float)
     mapping = np.eye(3) if image_to_plane is None else np.asarray(image_to_plane, dtype=float)
-    if mapping.shape != (3, 3) or not np.isfinite(mapping).all() or abs(np.linalg.det(mapping)) < 1e-15:
+    if mapping.shape != (3, 3) or not np.isfinite(mapping).all() or np.linalg.slogdet(mapping)[0] == 0:
         raise ValueError("image_to_plane must be a finite invertible 3x3 matrix")
+    divisors = bbox @ mapping[2, :2] + mapping[2, 2]
+    if not ((divisors > 0).all() or (divisors < 0).all()):
+        raise ValueError("Mask bounding box crosses the calibration horizon")
     plane_bbox = transform_points(bbox, mapping)
     center = transform_points([xs.mean(), ys.mean()], mapping)
     span = np.maximum(np.ptp(plane_bbox, axis=0), 1e-6)
@@ -30,7 +33,7 @@ def make_work_view(image, mask, size, image_to_plane, max_size, margin):
         raise ValueError("Invalid working scale; check calibration and dimensions")
     plane_to_work = np.array([[scale, 0, -low[0] * scale], [0, scale, -low[1] * scale], [0, 0, 1]])
     image_to_work = plane_to_work @ mapping
-    work_size = tuple(np.maximum(2, np.ceil((high - low) * scale).astype(int) + 1))
+    work_size = tuple(np.clip(np.ceil((high - low) * scale).astype(int) + 1, 2, max_size))
     work_image = cv2.warpPerspective(image, image_to_work, work_size, flags=cv2.INTER_LINEAR)
     work_mask = cv2.warpPerspective(mask.astype(np.uint8), image_to_work, work_size,
                                     flags=cv2.INTER_NEAREST).astype(bool)

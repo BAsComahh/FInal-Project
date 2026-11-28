@@ -86,12 +86,15 @@ class MotionRecorder:
             return transform_points(original["center_source"], current["source_to_plane"])
         return original["center_mm"]
 
+    @staticmethod
+    def _projected_edges(original, current):
+        points = transform_points(original["corners_source"], current["source_to_plane"])
+        return points[1:3] - points[:2]
+
     @classmethod
     def _axis_in_frame(cls, original, current):
         if cls._compatible(original, current):
-            points = transform_points(original["corners_source"], current["source_to_plane"])
-            edges = np.roll(points, -1, axis=0)[:2] - points[:2]
-            delta = edges[int(np.argmax(np.linalg.norm(edges, axis=1)))]
+            delta = cls._projected_edges(original, current)[original["axis_edge_index"]]
             return degrees(atan2(delta[1], delta[0])) % current["axis_period_deg"]
         return original["axis_deg"]
 
@@ -143,11 +146,11 @@ class MotionRecorder:
             return deepcopy(event)
         return None
 
-    def _interrupt(self, unit_id, entry, reason):
-        state = self._units.pop(unit_id, None)
+    def _interrupt(self, unit_id, entry, reason, *, rotation_only=False):
+        state = self._units.get(unit_id) if rotation_only else self._units.pop(unit_id, None)
         updates = []
         if state is not None:
-            for kind in ("translation", "rotation"):
+            for kind in (("rotation",) if rotation_only else ("translation", "rotation")):
                 event = state[kind]["event"]
                 if event is not None:
                     event.update(status="interrupted", end=deepcopy(state["previous"]),
@@ -203,13 +206,20 @@ class MotionRecorder:
                 updates.extend(self._interrupt(unit_id, entry, reason or "geometry_unavailable"))
                 continue
             state = self._units.get(unit_id)
-            if state is not None and seen is not None and version != seen[0]:
-                if not self._compatible(state["previous"], pose):
-                    updates.extend(self._interrupt(unit_id, entry, "recalibration"))
-                    state = None
-                elif frame <= seen[1]:
-                    continue
-            if state is not None and self._compatible(state["previous"], pose):
+            axis_swapped = False
+            if state is not None:
+                previous = state["previous"]
+                compatible = self._compatible(previous, pose)
+                if version != previous["calibration_version"]:
+                    if not compatible:
+                        updates.extend(self._interrupt(unit_id, entry, "recalibration"))
+                        state = None
+                    elif frame <= previous["frame_index"]:
+                        continue
+                    elif previous["axis_period_deg"] == 180:
+                        lengths = np.linalg.norm(self._projected_edges(previous, pose), axis=1)
+                        axis_swapped = int(np.argmax(lengths)) != previous["axis_edge_index"]
+            if state is not None and compatible:
                 # The same physical tray keeps its symmetry even when a new
                 # calibration changes its apparent edge-length ratio.
                 pose["axis_period_deg"] = state["previous"]["axis_period_deg"]
@@ -223,8 +233,15 @@ class MotionRecorder:
                 continue
             previous = state["previous"]
             period = pose["axis_period_deg"]
-            delta = (pose["axis_deg"] - self._axis_in_frame(previous, pose) + period / 2) % period - period / 2
-            pose["unwrapped_axis_deg"] = previous["unwrapped_axis_deg"] + delta
+            if axis_swapped:
+                # The calibration changed which edge is the long axis of the old pose.
+                # Do not connect rotation evidence across that change in axis identity.
+                updates.extend(self._interrupt(unit_id, entry, "recalibration_axis_changed", rotation_only=True))
+                pose["unwrapped_axis_deg"] = pose["axis_deg"]
+                state["rotation"] = {"anchor": pose, "event": None}
+            else:
+                delta = (pose["axis_deg"] - self._axis_in_frame(previous, pose) + period / 2) % period - period / 2
+                pose["unwrapped_axis_deg"] = previous["unwrapped_axis_deg"] + delta
             for kind in ("translation", "rotation"):
                 event = self._advance(unit_id, kind, state[kind], previous, pose, entry)
                 if event is not None:

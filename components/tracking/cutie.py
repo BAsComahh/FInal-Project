@@ -12,6 +12,8 @@ import sys
 
 import numpy as np
 
+from .edgetam import bind_cuda_device
+
 
 _REPOSITORY = "https://github.com/hkchengrex/Cutie"
 _CHECKPOINT = "cutie-base-mega.pth"
@@ -105,6 +107,7 @@ class CutieTracker:
             weights = torch.load(checkpoint, map_location="cpu", weights_only=True)
             model.load_weights(weights)
             self.load_progress = (f"Moving Cutie to {self.device}", None, None)
+            bind_cuda_device(self.device)
             model = model.to(device=self.device, dtype=torch.float32).eval().requires_grad_(False)
             self.model, self._core_type = model, InferenceCore
         finally:
@@ -134,6 +137,7 @@ class CutieTracker:
     def _frame_tensor(self, frame):
         import torch
 
+        bind_cuda_device(self.device)
         rgb = np.ascontiguousarray(frame[..., ::-1].transpose(2, 0, 1))
         return torch.from_numpy(rgb).to(device=self.device, dtype=torch.float32).div_(255)
 
@@ -163,6 +167,9 @@ class CutieTracker:
         # Match the app's drawing order: the last registered mask owns overlapping pixels.
         for label, mask in enumerate(masks, start=1):
             labels[mask] = label
+        seeded = np.unique(labels[labels != 0]).tolist()
+        if not seeded:
+            raise ValueError("Cutie requires at least one visible seed mask")
         self.load()
         import torch
 
@@ -170,12 +177,12 @@ class CutieTracker:
         with torch.inference_mode():
             output_prob = processor.step(
                 self._frame_tensor(frame), torch.from_numpy(labels).to(self.device),
-                objects=list(range(1, len(object_ids) + 1)), idx_mask=True,
+                objects=seeded, idx_mask=True,
             )
             prediction = self._prediction(output_prob, processor, object_ids, 0, shape)
         self.processor, self.object_ids = processor, object_ids
         self.index, self.source_frame, self._image_shape = 0, source_frame, shape
-        return prediction
+        return {**prediction, "source_frame_index": source_frame}
 
     def propagate(self, frame, *, source_frame=None):
         """Consume one later frame without replay, lookahead, or prompt edits."""
@@ -201,4 +208,4 @@ class CutieTracker:
             raise
         self.index += 1
         self.source_frame = source_frame
-        return prediction
+        return {**prediction, "source_frame_index": source_frame}

@@ -286,7 +286,7 @@ class MatchSession:
             self.worker.submit("prepare", frame=self.data.current.frame, metadata=self.frame_metadata(), generation=self.generation)
         elif not self.model_failed and self.recovery is not None and (request := self.recovery.take_request()) is not None:
             kind, values = request
-            self.worker.submit(kind, **values)
+            self.worker.submit(kind, **values, previous_trays=self.trays.attempts if kind == "recovery_commit" else None)
             if kind == "propagate":
                 self.last_submitted_frame = values["metadata"]["frame_index"]
                 self.next_inference_time = now + self.inference_interval
@@ -316,7 +316,7 @@ class MatchSession:
                     tray_attempts=request.get("tray_attempts", {}), tracking=request["tracking"])
         elif calibration._context is None and (request := self.automatic_recovery.take_request()) is not None:
             kind, values = request
-            self.worker.submit(kind, **values)
+            self.worker.submit(kind, **values, previous_trays=self.trays.attempts)
         elif (self.playing and self.data.current.prediction is not None and not self.model_failed and not registration.updating_points
               and now >= self.next_inference_time):
             values = self.source_sample()
@@ -363,7 +363,10 @@ class MatchSession:
                     error = failure
             if error is not None:
                 self.data.fail_recovery(object_id, self.source.metadata(), method=method, error=error)
-            self.last_submitted_frame = max(self.last_submitted_frame, self.worker.tracker.source_frame)
+            consumed_frame = self.worker.tracker.source_frame
+            if consumed_frame is None:
+                consumed_frame = request["metadata"]["frame_index"]
+            self.last_submitted_frame = max(self.last_submitted_frame, consumed_frame)
             self.next_inference_time = perf_counter() + self.inference_interval
         self.recovery.accept(request, prediction, error)
         self.mark_changed()
@@ -532,30 +535,31 @@ class MatchSession:
                         prediction, request["frame"], request["metadata"],
                         disappearance_seconds=self.disappearance_seconds if self.registration_locked else None,
                         resume_visible_masks=propagation)
-                    if accepted and request["kind"] != "propagate":
-                        self.worker.commit_facing(request)
-                        self.trays.attempts.update(request.get("tray_attempts") or {})
-                    self.prediction_raw_frame = request.get("raw_frame")
-                    if accepted and propagation:
-                        if recovery_target is not None and recovery_target.status == "tracking":
-                            self.recovery.cancel()
-                        self._queue_geometry(request)
-                    if accepted and request["kind"] == "recalibrate":
-                        self._geometry_visible = self._visible_geometry_ids()
-                        if self.registration_locked:
-                            self.data.record_history(kind="recalibration", source=self.source.metadata())
-                    if request["kind"] == "click":
-                        self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
-                        self.next_inference_time = now + self.inference_interval
-                    elif request["kind"] == "replace":
-                        self.last_submitted_frame = request["metadata"]["frame_index"]
-                        self.next_inference_time = now + self.inference_interval
-                    elif request["kind"] == "start_tracker":
-                        self.start_stream(now)
-                    self.mark_changed(geometry=request["kind"] != "propagate")
-                    self.note = self._tracking_note()
-                    if request["kind"] in ("click", "replace"):
-                        self.note = "Mask updated. Assign its type to confirm and fit this unit's tray."
+                    if accepted:
+                        if request["kind"] != "propagate":
+                            self.worker.commit_facing(request)
+                            self.trays.attempts.update(request.get("tray_attempts") or {})
+                        self.prediction_raw_frame = request.get("raw_frame")
+                        if propagation:
+                            if recovery_target is not None and recovery_target.status == "tracking":
+                                self.recovery.cancel()
+                            self._queue_geometry(request)
+                        if request["kind"] == "recalibrate":
+                            self._geometry_visible = self._visible_geometry_ids()
+                            if self.registration_locked:
+                                self.data.record_history(kind="recalibration", source=self.source.metadata())
+                        if request["kind"] == "click":
+                            self.last_submitted_frame = max(self.last_submitted_frame, request["metadata"]["frame_index"])
+                            self.next_inference_time = now + self.inference_interval
+                        elif request["kind"] == "replace":
+                            self.last_submitted_frame = request["metadata"]["frame_index"]
+                            self.next_inference_time = now + self.inference_interval
+                        elif request["kind"] == "start_tracker":
+                            self.start_stream(now)
+                        self.mark_changed(geometry=request["kind"] != "propagate")
+                        self.note = self._tracking_note()
+                        if request["kind"] in ("click", "replace"):
+                            self.note = "Mask updated. Assign its type to confirm and fit this unit's tray."
                 elif request["kind"] == "replace":
                     self.last_submitted_frame = -1
                     self.note = ("Point undone. Manual masks remain." if self.data.current.prediction is not None else
@@ -625,6 +629,9 @@ class MatchSession:
         self.needs_prepare = True
         self.startup_ready = False
         self.data.current.frame = self._warp_frame(self.source.read_frame(self.registration_start_frame))
+        self.data.calibrations.clear()
+        if self.data.board.homography is not None:
+            self.data.record_calibration(self.frame_metadata())
         self.data.current.prediction = self.data.current.prediction_frame = self.data.current.prediction_metadata = None
         self.data.current.geometry_frame = None
         self.prediction_raw_frame = None

@@ -106,6 +106,7 @@ class TaskWorker:
         self.tracker_name = tracker
         self.automatic = None
         self.automatic_progress = None
+        self.sam3_shared_weight_bytes = 0
         self.facing = None
         self.facing_references = {}
         self.facing_excluded = set()
@@ -255,6 +256,7 @@ class TaskWorker:
             "predictor_session": video_session_diagnostics(getattr(self.predictor, "session", None)),
             "tracker_session": video_session_diagnostics(getattr(self.tracker, "session", None)) if self.tracker is not None else None,
             "automatic_candidates": len(candidates),
+            "sam3_shared_weight_bytes": self.sam3_shared_weight_bytes,
             "manual_candidate": bool(manual is not None and getattr(getattr(manual, "backend", None), "session", None) is not None),
         }
 
@@ -273,6 +275,11 @@ class TaskWorker:
                         self.automatic.load()
                     except Exception as error:
                         print(f"Automatic recovery unavailable; manual recovery retained: {error}", flush=True)
+                    else:
+                        from components.sam3.segmenter import share_sam3_vision_weights
+
+                        self.automatic_progress = ("Checking shared SAM3 vision weights", None, None)
+                        self.sam3_shared_weight_bytes = share_sam3_vision_weights(self.predictor, self.automatic.segmenter)
                     finally:
                         self.automatic_progress = None
                 if self.facing is not None:

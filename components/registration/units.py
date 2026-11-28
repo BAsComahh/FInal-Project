@@ -76,7 +76,8 @@ class UnitRoster:
     def from_snapshot(cls, payload):
         """Restore generated instance identities without allocating new numbers."""
         roster = cls(payload["roster"], source=payload.get("source"))
-        roster.units = _records(payload.get("units"), "unit_id", "saved units")
+        units = payload.get("units")
+        roster.units = {} if isinstance(units, list) and not units else _records(units, "unit_id", "saved units")
         for uid, unit in roster.units.items():
             type_id = unit.get("type_id")
             if type_id not in roster.types:

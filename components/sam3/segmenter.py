@@ -16,6 +16,61 @@ def _pick_device():
     return f"cuda:{index}"
 
 
+def share_sam3_vision_weights(predictor, segmenter):
+    """Share only verified ViT parameter storage in the serialized inference worker."""
+    import torch
+    import transformers
+
+    checkpoint = "facebook/sam3"
+    if transformers.__version__ != "5.18.0" or predictor.model_id != checkpoint or segmenter.model_id != checkpoint:
+        return 0
+    from transformers import Sam3Model, Sam3TrackerVideoModel, Sam3ViTModel
+
+    video, text = predictor.model, segmenter.model
+    if type(video) is not Sam3TrackerVideoModel or type(text) is not Sam3Model:
+        return 0
+    if video.training or text.training or video.name_or_path != checkpoint or text.name_or_path != checkpoint:
+        return 0
+    source = getattr(video.vision_encoder, "backbone", None)
+    target = getattr(text.vision_encoder, "backbone", None)
+    if type(source) is not Sam3ViTModel or type(target) is not Sam3ViTModel:
+        return 0
+    # The parent configs may declare different dtypes; validate the loaded tensors below.
+    source_config, target_config = source.config.to_dict(), target.config.to_dict()
+    source_config.pop("dtype", None)
+    target_config.pop("dtype", None)
+    if source_config != target_config:
+        return 0
+
+    left, right = dict(source.named_parameters()), dict(target.named_parameters())
+    if len(left) != 516 or left.keys() != right.keys():
+        return 0
+    replacements = []
+    shared_bytes = 0
+    for name, original in left.items():
+        duplicate = right[name]
+        if (original.device.type != "cuda" or original.device != duplicate.device
+                or original.dtype != torch.float32 or duplicate.dtype != torch.float32
+                or original.shape != duplicate.shape or not original.is_contiguous() or not duplicate.is_contiguous()):
+            return 0
+        shared_bytes += original.numel() * original.element_size()
+        if original.data_ptr() == duplicate.data_ptr():
+            continue
+        # Compare FP32 bits, including signed zero, before changing any parameter.
+        try:
+            identical = torch.equal(original.view(torch.int32), duplicate.view(torch.int32))
+        except RuntimeError:
+            return 0
+        if not identical:
+            return 0
+        parent, attribute = name.rsplit(".", 1)
+        alias = torch.nn.Parameter(original.detach(), requires_grad=duplicate.requires_grad)
+        replacements.append((target.get_submodule(parent), attribute, alias))
+    for module, name, alias in replacements:
+        setattr(module, name, alias)
+    return shared_bytes
+
+
 class Sam3Segmenter:
     """Load SAM3 on first use and reuse it across images.
 
@@ -35,12 +90,15 @@ class Sam3Segmenter:
             return
         import torch
         from transformers import Sam3Model, Sam3Processor
+        from components.tracking.edgetam import bind_cuda_device
 
         device = self.device or _pick_device()
-        if torch.cuda.is_available() and torch.device(device).type == "cuda":
-            torch.cuda.set_device(torch.device(device))
+        bind_cuda_device(device)
         processor = Sam3Processor.from_pretrained(self.model_id, local_files_only=True)
-        model = Sam3Model.from_pretrained(self.model_id, local_files_only=True)
+        model, info = Sam3Model.from_pretrained(
+            self.model_id, local_files_only=True, output_loading_info=True)
+        if info.get("missing_keys") or info.get("mismatched_keys"):
+            raise ValueError("Checkpoint does not contain all required SAM3 detection weights")
         model = model.to(device=device, dtype=torch.float32).eval()
         self.processor, self.model = processor, model
         self.device = str(model.device)

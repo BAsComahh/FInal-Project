@@ -38,14 +38,20 @@ def mask_pixels(sample):
 
 def describe_mask(mask):
     mask = np.asarray(mask)
-    if mask.ndim != 2 or not np.isfinite(mask).all():
+    if mask.ndim != 2 or (mask.dtype.kind not in "bui" and not np.isfinite(mask).all()):
         raise ValueError("Tray stability requires a finite two-dimensional mask")
-    binary = (mask != 0).astype(np.uint8)
-    moments = cv2.moments(binary, binaryImage=True)
-    area = moments["m00"]
-    if area <= 0:
-        raise ValueError("Tray stability requires a non-empty mask")
+    if mask.dtype == np.bool_:
+        binary = mask.view(np.uint8)
+    elif mask.dtype == np.uint8:
+        binary = mask
+    else:
+        binary = (mask != 0).astype(np.uint8)
     x, y, width, height = cv2.boundingRect(binary)
-    return dict(area=area, centroid=[moments["m10"] / area, moments["m01"] / area],
-                bbox=[x, y, width, height],
-                mask_bits=np.packbits(binary[y:y + height, x:x + width].ravel()).tobytes().hex())
+    if not width or not height:
+        raise ValueError("Tray stability requires a non-empty mask")
+    crop = binary[y:y + height, x:x + width]
+    moments = cv2.moments(crop, binaryImage=True)
+    area = moments["m00"]
+    centroid = [(moments["m10"] + x * area) / area, (moments["m01"] + y * area) / area]
+    return dict(area=area, centroid=centroid, bbox=[x, y, width, height],
+                mask_bits=np.packbits(crop).tobytes().hex())

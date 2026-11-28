@@ -17,8 +17,13 @@ def extract_references(frame, prediction, *, source=None, roster=None):
     frame must be the original BGR frame used for prediction, not a newer display
     frame. Empty masks are retained with box/crop/cutout set to None.
     """
+    if (not isinstance(frame, np.ndarray) or frame.dtype != np.uint8
+            or frame.ndim != 3 or frame.shape[2] != 3 or not frame.size):
+        raise ValueError("Reference frame must be a non-empty uint8 BGR image")
     height, width = frame.shape[:2]
     ids = prediction["object_ids"]
+    if len(set(map(int, ids))) != len(ids):
+        raise ValueError("Reference object IDs must be distinct")
     masks = np.asarray(prediction["masks"], dtype=bool)
     if masks.shape != (len(ids), height, width):
         raise ValueError("Prediction masks must match the original frame dimensions and object count")

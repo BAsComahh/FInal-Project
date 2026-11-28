@@ -130,7 +130,7 @@ class RuleState:
             units.append({"unit_id": unit_id, "object_id": int(object_id), "corners_mm": corners,
                           "front_edge": edge, "height": profile.get("height"), "speed_in": profile.get("speed_in"),
                           "side": profile.get("side"), "unit_kind": profile.get("unit_kind"),
-                          "special_rules": profile.get("special_rules", []),
+                          "special_rules": deepcopy(profile.get("special_rules", [])),
                           "state": {"engaged": profile.get("engaged"), "wavering": profile.get("wavering")},
                           "facing_source": front["source"] if front else None})
         terrain = [{**item, "polygon_mm": (transform_points(item["polygon_source"], source_to_plane).tolist()

@@ -650,7 +650,7 @@ class Workflows(QObject):
         step = replay.steps[replay.selected] if replay.steps else None
         unavailable = []
         observed_time = recorded_time = calib_ver = dimensions = bg_note = "—"
-        if scene is not None:
+        if scene is not None and scene["step"] == step:
             obs = scene["observation"]
             stamp = lambda value: "unknown" if value is None else f"{value:.2f}s"
             observed_time = stamp(obs.get("observation_timestamp_seconds"))
@@ -1151,6 +1151,8 @@ class Workflows(QObject):
                 return False
             if kind == "recovery":
                 if self.recovery_tool == "Quad":
+                    if state.recovery["busy"] or state.recovery["committing"]:
+                        return True
                     if not positive:
                         if self.recovery_vertices:
                             self.recovery_vertices.pop()
@@ -1314,15 +1316,10 @@ class Workflows(QObject):
             height, width = frame.shape[:2]
             replay = self.match.replay
             scene = replay.scene
-            observed = scene["observation"] if scene is not None else {}
             show_trays = bool(self.bridge.show_trays)
             show_labels = bool(self.bridge.show_labels)
             key = (
-                replay.epoch, replay.selected, replay.has_index, scene is None, replay.error,
-                replay.steps[replay.selected]["event_id"] if replay.steps else None,
-                replay.steps[replay.selected]["end_sequence"] if replay.steps else None,
-                observed.get("timestamp_seconds"), observed.get("observation_timestamp_seconds"),
-                observed.get("calibration_version"), width, height, show_trays, show_labels,
+                replay.epoch, replay.scene_revision, width, height, show_trays, show_labels,
                 tuple((uid, unit_list_side(state, uid),
                        unit_badge_label(state, uid) if show_labels else "")
                       for uid in scene["units"]) if scene is not None else (),

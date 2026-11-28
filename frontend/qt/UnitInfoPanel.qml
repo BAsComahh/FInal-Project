@@ -5,8 +5,6 @@ import QtQuick.Layouts
 Rectangle {
     id: panel
     property var rows: []
-    property int focusedInputs: 0
-    readonly property bool editingFocus: focusedInputs > 0
     readonly property Theme theme: Theme {}
 
     radius: theme.radiusLg
@@ -25,10 +23,7 @@ Rectangle {
     }
 
     Component.onCompleted: loadFields()
-    onVisibleChanged: {
-        if (!visible) focusedInputs = 0
-        else loadFields()
-    }
+    onVisibleChanged: if (visible) loadFields()
 
     Connections {
         target: flow
@@ -115,10 +110,6 @@ Rectangle {
                                 color: panel.theme.bgTrack
                                 border.width: parent.activeFocus ? 1.5 : 1
                                 border.color: parent.activeFocus ? panel.theme.selection : panel.theme.border
-                            }
-                            onActiveFocusChanged: {
-                                if (activeFocus) panel.focusedInputs += 1
-                                else panel.focusedInputs = Math.max(0, panel.focusedInputs - 1)
                             }
                             onTextEdited: panel.rows[fieldCol.index].value = text
                         }

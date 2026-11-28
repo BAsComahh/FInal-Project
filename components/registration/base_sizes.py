@@ -31,8 +31,8 @@ _ALIASES = {
     ) for alias in aliases.split("|")
 }
 _SIZE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm\s*)?(?:[x×]\s*(\d+(?:\.\d+)?)\s*)?mm", re.I)
-_NOTE = re.compile(r"(?:base(?:\s+size)?|(?:unit\s+)?footprint)\s*[:=(]\s*(.*?)\)?", re.I)
-_REVERSE_NOTE = re.compile(r"(.+?)\s+(?:square\s+)?base", re.I)
+_NOTE = re.compile(r"\b(?:base(?:\s+size)?|(?:unit\s+)?footprint)\s*[:=(]\s*(.*?)\)?$", re.I)
+_REVERSE_NOTE = re.compile(r"(?:mounted on (?:an? )?)?(\d.*?)\s+(?:square\s+)?base", re.I)
 
 
 def infer_dimensions(classification, formation, details):
@@ -46,13 +46,13 @@ def infer_dimensions(classification, formation, details):
     notes, sizes = [], set()
     invalid_note = False
     for raw in details:
-        text = re.sub(r"^(?:Special Rules|Traits):\s*", "", " ".join(raw.split()), flags=re.I)
-        for clause in text.split(","):
+        text = " ".join(raw.split())
+        for clause in re.split(r",|\b(?:Special Rules|Traits):\s*", text, flags=re.I):
             clause = clause.strip().rstrip(".")
-            if not re.search(r"\b(?:base|footprint)\b", clause, re.I):
+            note = _NOTE.search(clause) or _REVERSE_NOTE.fullmatch(clause)
+            if note is None and not re.search(r"\b(?:base size|footprint)\b", clause, re.I):
                 continue
-            notes.append(clause)
-            note = _NOTE.fullmatch(clause) or _REVERSE_NOTE.fullmatch(clause)
+            notes.append(note[0] if note else clause)
             size = _SIZE.fullmatch(note[1].strip()) if note else None
             if size is None:
                 invalid_note = True
@@ -73,7 +73,7 @@ def infer_dimensions(classification, formation, details):
         category = re.sub(r"^(?:(?:core|aux(?:iliary)?|support|specialist|champion|warlord|commander)\b\s*(?:\(aux\))?\s*)+",
                           "", classification, flags=re.I)
         category = re.sub(r"\b(?:Troop|Regiment|Horde|Legion|Single(?: Model)?)\s*$", "", category, flags=re.I)
-        category = re.sub(r"^Hero\b\s*", "", category, flags=re.I)
+        category = re.sub(r"^Hero\b\s*|\s+\bHero$", "", category, flags=re.I)
         category = _ALIASES.get(re.sub(r"[\s().-]", "", category).casefold())
         column = {"Single": 0, "Hero": 0, "Troop": 1, "Regiment": 2, "Horde": 3}.get(formation)
         if category is not None and column is not None:

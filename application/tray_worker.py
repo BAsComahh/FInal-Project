@@ -20,6 +20,7 @@ def update_trays(request, prediction, *, search, stability, previous=None):
                  [request["recovery_object_id"]] if kind == "recovery_commit" else [])
     targets = corrected if corrected else request.get("tray_ids")
     target = prediction
+    normal_trays, normal_errors, attempts = {}, {}, {}
     if corrected:
         old = request.get("prediction") or {}
         if old.get("geometry_metadata", {}).get("frame_index") != request["metadata"]["frame_index"]:
@@ -27,10 +28,12 @@ def update_trays(request, prediction, *, search, stability, previous=None):
             normal = [i for i, obj in enumerate(prediction["object_ids"]) if obj not in corrected
                       and obj not in old.get("unavailable_ids", ()) and obj not in old.get("inactive_ids", ())]
             batch = {"object_ids": [prediction["object_ids"][i] for i in normal], "masks": prediction["masks"][normal]}
-            trays, errors = fit_registered_trays(request["frame"], batch, context,
-                previous=old.get("trays", {}) if search != "full" else None, reuse_stable=search == "adaptive",
-                stability=stability, source_frame=metadata["frame_index"], source_time=metadata.get("timestamp_seconds"))
-            old = {**old, "trays": trays, "tray_errors": errors}
+            baselines = {**old.get("trays", {}), **request.get("previous_trays", {})}
+            normal_trays, normal_errors = fit_registered_trays(request["frame"], batch, context,
+                previous=baselines if search != "full" else None, reuse_stable=search == "adaptive",
+                stability=stability, source_frame=metadata["frame_index"], source_time=metadata.get("timestamp_seconds"),
+                attempts=attempts)
+            old = {**old, "trays": normal_trays, "tray_errors": normal_errors}
             request["prediction"] = old
     if targets is not None:
         selected = [i for i, obj in enumerate(prediction["object_ids"]) if obj in targets]
@@ -39,7 +42,6 @@ def update_trays(request, prediction, *, search, stability, previous=None):
         excluded = set(prediction.get("unavailable_ids", ())) | set(prediction.get("inactive_ids", ()))
         selected = [i for i, obj in enumerate(prediction["object_ids"]) if obj not in excluded]
         target = {"object_ids": [prediction["object_ids"][i] for i in selected], "masks": prediction["masks"][selected]}
-    attempts = {}
     trays, errors = fit_registered_trays(request["frame"], target, context,
         previous=previous if search != "full" else None, reuse_stable=search == "adaptive",
         stability=stability, source_frame=metadata["frame_index"], source_time=metadata.get("timestamp_seconds"),
@@ -51,8 +53,9 @@ def update_trays(request, prediction, *, search, stability, previous=None):
     else:
         prediction.update(trays=trays, tray_errors=errors)
     request["tray_attempts"] = attempts
-    prediction["tray_fit_stats"] = dict(reused=sum(tray["method"] == "stable_reuse" for tray in trays.values()),
-        refitted=sum(row["attempted"] for row in attempts.values()), unavailable=len(errors),
+    prediction["tray_fit_stats"] = dict(
+        reused=sum(tray["method"] == "stable_reuse" for tray in (*normal_trays.values(), *trays.values())),
+        refitted=sum(row["attempted"] for row in attempts.values()), unavailable=len(normal_errors) + len(errors),
         retry_wait=sum(not row["attempted"] and "corners_image" not in row for row in attempts.values()))
     return prediction
 

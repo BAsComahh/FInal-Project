@@ -22,7 +22,7 @@ STAGES = [("input", "0. Original"), ("preprocess", "1. Preprocessing"),
 
 
 def preprocess_image(image, args, switches):
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blur_size = args.blur_size if switches["blur"] else 1
     if blur_size < 1 or blur_size % 2 == 0:
         raise ValueError("blur-size must be a positive odd number")
@@ -130,6 +130,8 @@ def compute_boundary(image, args, switches):
 
 def render_stages(image, args, report):
     """Draw diagnostics from a computed report; never rerun detection or fitting."""
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     switches = report["switches"]
     raw = np.asarray(report["raw_lines"], dtype=float).reshape(-1, 4)
     eligible = np.zeros(len(raw), dtype=bool)
@@ -157,6 +159,8 @@ def render_stages(image, args, report):
 
 def render_result(image, report):
     """Draw only the final boundary for a normal tool invocation."""
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     frame, completion = report["final_frame"], report["frame_completion"]
     if frame["valid"]:
         return draw_frame_connections(image, report["final_sides"], frame)[1]
